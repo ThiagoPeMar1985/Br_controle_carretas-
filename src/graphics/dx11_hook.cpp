@@ -1,0 +1,264 @@
+﻿#include "dx11_hook.hpp"
+
+#include <Windows.h>
+#include <d3d11.h>
+#include <dxgi1_2.h>
+
+#include "imgui.h"
+
+#include "core.hpp"
+#include "hooks/function_hook.hpp"
+#include "backends/imgui_impl_win32.h"
+#include "backends/imgui_impl_dx11.h"
+
+namespace ts_extra_utilities
+{
+    using D3D11CreateDeviceAndSwapChain_fnt = decltype(D3D11CreateDeviceAndSwapChain);
+    using present_fn = HRESULT __stdcall( IDXGISwapChain*, UINT, UINT );
+    using present1_fn = HRESULT __stdcall( IDXGISwapChain1*, UINT, UINT, const DXGI_PRESENT_PARAMETERS* );
+
+    std::shared_ptr< CFunctionHook > present_hook = nullptr;
+    std::shared_ptr< CFunctionHook > present1_hook = nullptr;
+
+    bool imgui_initialized;
+
+    ID3D11Device* device;
+    ID3D11DeviceContext* device_context;
+    HWND prism_hwnd;
+    WNDPROC original_wndproc;
+
+    LRESULT __stdcall WndProcD3D( HWND hwnd, UINT umsg, WPARAM wparam, LPARAM lparam )
+    {
+        if ( CCore::g_instance->on_wnd_proc( hwnd, umsg, wparam, lparam ) ) return 0;
+        return CallWindowProc( original_wndproc, hwnd, umsg, wparam, lparam );
+    }
+
+    // Shared by the Present and Present1 hooks. The depth counter keeps a frame from being
+    // drawn twice should one of them be implemented by calling the other.
+    thread_local int present_depth = 0;
+
+    void on_present( IDXGISwapChain* swap_chain )
+    {
+        if ( present_depth++ != 0 )
+        {
+            return;
+        }
+
+        if ( !imgui_initialized )
+        {
+            if ( SUCCEEDED( swap_chain->GetDevice(__uuidof(ID3D11Device), reinterpret_cast<void**>(&device)) ) )
+            {
+                ImGui::CreateContext();
+                // fonte levemente maior para 4K (default 13px -> ~16px)
+                ImGui::GetIO().FontGlobalScale = 1.25f;
+
+                device->GetImmediateContext( &device_context );
+
+                DXGI_SWAP_CHAIN_DESC desc;
+                swap_chain->GetDesc( &desc );
+                prism_hwnd = desc.OutputWindow;
+
+                ImGui_ImplWin32_Init( prism_hwnd );
+                ImGui_ImplDX11_Init( device, device_context );
+                ImGui_ImplDX11_CreateDeviceObjects();
+                original_wndproc = reinterpret_cast< WNDPROC >(
+                    SetWindowLongPtr( prism_hwnd, GWLP_WNDPROC, reinterpret_cast< LONG_PTR >( WndProcD3D ) )
+                );
+                imgui_initialized = true;
+                CCore::g_instance->info( "Present hook is live, overlay initialized" );
+            }
+        }
+        else
+        {
+            // the game can recreate its device/swapchain on resolution change,
+            // alt+tab out of exclusive fullscreen, etc. — drawing with the stale
+            // device shows up as the overlay flickering, so re-init on change
+            ID3D11Device* current_device = nullptr;
+            if ( SUCCEEDED( swap_chain->GetDevice(__uuidof(ID3D11Device), reinterpret_cast<void**>(&current_device)) )
+                && current_device != nullptr && current_device != device )
+            {
+                ImGui_ImplDX11_Shutdown();
+                ImGui_ImplWin32_Shutdown();
+
+                ID3D11Device* old_device = device;
+                ID3D11DeviceContext* old_context = device_context;
+                device = current_device;
+                device->GetImmediateContext( &device_context );
+                if ( old_context != nullptr ) old_context->Release();
+                if ( old_device != nullptr ) old_device->Release();
+
+                DXGI_SWAP_CHAIN_DESC desc;
+                swap_chain->GetDesc( &desc );
+                HWND new_hwnd = desc.OutputWindow;
+
+                ImGui_ImplWin32_Init( new_hwnd );
+                ImGui_ImplDX11_Init( device, device_context );
+                ImGui_ImplDX11_CreateDeviceObjects();
+
+                // re-hook the window proc only if the window is new or our hook
+                // was lost — storing WndProcD3D itself as "original" would recurse
+                if ( new_hwnd != prism_hwnd
+                    || GetWindowLongPtr( new_hwnd, GWLP_WNDPROC ) != reinterpret_cast< LONG_PTR >( WndProcD3D ) )
+                {
+                    WNDPROC prev = reinterpret_cast< WNDPROC >(
+                        SetWindowLongPtr( new_hwnd, GWLP_WNDPROC, reinterpret_cast< LONG_PTR >( WndProcD3D ) )
+                    );
+                    if ( prev != WndProcD3D ) original_wndproc = prev;
+                }
+                prism_hwnd = new_hwnd;
+                CCore::g_instance->info( "Game device changed, overlay re-initialized" );
+            }
+            else if ( current_device != nullptr )
+            {
+                current_device->Release();
+            }
+        }
+
+        // not a D3D11 swapchain otherwise, nothing to draw with
+        if ( imgui_initialized )
+        {
+            CCore::g_instance->render();
+        }
+    }
+
+    HRESULT hk_present( IDXGISwapChain* swap_chain, const UINT sync_interval, const UINT flags )
+    {
+        on_present( swap_chain );
+        const auto hr = present_hook->get_original< present_fn >()( swap_chain, sync_interval, flags );
+        --present_depth;
+        return hr;
+    }
+
+    HRESULT hk_present1( IDXGISwapChain1* swap_chain, const UINT sync_interval, const UINT flags, const DXGI_PRESENT_PARAMETERS* params )
+    {
+        on_present( swap_chain );
+        const auto hr = present1_hook->get_original< present1_fn >()( swap_chain, sync_interval, flags, params );
+        --present_depth;
+        return hr;
+    }
+
+
+    CDirectX11Hook::~CDirectX11Hook()
+    {
+        this->unhook_present();
+    }
+
+    bool CDirectX11Hook::hook_present()
+    {
+        const HMODULE d3d11_module = GetModuleHandle( L"d3d11.dll" );
+        if ( d3d11_module == nullptr )
+        {
+            CCore::g_instance->error( "Could not get dx11 module" );
+            return false;
+        }
+
+        WNDCLASSEX window_class{ 0 };
+        window_class.cbSize = sizeof( WNDCLASSEX );
+        window_class.lpfnWndProc = DefWindowProc;
+        window_class.hInstance = GetModuleHandle( nullptr );
+        window_class.lpszClassName = L"dummy_hook_window";
+        if ( !RegisterClassEx( &window_class ) )
+        {
+            CCore::g_instance->error( "Could not register window class" );
+            return false;
+        }
+
+        const HWND hwnd = CreateWindow( window_class.lpszClassName, L"directx_hook_window", WS_OVERLAPPEDWINDOW, 0, 0, 100, 100, NULL, NULL, window_class.hInstance, NULL );
+        if ( hwnd == nullptr )
+        {
+            UnregisterClass( window_class.lpszClassName, window_class.hInstance );
+            CCore::g_instance->error( "Could not create window" );
+            return false;
+        }
+
+        DXGI_SWAP_CHAIN_DESC swap_chain_desc{ 0 };
+        swap_chain_desc.BufferCount = 1;
+        swap_chain_desc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+        swap_chain_desc.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        swap_chain_desc.OutputWindow = hwnd;
+        swap_chain_desc.SampleDesc.Count = 1;
+        swap_chain_desc.BufferDesc.ScanlineOrdering = DXGI_MODE_SCANLINE_ORDER_UNSPECIFIED;
+        swap_chain_desc.BufferDesc.Scaling = DXGI_MODE_SCALING_UNSPECIFIED;
+        swap_chain_desc.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
+        swap_chain_desc.Windowed = 1;
+
+        constexpr D3D_FEATURE_LEVEL feature_levels[ ] = { D3D_FEATURE_LEVEL_10_1, D3D_FEATURE_LEVEL_11_0 };
+        D3D_FEATURE_LEVEL feature_level;
+
+        IDXGISwapChain* dummy_swap_chain = nullptr;
+        ID3D11Device* dummy_device = nullptr;
+        ID3D11DeviceContext* dummy_context = nullptr;
+
+        const auto D3D11CreateDeviceAndSwapChain_address = GetProcAddress( d3d11_module, "D3D11CreateDeviceAndSwapChain" );
+
+        if ( D3D11CreateDeviceAndSwapChain_address == nullptr )
+        {
+            DestroyWindow( hwnd );
+            UnregisterClass( window_class.lpszClassName, window_class.hInstance );
+            CCore::g_instance->error( "Could not find the D3D11CreateDeviceAndSwapChain function" );
+            return false;
+        }
+
+        const auto d3d11_create_device_and_swap_chain = reinterpret_cast< D3D11CreateDeviceAndSwapChain_fnt* >( D3D11CreateDeviceAndSwapChain_address );
+
+        const auto hr = d3d11_create_device_and_swap_chain( nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, 0, feature_levels, 2, D3D11_SDK_VERSION, &swap_chain_desc, &dummy_swap_chain, &dummy_device, &feature_level, &dummy_context );
+
+        if ( FAILED( hr ) )
+        {
+            DestroyWindow( hwnd );
+            UnregisterClass( window_class.lpszClassName, window_class.hInstance );
+            CCore::g_instance->error( "Could not create dx11 device and swap chain (hresult = 0x{:x})", static_cast< uint32_t >( hr ) );
+            return false;
+        }
+
+        // Inline-hook the Present function itself rather than swapping the pointer in the dummy's vtable:
+        // the game's swapchain (flip model, allow-tearing) can use a different vtable than this
+        // legacy-blt dummy, in which case a vtable swap never gets called.
+        present_hook = CCore::g_instance->get_hooks_manager()->register_function_hook(
+            "dx11::present",
+            ( *reinterpret_cast< uint64_t** >( dummy_swap_chain ) )[ 8 ],
+            reinterpret_cast< uint64_t >( &hk_present )
+        );
+
+        if ( present_hook->hook() != CHook::HOOKED )
+        {
+            CCore::g_instance->error( "Could not hook dx11::present" );
+            return false;
+        }
+
+        // Flip-model swapchains may be presented through IDXGISwapChain1::Present1 (vtable slot 22) instead.
+        // Optional: Present alone still covers games that never call it.
+        IDXGISwapChain1* dummy_swap_chain1 = nullptr;
+        if ( SUCCEEDED( dummy_swap_chain->QueryInterface( __uuidof(IDXGISwapChain1), reinterpret_cast<void**>(&dummy_swap_chain1) ) ) )
+        {
+            present1_hook = CCore::g_instance->get_hooks_manager()->register_function_hook(
+                "dx11::present1",
+                ( *reinterpret_cast< uint64_t** >( dummy_swap_chain1 ) )[ 22 ],
+                reinterpret_cast< uint64_t >( &hk_present1 )
+            );
+            if ( present1_hook->hook() != CHook::HOOKED )
+            {
+                CCore::g_instance->error( "Could not hook dx11::present1" );
+            }
+            dummy_swap_chain1->Release();
+        }
+
+        dummy_swap_chain->Release();
+        dummy_device->Release();
+        dummy_context->Release();
+        DestroyWindow( hwnd );
+        UnregisterClass( window_class.lpszClassName, window_class.hInstance );
+        return true;
+    }
+
+    bool CDirectX11Hook::unhook_present()
+    {
+        SetWindowLongPtr( prism_hwnd, GWLP_WNDPROC, reinterpret_cast< LONG_PTR >( original_wndproc ) );
+
+        if ( present1_hook != nullptr )
+        {
+            present1_hook->unhook();
+        }
+        return present_hook->unhook() == CHook::CREATED;
+    }
+}

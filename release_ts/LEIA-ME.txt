@@ -1,0 +1,38 @@
+BR CONTROLE DE CARRETAS — ETS2 1.61 (engate/desengate individual)
+=================================================================
+
+INSTALACAO
+----------
+
+1) plugins/  ->  copie o CONTEUDO para:
+   <pasta do jogo>\bin\win_x64\plugins\
+   (br_controle_de_carretas.dll + br-settings.ini)
+
+2) mod/  ->  copie ZZ_fix_ai_truck_defs.scs para:
+   Documentos\Euro Truck Simulator 2\mod\
+   e ATIVE o mod no Gerenciador de Mods do perfil.
+
+USO
+---
+
+- Tecla T do jogo: continua engatando/desengatando a 1a carreta (nativo).
+- Janela do plugin (tecla DELETE por padrao), colunas de carretas:
+  Engatar / Desengatar / Engatar no cavalo + switches de eixos elevaveis.
+  - "Carreta 1" = do jogo (tecla T).
+  - "Carreta 2" = dolly/meio.  "Carreta 3" = traseira.
+- Coluna "Teclas" da janela: clique na acao e aperte a tecla, o combo
+  (Ctrl+J, Shift+F5...) ou o botao do volante/joystick. No ini:
+  attach_detach_2=CTRL+DELETE  /  attach_detach_3=JOY0:B3
+- Checkbox "Erguer 1o eixo na re": engatou a re, sobe o 1o eixo elevavel
+  de cada carreta; saiu da re, desce de volta.
+- Engatar por tecla/botao: aproxime a carreta (limite ~7 m).
+- O trafego pode ficar ligado: a carreta solta vira obstaculo registrado.
+
+ZZ_fix_ai_truck_defs.scs
+------------------------
+
+Opcional, porem recomendado para quem usa Rotas Brasil / packs AM29:
+essas bases referenciam defs de caminhao de IA de versoes antigas do jogo
+(man.tgx/c6x4, iveco.hiway/a6x4, daf.xf/c6x4, etc.) que nao existem na 1.61.
+Sem esse bridge, o spawn de trafego desses caminhoes quebra e pode crashar.
+Quem nao usa esses mods pode remover o arquivo sem problema.
