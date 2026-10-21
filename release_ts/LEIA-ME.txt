@@ -27,6 +27,9 @@ USO
   de cada carreta; saiu da re, desce de volta.
 - Engatar por tecla/botao: aproxime a carreta (limite ~7 m).
 - O trafego pode ficar ligado: a carreta solta vira obstaculo registrado.
+- Camera 2: com carreta desatrelada ela foca no cavalo e a roda do mouse
+  controla a distancia sem limite (pra frente aproxima, pra tras afasta);
+  com o conjunto todo engatado volta ao comportamento normal do jogo.
 
 ZZ_fix_ai_truck_defs.scs
 ------------------------

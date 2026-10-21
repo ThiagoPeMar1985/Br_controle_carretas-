@@ -31,6 +31,13 @@ eixo direcional do plugin original foi removido.
    - Carretas desengatadas ficam estacionadas onde você as deixou durante
      carga/descarga no doca — o conjunto volta à posição original depois da
      cinemática (entrou de ré, sai de ré)
+   - Som da manivela do apoio ao desengatar
+
+- **Câmera 2 inteligente**
+   - Com qualquer carreta desatrelada: a câmera ancora no cavalo e a roda
+     do mouse controla a distância **sem limite** — scroll pra frente
+     aproxima, pra trás afasta
+   - Conjunto completo engatado: comportamento 100% nativo da SCS
 
 - **Eixos eleváveis por carreta**
    - Escolha quais eixos eleváveis de cada carreta respondem à tecla de lift
@@ -108,6 +115,15 @@ Saída: `build/Release/br_controle_de_carretas.dll`.
 > O `build/` guarda caminhos absolutos no CMakeCache — depois de
 > copiar/mover a pasta do projeto, apague `build/` e reconfigure, senão ele
 > compila a árvore antiga.
+
+## Estabilidade
+
+O plugin replica os fluxos nativos do jogo em vez de contorná-los: engate,
+freios, mangueiras, estado de acoplamento e câmera seguem o mesmo protocolo
+da SCS. Correções aplicadas incluem propagação de freio para carretas
+reengatadas, restauração de âncora/distância da câmera 2, proteção contra
+reengate automático e poda de obstáculos de tráfego mortos — tudo voltado a
+rodar liso, sem crashes. O histórico completo está no `CHANGELOG.md`.
 
 ## Créditos
 

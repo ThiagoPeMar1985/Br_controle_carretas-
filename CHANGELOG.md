@@ -1,18 +1,91 @@
 BR Controle de Carretas 1.0
-    - Fork brasileiro de ts-extra-utilities 2.0: o recurso de eixo direcional
-      (manual trailer steering) foi removido — o plugin agora faz somente o
-      engate/desengate individual de carretas
-    - UI inteira em PT-BR; mensagens ao usuário (avisos de engate) também em PT-BR
+    Autor: ThiagoPeMar1985 — baseado em ts-extra-utilities 2.0 (MIT, Dario Wouters)
+
+  == Identidade e escopo ==
+
+    - Plugin brasileiro independente: UI, documentação e mensagens ao
+      usuário inteiramente em PT-BR
+    - Foco exclusivo em conjuntos brasileiros (bitrem, rodotrem, cadeia
+      Cavalo -> C0 -> Dolly -> C2): o recurso de eixo direcional do plugin
+      original foi removido por completo
     - Renomeado: br_controle_de_carretas.dll, binds em
       %APPDATA%\br_controle_de_carretas\settings.ini, preset br-settings.ini
-    - Diagnósticos de Hooks ficam internos (fora da UI do usuário)
-    - Câmera 2 (vehicle_behind_rotation_camera): com qualquer carreta
-      desatrelada, ancora no cavalo e a roda do mouse controla a distância
-      sem limite (scroll pra frente aproxima, pra trás afasta); com o
-      conjunto completo engatado, volta ao comportamento nativo da SCS —
-      a âncora é restaurada pra primeira carreta da cadeia pelo setter
-      nativo, já que a câmera mede o comboio a partir dela
-    - Som da manivela do apoio ao desengatar; janela de Hooks fora da UI
+    - Diagnósticos de Hooks ficam internos — não aparecem na UI do usuário
+
+  == Engate / desengate ==
+
+    - A primeira carreta (C0) continua 100% na tecla T do jogo — o engate
+      nativo da SCS não é substituído, só estendido
+    - Engatar/desengatar individual para as carretas seguintes (botões na
+      janela e teclas configuráveis), com suporte a bitrem e rodotrem
+    - "Engatar no cavalo": conecta uma carreta traseira direto na quinta
+      roda — estacione o conjunto, leve uma carreta, volte e remonte
+    - Carretas desatreladas continuam no mundo: visíveis, com física,
+      apoio baixado e estado de estacionada — não desaparecem nem são
+      puxadas de volta pelo jogo
+    - O reengate repete a sequência nativa completa (registro de reboque,
+      flag de estacionada, apoio, mangueiras de ar, carga nas rodas,
+      estado de acoplamento): cabos, luzes e freios voltam a funcionar
+      como num engate normal
+    - Guarda de proximidade no engate (~7 m, como no nativo) com aviso em
+      PT-BR quando a carreta está longe demais
+    - Som da manivela do apoio ao desengatar — único som adicionado
+
+  == Camera 2 ==
+
+    - Com qualquer carreta desatrelada: a camera ancora no cavalo e a roda
+      do mouse controla a distancia sem limite — scroll pra frente
+      aproxima, pra tras afasta, com suavizacao nativa
+    - Conjunto completo engatado: comportamento 100% nativo da SCS —
+      a camera mede o comboio a partir da primeira carreta da cadeia,
+      que e restaurada como ancora pelo setter nativo do jogo
+
+  == Eixos elevaveis ==
+
+    - Selecao por eixo em cada carreta: so os eixos marcados respondem a
+      tecla de lift do jogo
+    - "Erguer 1o eixo na re": engatou a re, sobe o primeiro eixo elevavel
+      de cada carreta; saiu da re, desce e volta a selecao salva
+
+  == Estabilidade e correcoes (o que faz rodar liso, sem crashes) ==
+
+    - Corrupcao de refcount na camera: liberar ponteiros que o jogo
+      escreveu direto destruia objetos e congelava a camera no reengate.
+      Corrigido usando o setter nativo com o protocolo correto e escrita
+      crua apenas para o estado "sem carreta"
+    - Guerra de escrita na ancora da camera (milhares de escritas por
+      segundo) que travava rotacao e zoom: corrigido com escritas somente
+      nas transicoes de estado, nunca por frame
+    - Camera "ancorada no cavalo" apos reengatar: a causa real era a
+      ancora apontando para a ultima carreta — a camera mede o comboio
+      a partir da cabeca da cadeia. Corrigido restaurando a primeira
+      carreta (mesma escolha do resolver nativo)
+    - Zoom da camera limitado apos reengatar: o recompute nativo passou a
+      ser chamado uma unica vez por transicao, devolvendo o conjunto de
+      distancias correto
+    - Camera seguindo carreta desatrelada: o setter nativo e hookeado e
+      troca qualquer alvo com junta morta por "sem carreta" (seguir o
+      cavalo)
+    - Medicao do comboio (combo_length) contando carretas desatreladas:
+      a cadeia slave agora para na primeira junta morta, entao camera e
+      demais consumidores medem so o conjunto vivo
+    - Freio de servico/progressivo nao chegando nas carretas reengatadas:
+      os canais de freio sao propagados enquanto o trailer esta no comboio
+    - Conjunto estacionado freando carreta engatada no cavalo: escritas de
+      freio vindas do conjunto parado sao engolidas pelo hook do setter
+    - Jogo re-engatando sozinho carretas desatreladas pelo plugin:
+      connect_slave e o dispatcher de engate recusam trailers marcados
+    - Carreta estacionada sendo teleportada/reaplicada pelo fluxo nativo:
+      hooks de state-apply e teleport pulam trailers desatrelados
+    - Trailer sumindo depois da cinematica de carga no doca: o conjunto e
+      restaurado na posicao original (entrou de re, sai de re)
+    - Varredura de trafego batendo em obstaculo morto: entradas de lane
+      obstacle com dono destruido sao podadas
+    - Trafego: a carreta solta vira obstaculo registrado na via; densidade
+      de trafego e restaurada quando o conjunto remonta
+    - ZZ_fix_ai_truck_defs.scs: bridge de defs de caminhao de IA para
+      Rotas Brasil / packs AM29 (defs antigos quebravam o spawn de
+      trafego na 1.61)
 
 --- histórico upstream (ts-extra-utilities) ---
 
