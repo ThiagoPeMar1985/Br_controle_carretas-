@@ -20,6 +20,13 @@ namespace ts_extra_utilities::prism::offsets
     constexpr uint32_t trailer_parent = 0x1080; // game_trailer_actor_u*, previous trailer in the chain
     constexpr uint32_t trailer_slave = 0x1088; // game_trailer_actor_u*, next trailer in the chain
 
+    // Trailer steering (1.61.1.9): physics_trailer_u::steering_advance stores the
+    // computed angle to +0x6B8 and passes the pointer at +0x6C0 to
+    // set_individual_steering; the data object is null on trailers without
+    // steerable wheels
+    constexpr uint32_t trailer_steering = 0x06B8; // float, -1..1, written by the game every advance
+    constexpr uint32_t trailer_steering_data = 0x06C0; // vehicle_wheel_steering_data_t*, null when not steerable
+
     // Trailer connect/disconnect (1.61.1.9). physics_joint is null while a trailer is
     // detached; the game's own detach path checks it before calling disconnect and then
     // lowering the brace. hook_locator is the vehicle's own coupling point in local

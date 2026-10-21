@@ -6,6 +6,7 @@
 #include <cstring>
 #include <intrin.h>
 #include <utility>
+#include <vector>
 
 #include "imgui.h"
 
@@ -16,6 +17,7 @@
 #include "memory/memory_utils.hpp"
 #include "prism/common.hpp"
 #include "prism/offsets.hpp"
+#include "prism/functions.hpp"
 #include "settings/settings.hpp"
 
 namespace ts_extra_utilities
@@ -71,6 +73,14 @@ namespace ts_extra_utilities
         return prism::offsets::field< void* >( trailer, prism::offsets::trailer_physics_joint );
     }
 
+    // non-null only on trailers with steerable wheels (heavy-haul / oversize)
+    prism::vehicle_wheel_steering_data_t* steering_data( void* trailer )
+    {
+        return trailer == nullptr ? nullptr
+            : prism::offsets::field< prism::vehicle_wheel_steering_data_t* >(
+                trailer, prism::offsets::trailer_steering_data );
+    }
+
     //========================================================================
     // Resolved native functions and globals (filled by init())
     //========================================================================
@@ -80,8 +90,11 @@ namespace ts_extra_utilities
     std::shared_ptr< CFunctionHook > connect_slave_hook = nullptr;
     std::shared_ptr< CFunctionHook > brake_chain_setter_hook = nullptr;
     std::shared_ptr< CFunctionHook > brake_setter_hook = nullptr;
+    std::shared_ptr< CFunctionHook > svc_brake_chain_hook = nullptr; // unused: +0x730 is a dead demand mirror
+    std::shared_ptr< CFunctionHook > svc_brake_hook = nullptr;
     std::shared_ptr< CFunctionHook > forced_chain_setter_hook = nullptr;
     std::shared_ptr< CFunctionHook > forced_setter_hook = nullptr;
+    std::shared_ptr< CFunctionHook > wheel_brake_hook = nullptr;
     std::shared_ptr< CFunctionHook > pre_detach_hook = nullptr;
     std::shared_ptr< CFunctionHook > detach_dispatch_hook = nullptr;
     std::shared_ptr< CFunctionHook > attach_dispatch_hook = nullptr;
@@ -91,6 +104,7 @@ namespace ts_extra_utilities
     std::shared_ptr< CFunctionHook > lane_obstacle_insert_hook = nullptr;
     std::shared_ptr< CFunctionHook > combo_length_hook = nullptr;
     std::shared_ptr< CFunctionHook > cam_set_target_hook = nullptr;
+    std::shared_ptr< CFunctionHook > set_individual_steering_hook = nullptr;
 
     // native helpers replayed around connect/disconnect so a manually handled
     // trailer gets the same treatment as the game's own T-key flow
@@ -331,6 +345,298 @@ namespace ts_extra_utilities
     SCSAPI_VOID on_engine_gear( const scs_string_t, const scs_u32_t, const scs_value_t* const value, const scs_context_t )
     {
         engine_gear.store( value != nullptr ? value->value_s32.value : 0, std::memory_order_relaxed );
+    }
+
+    //========================================================================
+    // Air compressor diagnostics (temporary — collecting the native refill
+    // rate and the truck-object field holding the tank pressure)
+    //========================================================================
+    std::atomic< float > air_psi{ 0.f };
+    std::atomic< float > engine_rpm{ 0.f };
+
+    SCSAPI_VOID on_air_pressure( const scs_string_t, const scs_u32_t, const scs_value_t* const value, const scs_context_t )
+    {
+        air_psi.store( value != nullptr ? value->value_float.value : 0.f, std::memory_order_relaxed );
+    }
+
+    SCSAPI_VOID on_engine_rpm( const scs_string_t, const scs_u32_t, const scs_value_t* const value, const scs_context_t )
+    {
+        engine_rpm.store( value != nullptr ? value->value_float.value : 0.f, std::memory_order_relaxed );
+    }
+
+    //========================================================================
+    // Air compressor boost ("Compressor" slider)
+    //
+    // Reverse-engineered from the telemetry channel registration (1.61):
+    // the truck.brake.air.pressure getter callback at 0x14064B850 reads
+    //   psi = [[truck+0x200] + 0x458] * [truck+0x1148] * 14.5
+    // +0x458 on the air sub-object is the tank MAX pressure (~10 bar — a
+    // constant, do NOT write); the live fill is the fraction at
+    // truck+0x1148 (0..~0.93 cutout). The boost adds
+    // `native_rate * air_boost` psi/s to that fraction.
+    // (The +0xA8/+0xD0 float arrays with cached means belong to a different
+    // subsystem — per-axle brake air, always 0 when unbraked — and the
+    // singleton chain [[[exe+0x3046780]+0x18]+0xA0]+0x10 resolves a dead
+    // template instance; neither is the player telemetry source.)
+    //========================================================================
+    constexpr uint32_t air_sub_ptr    = 0x200;  // truck -> air/brake object
+    constexpr uint32_t air_press_off  = 0x458;  // tank MAX pressure (~10 bar)
+    constexpr uint32_t air_scale_off  = 0x1148; // fill fraction 0..~0.93
+    constexpr float    air_psi_const  = 14.5f;  // getter's bar->psi factor
+
+    float air_win_t = 0.f;                 // rate-window accumulator (s)
+    float air_win_last_psi = -1.f;         // last psi seen in the window
+    float air_win_dpsi = 0.f;              // psi gained inside the window
+    float air_win_ours = 0.f;              // psi we wrote inside the window
+    float air_meas_rate = 0.f;             // achieved total fill rate psi/s
+    float air_inject = 0.f;                // integral term: psi/s we inject
+    float air_rate_est = 0.f;              // EMA of the native refill slope
+    float air_units = 0.f;                 // psi per internal unit
+    bool air_tanks_seen = false;
+    bool air_diag_dumped = false;          // one-shot layout dump on failure
+    float air_field_base = 0.f;            // locked tank max pressure (bar)
+    void* air_obj = nullptr;               // resolved air/brake sub-object
+    void* air_truck = nullptr;             // truck physics object (scale owner)
+    float air_recheck_t = 0.f;             // 0.5 s verify throttle
+
+    // each wheelset's native brake mask, captured before our first rewrite —
+    // needed to fall back to the game's own braked-axle set while axles are up
+    void* native_mask_ws[ 32 ] = {};
+    uint32_t native_mask_val[ 32 ] = {};
+
+    uint32_t native_mask_of( void* ws )
+    {
+        for ( int i = 0; i < 32; ++i )
+            if ( native_mask_ws[ i ] == ws ) return native_mask_val[ i ];
+        const uint32_t native = prism::offsets::field< uint32_t >( ws, 0x2BC );
+        for ( int i = 0; i < 32; ++i )
+            if ( native_mask_ws[ i ] == nullptr ) { native_mask_ws[ i ] = ws; native_mask_val[ i ] = native; break; }
+        return native;
+    }
+
+    // rewrites the wheelset brake mask (+0x2BC): all axles down -> every wheel
+    // takes the factor; any axle lifted (progress > 0.5) -> back to the native
+    // mask minus the airborne wheels, so only grounded axles keep braking.
+    // Wheels map to axles evenly — wheel i belongs to axle i*axles/n
+    void update_wheel_brake_mask( void* trailer )
+    {
+        void* const ws = prism::offsets::field< void* >( trailer, 0x150 );
+        if ( ws == nullptr ) return;
+        const auto n = prism::offsets::field< uint64_t >( ws, 0x178 );
+        if ( n == 0 || n > 32 ) return;
+
+        uint32_t axles = 0;
+        const float* progress = nullptr;
+        void* const controller = prism::offsets::field< void* >( trailer, prism::offsets::trailer_lift_controller );
+        if ( controller != nullptr )
+        {
+            const auto pc = prism::offsets::field< uint64_t >( controller, prism::offsets::lift_controller_progress_count );
+            if ( pc > 0 && pc <= 16 )
+            {
+                progress = prism::offsets::field< float* >( controller, prism::offsets::lift_controller_progress );
+                if ( progress != nullptr && readable_ptr( progress ) )
+                    axles = static_cast< uint32_t >( pc );
+            }
+        }
+
+        uint32_t grounded = 0;
+        bool any_lifted = false;
+        for ( uint64_t w = 0; w < n; ++w )
+        {
+            if ( axles != 0 && progress[ w * axles / n ] > 0.5f )
+                any_lifted = true;
+            else
+                grounded |= 1u << w;
+        }
+        const uint32_t mask = any_lifted
+            ? native_mask_of( ws ) & grounded
+            : grounded;
+
+        prism::offsets::field< uint32_t >( ws, 0x2BC ) = mask;
+    }
+
+
+    // guarded reads/writes — the arrays live on the truck object; kept apart
+    // because __try cannot live in a function with C++ objects that need
+    // unwinding
+    bool air_safe_read_f( const void* addr, float& out )
+    {
+        __try
+        {
+            memcpy( &out, addr, 4 );
+            return true;
+        }
+        __except ( EXCEPTION_EXECUTE_HANDLER ) {}
+        return false;
+    }
+
+    bool air_safe_read_q( const void* addr, uint64_t& out )
+    {
+        __try
+        {
+            memcpy( &out, addr, 8 );
+            return true;
+        }
+        __except ( EXCEPTION_EXECUTE_HANDLER ) {}
+        return false;
+    }
+
+    bool air_safe_write_f( void* addr, const float v )
+    {
+        __try
+        {
+            *static_cast< float* >( addr ) = v;
+            return true;
+        }
+        __except ( EXCEPTION_EXECUTE_HANDLER ) {}
+        return false;
+    }
+
+    // the live pressure field is on the truck's air/brake sub-object:
+    // game_actor -> +0x18 (truck physics) -> +0x200 (air object) -> +0x458,
+    // exactly what the telemetry getter 0x14064B850 reads. The scale factor
+    // the getter applies sits on the truck object itself at +0x1148.
+    void* air_object()
+    {
+        auto* game_actor = CCore::g_instance->get_game_actor();
+        if ( game_actor == nullptr ) return nullptr;
+        void* const truck = prism::offsets::field< void* >( game_actor,
+            prism::offsets::game_actor_truck );
+        if ( truck == nullptr ) return nullptr;
+        air_truck = truck;
+        uint64_t sub = 0;
+        if ( !air_safe_read_q( static_cast< uint8_t* >( truck ) + air_sub_ptr, sub ) || sub == 0 )
+        {
+            return nullptr;
+        }
+        return reinterpret_cast< void* >( sub );
+    }
+
+    void update_air( const float dt )
+    {
+        const float psi = air_psi.load();
+        const float rpm = engine_rpm.load();
+        const int boost = settings::g_settings.air_boost;
+
+        // achieved fill rate over a 0.25 s window — the telemetry channel
+        // is quantized so per-frame dpsi/dt is meaningless; native rate =
+        // measured total minus what we injected ourselves
+        if ( dt > 0.f )
+        {
+            air_win_t += dt;
+            if ( air_win_last_psi >= 0.f )
+            {
+                air_win_dpsi += psi - air_win_last_psi;
+            }
+            air_win_last_psi = psi;
+            if ( air_win_t >= 0.25f )
+            {
+                air_meas_rate = air_win_dpsi / air_win_t;
+                const float native_obs = air_meas_rate - air_win_ours / air_win_t;
+                if ( native_obs > 0.f && native_obs < 50.f )
+                {
+                    air_rate_est = air_rate_est == 0.f ? native_obs
+                        : air_rate_est * 0.8f + native_obs * 0.2f;
+                }
+                // integral: nudge the injected rate toward the target — a
+                // pure proportional push converges to only half the goal.
+                // Same gates as production or the term winds up at the cap
+                // while the tank is full and bursts on the next drain. The
+                // frac check also covers the compressor cutout — past
+                // ~0.93 the displayed psi saturates so the controller would
+                // keep pumping a fraction the sim no longer uses
+                float frac_now = 0.f;
+                if ( boost > 0 && air_tanks_seen && rpm > 0.f && psi < 133.f &&
+                     air_truck != nullptr &&
+                     air_safe_read_f( static_cast< uint8_t* >( air_truck ) + air_scale_off, frac_now ) &&
+                     frac_now < 0.95f )
+                {
+                    const float native = air_rate_est > 0.f ? air_rate_est
+                        : 0.0003f * rpm;
+                    air_inject += ( native * static_cast< float >( boost + 1 )
+                        - air_meas_rate ) * 0.7f;
+                    if ( air_inject < 0.f ) air_inject = 0.f;
+                    if ( air_inject > 30.f ) air_inject = 30.f;
+                }
+                else
+                {
+                    air_inject = 0.f;
+                }
+                air_win_t = 0.f;
+                air_win_dpsi = 0.f;
+                air_win_ours = 0.f;
+            }
+        }
+
+        // resolve + verify at ~2 Hz: the air object hangs right off the
+        // truck; the sanity check confirms the getter contract still holds
+        air_recheck_t -= dt;
+        if ( air_recheck_t <= 0.f && psi > 5.f )
+        {
+            air_recheck_t = 0.5f;
+            air_obj = air_object();
+            if ( air_obj != nullptr && air_truck != nullptr )
+            {
+                float field = 0.f, frac = 0.f;
+                if ( air_safe_read_f( static_cast< uint8_t* >( air_obj ) + air_press_off, field ) &&
+                     air_safe_read_f( static_cast< uint8_t* >( air_truck ) + air_scale_off, frac ) &&
+                     field > 0.f && frac > 0.f )
+                {
+                    // getter contract: psi = field(max bar) * frac * 14.5
+                    const float predicted = field * frac * air_psi_const;
+                    if ( predicted > psi * 0.7f && predicted < psi * 1.3f )
+                    {
+                        if ( !air_tanks_seen )
+                        {
+                            air_tanks_seen = true;
+                            air_field_base = field;
+                            air_units = field * air_psi_const; // psi per fraction
+                            CCore::g_instance->info( "air: pressure locked max={:.3f} frac={:.4f} -> {:.1f} vs psi {:.1f}",
+                                field, frac, predicted, psi );
+                        }
+                        // heal +0x458 — earlier builds wrote into it; it is
+                        // the tank's MAX pressure, not the live value
+                        if ( field < air_field_base * 0.9f || field > air_field_base * 1.1f )
+                        {
+                            air_safe_write_f( static_cast< uint8_t* >( air_obj ) + air_press_off,
+                                air_field_base );
+                        }
+                    }
+                    else if ( !air_diag_dumped )
+                    {
+                        air_diag_dumped = true;
+                        CCore::g_instance->warning(
+                            "Compressor indisponível: layout de ar divergiu ({:.3f} x {:.3f} -> {:.1f} vs {:.1f} psi)",
+                            field, frac, predicted, psi );
+                    }
+                }
+                else if ( !air_diag_dumped )
+                {
+                    air_diag_dumped = true;
+                    CCore::g_instance->warning( "Compressor indisponível: campo de ar ilegível" );
+                }
+            }
+        }
+
+        // production: inject air_inject psi/s into the fill fraction — the
+        // integral term has already sized it so the achieved rate lands on
+        // native*(boost+1)
+        if ( boost > 0 && air_tanks_seen && air_truck != nullptr && rpm > 0.f &&
+             psi < 133.f && dt > 0.f && air_units > 0.f && air_inject > 0.f )
+        {
+            float frac = 0.f;
+            if ( air_safe_read_f( static_cast< uint8_t* >( air_truck ) + air_scale_off, frac ) &&
+                 frac < 0.95f )
+            {
+                const float add_psi = air_inject * dt;
+                // hard cap at the physical fill range — the sim saturates
+                // the effective pressure at the cutout, anything above just
+                // accumulates an invisible overshoot in the fraction
+                air_safe_write_f( static_cast< uint8_t* >( air_truck ) + air_scale_off,
+                    ( std::min )( frac + add_psi / air_units, 0.95f ) );
+                air_win_ours += add_psi;
+            }
+        }
     }
 
     void release_all_axles()
@@ -1636,6 +1942,32 @@ namespace ts_extra_utilities
         return cur;
     }
 
+    // brake bias: legitimate truck broadcasts aimed at a coupled trailer are
+    // amplified by trailer_brake_boost percent so the trailers take the
+    // braking load first (they lock and drag straight instead of the truck
+    // folding into a jackknife). The tractor's own channel is never touched —
+    // the truck check must run BEFORE joint(): +0xFE0 is a trailer field and
+    // holds unrelated live data on the truck object.
+    // The wheel solver (0x14090C570) applies the factor as
+    // max(trailer_brake, per-wheel floor) * grip/load with NO upper clamp,
+    // so the amplified value is allowed to exceed 1.0 — that is what makes
+    // loaded axles actually lock once their wheels unload under braking.
+    float biased_brake( void* self, const float v )
+    {
+        const float boost = settings::g_settings.trailer_brake_boost;
+        if ( v <= 0.f || boost <= 0.f || self == nullptr ) return v;
+        if ( auto* game_actor = CCore::g_instance->get_game_actor() )
+        {
+            if ( self == prism::offsets::field< void* >( game_actor, prism::offsets::game_actor_truck ) )
+            {
+                return v;
+            }
+        }
+        if ( joint( self ) == nullptr ) return v; // detached: native spring brake
+        const float mult = 1.f + boost / 100.f;
+        return ( std::min )( v * mult, mult ); // cap at the multiplier itself
+    }
+
     void __fastcall hk_brake_chain_setter( void* self, float v )
     {
         if ( v > 0.f && foreign_brake_write( self, _ReturnAddress() ) )
@@ -1646,13 +1978,13 @@ namespace ts_extra_utilities
             }
             return;
         }
-        brake_chain_setter_hook->get_original< brake_setter_fn >()( self, v );
+        brake_chain_setter_hook->get_original< brake_setter_fn >()( self, biased_brake( self, v ) );
     }
 
     void __fastcall hk_brake_setter( void* self, float v )
     {
         if ( v > 0.f && foreign_brake_write( self, _ReturnAddress() ) ) return;
-        brake_setter_hook->get_original< brake_setter_fn >()( self, v );
+        brake_setter_hook->get_original< brake_setter_fn >()( self, biased_brake( self, v ) );
     }
 
     void __fastcall hk_forced_chain_setter( void* self, uint8_t v )
@@ -1674,9 +2006,89 @@ namespace ts_extra_utilities
         forced_setter_hook->get_original< forced_setter_fn >()( self, v );
     }
 
+    // per-wheel brake solver (0x14090C510): rcx is the wheelset, +0x10 the
+    // vehicle, +0x178 the wheel count, +0x2BC the brake-factor mask and
+    // +0x260/+0x268 the per-wheel output array. Natively lifted wheels keep
+    // their floor brake, so an airborne wheel dead-stops the moment the pedal
+    // is touched — after the original runs we zero the outputs of every wheel
+    // whose axle is raised (lift controller progress > 0.5). Runs on the sim
+    // thread, which is why this can't be done per-frame in update()
+    using wheel_brake_fn = void __fastcall( void* /*wheelset*/ );
+    void __fastcall hk_wheel_brake( void* ws )
+    {
+        wheel_brake_hook->get_original< wheel_brake_fn >()( ws );
+        if ( ws == nullptr ) return;
+        void* const veh = prism::offsets::field< void* >( ws, 0x10 );
+        if ( veh == nullptr || index_of( veh ) < 0 ) return;
+        void* const controller = prism::offsets::field< void* >( veh, prism::offsets::trailer_lift_controller );
+        if ( controller == nullptr || !readable_ptr( controller ) ) return;
+        const auto pc = prism::offsets::field< uint64_t >( controller, prism::offsets::lift_controller_progress_count );
+        if ( pc == 0 || pc > 16 ) return;
+        const float* const progress = prism::offsets::field< float* >( controller, prism::offsets::lift_controller_progress );
+        if ( progress == nullptr || !readable_ptr( progress ) ) return;
+        const auto n = prism::offsets::field< uint64_t >( ws, 0x178 );
+        float* const out = prism::offsets::field< float* >( ws, 0x260 );
+        if ( n == 0 || n > 32 || out == nullptr || !readable_ptr( out ) ) return;
+        if ( prism::offsets::field< uint64_t >( ws, 0x268 ) != n ) return;
+        for ( uint64_t w = 0; w < n; ++w )
+            if ( progress[ w * pc / n ] > 0.5f ) out[ w ] = 0.f;
+    }
+
+    // service-brake note: the pedal broadcasts through +0x730 (vfunc 0x178),
+    // but that field is a demand mirror — writing 10x to it produced zero
+    // physical effect. The wheel solver only turns +0x760 into torque, so the
+    // bias is applied there per-frame in update() instead
     //========================================================================
     // Input helpers
     //========================================================================
+
+    //========================================================================
+    // Steering lock state (oversize / steerable-axle trailers)
+    //
+    // Shared between the render thread (UI) and the game thread (the hook).
+    // The hook only compares the pointer, never dereferences it, so a stale
+    // entry is harmless.
+    //========================================================================
+    struct LockedSteering
+    {
+        std::atomic< prism::vehicle_wheel_steering_data_t* > data{ nullptr };
+        std::atomic< float > angle{ 0.f };
+    };
+
+    LockedSteering locked_steering[ max_trailers ];
+
+    // UI-only state, render thread
+    bool locked_ui[ max_trailers ] = {};
+    float angle_ui[ max_trailers ] = {};
+    bool centering_ui[ max_trailers ] = {}; // easing back to 0 at steering_speed
+
+    void set_locked( const uint32_t i, const bool lock )
+    {
+        if ( locked_ui[ i ] == lock ) return;
+        locked_ui[ i ] = lock;
+        if ( lock )
+        {
+            // start from where the game had the wheels so they do not jump
+            angle_ui[ i ] = prism::offsets::field< float >( trailers[ i ], prism::offsets::trailer_steering );
+            locked_steering[ i ].angle.store( angle_ui[ i ] );
+        }
+    }
+
+    // set_individual_steering hook: the game calls this every steering advance
+    // with the angle it computed from the joint. For a trailer the user took
+    // control of, swap in their angle.
+    void hk_set_individual_steering( prism::vehicle_wheel_steering_data_t* data, float angle )
+    {
+        for ( auto& locked : locked_steering )
+        {
+            if ( data != nullptr && locked.data.load( std::memory_order_relaxed ) == data )
+            {
+                angle = locked.angle.load( std::memory_order_relaxed );
+                break;
+            }
+        }
+        set_individual_steering_hook->get_original< prism::set_individual_steering_fn >()( data, angle );
+    }
 
     // key state for edge detection, shared with key_down below
     bool held[ settings::action_count ] = {};
@@ -1723,6 +2135,12 @@ namespace ts_extra_utilities
 
     CTrailerManipulation::~CTrailerManipulation()
     {
+        for ( uint32_t i = 0; i < max_trailers; ++i )
+        {
+            locked_steering[ i ].data.store( nullptr );
+            locked_ui[ i ] = false;
+        }
+        set_individual_steering_hook.reset();
         release_all_axles();
         crashes_when_disconnected_hook.reset();
         connect_slave_hook.reset();
@@ -1735,6 +2153,13 @@ namespace ts_extra_utilities
         lane_obstacle_insert_hook.reset();
         combo_length_hook.reset();
         cam_set_target_hook.reset();
+        svc_brake_chain_hook.reset();
+        svc_brake_hook.reset();
+        brake_chain_setter_hook.reset();
+        brake_setter_hook.reset();
+        forced_chain_setter_hook.reset();
+        forced_setter_hook.reset();
+        wheel_brake_hook.reset();
         chase_camera = nullptr;
     }
 
@@ -1935,6 +2360,17 @@ namespace ts_extra_utilities
                 reinterpret_cast< uint64_t >( &hk_forced_setter ) );
             forced_setter_hook->hook();
         }
+        // per-wheel brake solver — zeroing lifted-axle outputs must happen on
+        // the sim thread right after each solve, not per-frame
+        const auto wheel_brake_address = memory::get_address_for_pattern(
+            "48 89 5c 24 18 48 89 74 24 20 57 48 83 ec 50 48 8b 81 78 01 00 00 33 ff 48 8b d9 0f 29 74 24 40" );
+        if ( wheel_brake_address != 0 )
+        {
+            wheel_brake_hook = CCore::g_instance->get_hooks_manager()->register_function_hook(
+                "wheel_brake", wheel_brake_address,
+                reinterpret_cast< uint64_t >( &hk_wheel_brake ) );
+            wheel_brake_hook->hook();
+        }
     }
 
     bool CTrailerManipulation::init()
@@ -1980,6 +2416,25 @@ namespace ts_extra_utilities
             }
         }
 
+        // steerable axles (oversize trailers): the hook only swaps the angle,
+        // so a miss just means no steering control — never fatal
+        const auto steering_address = memory::get_address_for_pattern(
+            "48 89 5c 24 08 48 89 74 24 10 57 48 83 ec ? 8b 41 ? 48 8b d9 0f 29 74" );
+        if ( steering_address != 0 )
+        {
+            set_individual_steering_hook = CCore::g_instance->get_hooks_manager()->register_function_hook(
+                "set_individual_steering", steering_address,
+                reinterpret_cast< uint64_t >( &hk_set_individual_steering ) );
+            if ( set_individual_steering_hook != nullptr )
+            {
+                set_individual_steering_hook->hook();
+            }
+        }
+        else
+        {
+            CCore::g_instance->warning( "Direção de eixos indisponível nesta versão do jogo" );
+        }
+
         // reverse-gear detection for the axle-lift assist; each channel
         // failing just narrows the fallback, neither is fatal
         const auto* init_params = CCore::g_instance->get_init_params();
@@ -1994,6 +2449,18 @@ namespace ts_extra_utilities
                 &on_engine_gear, nullptr ) != SCS_RESULT_ok )
         {
             CCore::g_instance->warning( "Could not register 'truck.engine.gear'" );
+        }
+        if ( init_params->register_for_channel( SCS_TELEMETRY_TRUCK_CHANNEL_brake_air_pressure,
+                SCS_U32_NIL, SCS_VALUE_TYPE_float, SCS_TELEMETRY_CHANNEL_FLAG_none,
+                &on_air_pressure, nullptr ) != SCS_RESULT_ok )
+        {
+            CCore::g_instance->warning( "Could not register 'truck.brake.air.pressure'" );
+        }
+        if ( init_params->register_for_channel( SCS_TELEMETRY_TRUCK_CHANNEL_engine_rpm,
+                SCS_U32_NIL, SCS_VALUE_TYPE_float, SCS_TELEMETRY_CHANNEL_FLAG_none,
+                &on_engine_rpm, nullptr ) != SCS_RESULT_ok )
+        {
+            CCore::g_instance->warning( "Could not register 'truck.engine.rpm'" );
         }
 
         return true;
@@ -2320,7 +2787,12 @@ namespace ts_extra_utilities
             void* t = trailers[ i ];
             const bool parked_flag = prism::offsets::field< uint8_t >( t, prism::offsets::trailer_parked ) != 0;
             const bool parked_rec = prism::offsets::field< void* >( t, prism::offsets::trailer_parked_state ) != nullptr;
-            if ( parked_flag || parked_rec )
+            // only a live parked state needs clearing — the record (+0x1188)
+            // stays linked on purpose for the traffic registration, so its
+            // mere presence must not re-trigger this (it fires every frame
+            // and zeroes the coupled trailer's brake channels)
+            const bool parked_reg = prism::offsets::field< uint8_t >( t, prism::offsets::trailer_parked_registered ) != 0;
+            if ( parked_flag || parked_reg )
             {
                 prism::offsets::field< uint8_t >( t, prism::offsets::trailer_parked ) = 0;
                 prism::offsets::field< uint8_t >( t, prism::offsets::trailer_parked_registered ) = 0;
@@ -2409,6 +2881,77 @@ namespace ts_extra_utilities
         if ( ad3 ) this->toggle_attach( 2 );
         if ( tk2 ) this->connect_to_truck( 1 );
         if ( tk3 ) this->connect_to_truck( 2 );
+    }
+
+    // steering hotkeys + lock state for steerable-axle (oversize) trailers;
+    // ignored while the game is in the background or a key is being rebound
+    void CTrailerManipulation::update_steering( const float dt )
+    {
+        // nothing to steer on a trailer without steerable wheels, or one that is gone
+        for ( uint32_t i = 0; i < max_trailers; ++i )
+        {
+            if ( i >= trailer_count || steering_data( trailers[ i ] ) == nullptr )
+            {
+                locked_ui[ i ] = false;
+                centering_ui[ i ] = false;
+            }
+        }
+
+        if ( game_has_focus() && !settings::is_capturing() )
+        {
+            bool lock_pressed = false, center_pressed = false;
+            key_down( settings::Action::TOGGLE_STEERING_LOCK, &lock_pressed );
+            key_down( settings::Action::STEER_CENTER, &center_pressed );
+            const bool left = key_down( settings::Action::STEER_LEFT );
+            const bool right = key_down( settings::Action::STEER_RIGHT );
+
+            bool any_locked = false;
+            for ( uint32_t i = 0; i < trailer_count; ++i ) any_locked |= locked_ui[ i ];
+
+            for ( uint32_t i = 0; i < trailer_count; ++i )
+            {
+                if ( steering_data( trailers[ i ] ) == nullptr ) continue;
+
+                if ( lock_pressed )
+                {
+                    set_locked( i, !any_locked );
+                }
+                else if ( left || right || center_pressed )
+                {
+                    set_locked( i, true ); // steering a trailer means taking control of it
+                }
+
+                if ( !locked_ui[ i ] ) continue;
+
+                const float step = settings::g_settings.steering_speed * dt;
+                if ( center_pressed ) centering_ui[ i ] = true;
+                if ( left || right ) centering_ui[ i ] = false;
+                if ( centering_ui[ i ] )
+                {
+                    // ease back to straight instead of snapping
+                    if ( angle_ui[ i ] > step ) angle_ui[ i ] -= step;
+                    else if ( angle_ui[ i ] < -step ) angle_ui[ i ] += step;
+                    else
+                    {
+                        angle_ui[ i ] = 0.f;
+                        centering_ui[ i ] = false;
+                    }
+                }
+                if ( left ) angle_ui[ i ] = ( std::max )( angle_ui[ i ] - step, -1.f );
+                if ( right ) angle_ui[ i ] = ( std::min )( angle_ui[ i ] + step, 1.f );
+                locked_steering[ i ].angle.store( angle_ui[ i ] );
+            }
+        }
+
+        // published every frame: the data pointer changes when trailers are swapped
+        for ( uint32_t i = 0; i < max_trailers; ++i )
+        {
+            locked_steering[ i ].data.store( locked_ui[ i ] ? steering_data( trailers[ i ] ) : nullptr );
+            if ( i < trailer_count && !locked_ui[ i ] )
+            {
+                angle_ui[ i ] = prism::offsets::field< float >( trailers[ i ], prism::offsets::trailer_steering );
+            }
+        }
     }
 
     void CTrailerManipulation::update()
@@ -2695,6 +3238,33 @@ namespace ts_extra_utilities
         }
 
         update_hotkeys();
+        update_steering( ImGui::GetIO().DeltaTime );
+        update_air( ImGui::GetIO().DeltaTime );
+
+        // trailer brake bias: +0x730 is only a demand mirror — the wheel
+        // solver (0x14090C570) turns +0x760 into real torque via
+        // max(factor, per-wheel min) * grip, no upper clamp, and ONLY for
+        // wheels whose bit is set in the wheelset mask (+0x2BC). The native
+        // mask marks just the braked def axles (e.g. 0xC = middle axle of a
+        // vanderleia); we rewrite it to cover every wheel of every GROUNDED
+        // axle — lifted axles lose their bits, which matches both the user's
+        // request and reality (a wheel in the air brakes nothing)
+        const float brake_mult = 1.f + settings::g_settings.trailer_brake_boost / 100.f;
+        if ( brake_mult > 1.001f )
+        {
+            for ( uint32_t i = 0; i < trailer_count; ++i )
+            {
+                if ( joint( trailers[ i ] ) == nullptr ) continue;
+                update_wheel_brake_mask( trailers[ i ] );
+                const float v = prism::offsets::field< float >( trailers[ i ], prism::offsets::trailer_service_brake );
+                if ( v <= 0.05f ) continue;
+                float& park = prism::offsets::field< float >( trailers[ i ], prism::offsets::trailer_brake );
+                const float boosted = ( std::min )( v * brake_mult, brake_mult );
+                if ( boosted > park )
+                    park = boosted;
+            }
+        }
+
     }
 
     //========================================================================
@@ -2869,41 +3439,52 @@ namespace ts_extra_utilities
 
     // keybind list: action name, the bound key as a clickable capture button,
     // and a small clear button — packed tight for the narrow side panel
+    void CTrailerManipulation::render_keybind_row( const int i ) const
+    {
+        const auto action = static_cast< settings::Action >( i );
+        const bool fixed = action == settings::Action::TOGGLE_UI
+            || action == settings::Action::TOGGLE_CURSOR;
+        ImGui::PushID( i );
+        ImGui::TextWrapped( "%s", settings::action_name( action ) );
+        if ( fixed )
+        {
+            // rebindable in settings.ini only — keeping them off the
+            // capture path makes the plugin unreachable harder
+            ImGui::TextDisabled( "%s (settings.ini)", settings::key_name( settings::key( action ) ).c_str() );
+        }
+        else
+        {
+            const auto label = settings::is_capturing( action )
+                                   ? std::string( "Pressione uma tecla... (Esc cancela)" )
+                                   : settings::key_name( settings::key( action ) );
+            if ( ImGui::Button( fmt::format( "{}##bind", label ).c_str(), ImVec2( -ImGui::GetFrameHeight() * 1.8f, 0 ) ) )
+            {
+                settings::begin_capture( action );
+            }
+            ImGui::SameLine();
+            ImGui::BeginDisabled( settings::key( action ) == 0 );
+            if ( ImGui::SmallButton( "X##clear" ) )
+            {
+                settings::g_settings.keys[ i ] = 0;
+                settings::save();
+            }
+            ImGui::EndDisabled();
+        }
+        ImGui::Spacing();
+        ImGui::PopID();
+    }
+
     void CTrailerManipulation::render_keybinds() const
     {
         for ( int i = 0; i < settings::action_count; ++i )
         {
             const auto action = static_cast< settings::Action >( i );
-            const bool fixed = action == settings::Action::TOGGLE_UI
-                || action == settings::Action::TOGGLE_CURSOR;
-            ImGui::PushID( i );
-            ImGui::TextWrapped( "%s", settings::action_name( action ) );
-            if ( fixed )
-            {
-                // rebindable in settings.ini only — keeping them off the
-                // capture path makes the plugin unreachable harder
-                ImGui::TextDisabled( "%s (settings.ini)", settings::key_name( settings::key( action ) ).c_str() );
-            }
-            else
-            {
-                const auto label = settings::is_capturing( action )
-                                       ? std::string( "Pressione uma tecla... (Esc cancela)" )
-                                       : settings::key_name( settings::key( action ) );
-                if ( ImGui::Button( fmt::format( "{}##bind", label ).c_str(), ImVec2( -ImGui::GetFrameHeight() * 1.8f, 0 ) ) )
-                {
-                    settings::begin_capture( action );
-                }
-                ImGui::SameLine();
-                ImGui::BeginDisabled( settings::key( action ) == 0 );
-                if ( ImGui::SmallButton( "X##clear" ) )
-                {
-                    settings::g_settings.keys[ i ] = 0;
-                    settings::save();
-                }
-                ImGui::EndDisabled();
-            }
-            ImGui::Spacing();
-            ImGui::PopID();
+            // steering binds live in the Oversize panel
+            if ( action == settings::Action::STEER_LEFT ||
+                 action == settings::Action::STEER_RIGHT ||
+                 action == settings::Action::STEER_CENTER ||
+                 action == settings::Action::TOGGLE_STEERING_LOCK ) continue;
+            this->render_keybind_row( i );
         }
     }
 
@@ -2978,6 +3559,87 @@ namespace ts_extra_utilities
         if ( next != selection )
         {
             stored = static_cast< int32_t>( next );
+            settings::save();
+        }
+    }
+
+    // steerable-axle controls for one oversize trailer: lock toggle, angle
+    // slider, arrows and center — the angle is applied by the game's next
+    // steering advance on its own thread
+    void CTrailerManipulation::render_trailer_steering( const uint32_t i ) const
+    {
+        bool lock = locked_ui[ i ];
+        if ( ui::toggle_switch( "##steer_lock", &lock ) )
+        {
+            set_locked( i, lock );
+        }
+        ImGui::SameLine();
+        ImGui::Text( "Controle manual" );
+
+        ImGui::BeginDisabled( !locked_ui[ i ] );
+        bool changed = ImGui::SliderFloat( "Ângulo", &angle_ui[ i ], -1.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp );
+
+        ImGui::PushItemFlag( ImGuiItemFlags_ButtonRepeat, true );
+        if ( ImGui::ArrowButton( "esquerda", ImGuiDir_Left ) )
+        {
+            angle_ui[ i ] = ( std::max )( angle_ui[ i ] - 0.02f, -1.f );
+            changed = true;
+        }
+        ImGui::SameLine();
+        if ( ImGui::Button( "centro" ) )
+        {
+            centering_ui[ i ] = true; // eased to 0 in update() at steering_speed
+        }
+        ImGui::SameLine();
+        if ( ImGui::ArrowButton( "direita", ImGuiDir_Right ) )
+        {
+            angle_ui[ i ] = ( std::min )( angle_ui[ i ] + 0.02f, 1.f );
+            changed = true;
+        }
+        ImGui::PopItemFlag();
+        ImGui::EndDisabled();
+
+        if ( changed )
+        {
+            locked_steering[ i ].angle.store( angle_ui[ i ] );
+        }
+    }
+
+    // the Oversize panel: steering controls for every steerable trailer in the
+    // chain, the steering keybinds and the response-speed slider
+    void CTrailerManipulation::render_oversize() const
+    {
+        bool any_steerable = false;
+        for ( uint32_t i = 0; i < trailer_count; ++i )
+        {
+            if ( steering_data( trailers[ i ] ) == nullptr ) continue;
+            any_steerable = true;
+            ImGui::SeparatorText( fmt::format( "Carreta {}", i + 1 ).c_str() );
+            ImGui::PushID( static_cast< int >( i ) );
+            this->render_trailer_steering( i );
+            ImGui::PopID();
+        }
+        if ( !any_steerable )
+        {
+            ImGui::TextWrapped( "Nenhuma carreta com eixos direcionais no conjunto." );
+        }
+
+        ImGui::SeparatorText( "Teclas" );
+        for ( int i = 0; i < settings::action_count; ++i )
+        {
+            const auto action = static_cast< settings::Action >( i );
+            if ( action != settings::Action::STEER_LEFT &&
+                 action != settings::Action::STEER_RIGHT &&
+                 action != settings::Action::STEER_CENTER &&
+                 action != settings::Action::TOGGLE_STEERING_LOCK ) continue;
+            this->render_keybind_row( i );
+        }
+
+        ImGui::SeparatorText( "Resposta" );
+        float speed = settings::g_settings.steering_speed;
+        if ( ImGui::SliderFloat( "Velocidade", &speed, 0.1f, 2.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp ) )
+        {
+            settings::g_settings.steering_speed = speed;
             settings::save();
         }
     }
@@ -3064,30 +3726,97 @@ namespace ts_extra_utilities
         ImGui::PushStyleColor( ImGuiCol_CheckMark, ui::pdv( 0x27AE60 ) );
         ImGui::PushStyleColor( ImGuiCol_Separator, ui::pdv( 0x444444 ) );
 
-        ImGui::SetNextWindowSize( ImVec2( 1000.f, 500.f ), ImGuiCond_FirstUseEver );
+        ImGui::SetNextWindowSize( ImVec2( 1150.f, 500.f ), ImGuiCond_FirstUseEver );
         ImGui::Begin( "Controle de Carretas" );
 
-        // left pane (~1/4): keybinds, with the reverse-lift assist right below
-        const float left_w = 250.f;
-        ImGui::BeginChild( "##keybinds", ImVec2( left_w, 0.f ), ImGuiChildFlags_Border );
+        // left pane: keybinds, resizable by dragging the right border — the
+        // chosen width is kept in settings.ini
+        const float left_w = settings::g_settings.keys_width;
+        ImGui::BeginChild( "##keybinds", ImVec2( left_w, 0.f ),
+            ImGuiChildFlags_Border | ImGuiChildFlags_ResizeX );
         ImGui::SeparatorText( "Teclas" );
         this->render_keybinds();
         ImGui::SeparatorText( "Assistente" );
-        ImGui::TextWrapped( "Erguer 1º eixo na ré" );
         bool reverse_lift = settings::g_settings.reverse_lift;
         if ( ui::toggle_switch( "##reverse_lift", &reverse_lift ) )
         {
             settings::g_settings.reverse_lift = reverse_lift;
             settings::save();
         }
-        ImGui::TextWrapped( "Restaurar posição na carga" );
+        ImGui::SameLine();
+        ImGui::TextWrapped( "Eixo na ré (vanderleia/4º eixo)" );
+        ImGui::TextDisabled( "engatou a ré - ergue o 1º eixo" );
+
+        ImGui::SeparatorText( "Carga separada" );
         bool cargo_restore = settings::g_settings.cargo_restore;
         if ( ui::toggle_switch( "##cargo_restore", &cargo_restore ) )
         {
             settings::g_settings.cargo_restore = cargo_restore;
             settings::save();
         }
+        ImGui::SameLine();
+        ImGui::TextWrapped( "Carreta fica parada na doca" );
+        ImGui::TextDisabled( "ao carregar/descarregar separado, ela continua separada depois" );
+
+        ImGui::SeparatorText( "Freio" );
+        float brake_boost = settings::g_settings.trailer_brake_boost;
+        ImGui::SetNextItemWidth( -1.f );
+        if ( ImGui::SliderFloat( "##brake_boost", &brake_boost, 0.f, 200.f, "+%.0f%%", ImGuiSliderFlags_AlwaysClamp ) )
+        {
+            settings::g_settings.trailer_brake_boost = brake_boost;
+            settings::save();
+        }
+        ImGui::TextWrapped( "Carreta freia mais" );
+        ImGui::TextDisabled( "ela segura primeiro; no piso escorregadio arrasta os eixos em vez do cavalo dobrar" );
+
+        ImGui::SeparatorText( "Ar" );
+        int air_boost = settings::g_settings.air_boost;
+        ImGui::SetNextItemWidth( -1.f );
+        if ( ImGui::SliderInt( "##air_boost", &air_boost, 0, 5,
+             air_boost == 0 ? "original" : fmt::format( "+{}00%", air_boost ).c_str() ) )
+        {
+            settings::g_settings.air_boost = air_boost;
+            settings::save();
+        }
+        ImGui::TextWrapped( "Compressor por rotação" );
+        ImGui::TextDisabled( "multiplica a produção de ar (que já sobe com o giro) — sem mexer no consumo" );
         ImGui::EndChild();
+        // the pane re-lays itself out automatically since every child sizes
+        // from the available width; persist once the user lets go
+        const float dragged_w = ImGui::GetItemRectSize().x;
+        if ( dragged_w > 0.f && dragged_w != settings::g_settings.keys_width )
+        {
+            settings::g_settings.keys_width = dragged_w;
+            if ( !ImGui::IsMouseDown( ImGuiMouseButton_Left ) ) settings::save();
+        }
+
+        ImGui::SameLine();
+
+        // Oversize (steerable-axle) pane next to the keys — collapsible to a
+        // thin strip so it stays out of the way when unused
+        if ( settings::g_settings.oversize_collapsed )
+        {
+            ImGui::BeginChild( "##oversize_min", ImVec2( 34.f, 0.f ), ImGuiChildFlags_Border );
+            if ( ImGui::Button( ">>", ImVec2( -1.f, ImGui::GetFrameHeight() ) ) )
+            {
+                settings::g_settings.oversize_collapsed = false;
+                settings::save();
+            }
+            ImGui::EndChild();
+        }
+        else
+        {
+            ImGui::BeginChild( "##oversize", ImVec2( 290.f, 0.f ), ImGuiChildFlags_Border );
+            if ( ImGui::Button( "<<", ImVec2( ImGui::GetFrameHeight() * 1.6f, 0.f ) ) )
+            {
+                settings::g_settings.oversize_collapsed = true;
+                settings::save();
+            }
+            ImGui::SameLine();
+            ImGui::SeparatorText( "Oversize" );
+            this->render_oversize();
+            ImGui::EndChild();
+        }
 
         ImGui::SameLine();
 

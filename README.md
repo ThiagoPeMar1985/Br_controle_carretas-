@@ -7,9 +7,9 @@
 
 Plugin criado por **ThiagoPeMar1985**, baseado em
 [dariowouters/ts-extra-utilities](https://github.com/dariowouters/ts-extra-utilities)
-(MIT), focado unicamente no **engate e desengate individual de
-carretas** — ideal para rodotrem, bitrem e conjuntos brasileiros. O recurso de
-eixo direcional do plugin original foi removido.
+(MIT), que unifica em um plugin só o **engate/desengate individual de
+carretas**, **eixos eleváveis** e **eixos direcionais** — ideal para rodotrem,
+bitrem, dolly e carretas especiais (oversize/carga indivisível) no Brasil.
 
 ## Recursos
 
@@ -42,9 +42,18 @@ eixo direcional do plugin original foi removido.
 - **Eixos eleváveis por carreta**
    - Escolha quais eixos eleváveis de cada carreta respondem à tecla de lift
      do jogo (switches por eixo na janela)
-   - **"Erguer 1º eixo na ré"**: engatou a ré com os eixos no chão → sobe
-     automaticamente o primeiro eixo elevável de cada carreta; saiu da ré →
-     desce e volta a seleção salva
+   - **"Eixo na ré (vanderleia/4º eixo)"**: engatou a ré com os eixos no
+     chão → sobe automaticamente o primeiro eixo elevável de cada carreta;
+     saiu da ré → desce e volta a seleção salva
+
+- **Oversize — eixos direcionais**
+   - Painel próprio na janela para carretas especiais com eixos direcionais
+   - Vire à esquerda/direita por tecla (segurar move continuamente), setas
+     ou slider; **centralizar** retorna os eixos suavemente ao zero
+   - **Bloquear controle manual**: bloqueada, a carreta obedece ao seu
+     ângulo; desbloqueada, volta a copiar o cavalo como no jogo original
+   - **Velocidade de resposta** configurável e salva — define o ritmo das
+     teclas e do retorno ao centro
 
 - **Teclas de atalho configuráveis**
    - Remapeie na própria janela do plugin (coluna "Teclas") — clique na ação,
@@ -56,6 +65,8 @@ eixo direcional do plugin original foi removido.
 - **Controles da UI**
    - `Delete` abre/fecha a janela do plugin
    - `Insert` libera o cursor do mouse (centralizado) para clicar na UI
+   - A coluna **Teclas** é redimensionável (arraste a borda) — largura salva;
+     o painel **Oversize** recolhe numa faixa fina quando não estiver em uso
 
 > [!NOTE]
 > O engate/desengate é singleplayer apenas e assume que o cavalo já está

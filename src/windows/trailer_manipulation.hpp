@@ -17,9 +17,13 @@ namespace ts_extra_utilities
         void update_convoy_state();
         void gc_detached_marks();
         void update_hotkeys();
+        void update_steering( float dt );
         void render_trailer_connect( uint32_t i ) const;
         void render_trailer_lift( uint32_t i ) const;
+        void render_trailer_steering( uint32_t i ) const;
+        void render_keybind_row( int i ) const;
         void render_keybinds() const;
+        void render_oversize() const;
         void connect_trailer( uint32_t i ) const;
         void disconnect_trailer( uint32_t i ) const;
         void toggle_attach( uint32_t i ) const;

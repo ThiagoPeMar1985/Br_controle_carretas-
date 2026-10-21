@@ -23,6 +23,10 @@ namespace ts_extra_utilities::settings
             0, // ATTACH_DETACH_3
             0, // ATTACH_TRUCK_2
             0, // ATTACH_TRUCK_3
+            0, // STEER_LEFT
+            0, // STEER_RIGHT
+            0, // STEER_CENTER
+            0, // TOGGLE_STEERING_LOCK
         };
 
         // ini keys, kept stable so saved files keep working if display names change
@@ -33,6 +37,10 @@ namespace ts_extra_utilities::settings
             L"attach_detach_3",
             L"attach_truck_2",
             L"attach_truck_3",
+            L"steer_left",
+            L"steer_right",
+            L"steer_center",
+            L"toggle_steering_lock",
         };
 
         constexpr const char* names[ action_count ] = {
@@ -42,6 +50,10 @@ namespace ts_extra_utilities::settings
             "Engatar/desengatar carreta 3",
             "Engatar carreta 2 no cavalo",
             "Engatar carreta 3 no cavalo",
+            "Virar eixos à esquerda",
+            "Virar eixos à direita",
+            "Centralizar eixos",
+            "Travar/destravar direção",
         };
 
         int capturing = -1;
@@ -173,6 +185,11 @@ namespace ts_extra_utilities::settings
         }
         g_settings.reverse_lift = true;
         g_settings.cargo_restore = true;
+        g_settings.steering_speed = 0.5f;
+        g_settings.oversize_collapsed = false;
+        g_settings.keys_width = 250.f;
+        g_settings.trailer_brake_boost = 0.f;
+        g_settings.air_boost = 0;
 
         auto path = settings_path();
         if ( path.empty() ) return;
@@ -227,6 +244,23 @@ namespace ts_extra_utilities::settings
         }
         g_settings.reverse_lift = GetPrivateProfileIntW( L"axle_lift", L"reverse_lift", 1, path.c_str() ) != 0;
         g_settings.cargo_restore = GetPrivateProfileIntW( L"general", L"cargo_restore", 1, path.c_str() ) != 0;
+        g_settings.oversize_collapsed = GetPrivateProfileIntW( L"general", L"oversize_collapsed", 0, path.c_str() ) != 0;
+
+        wchar_t value[ 32 ] = {};
+        GetPrivateProfileStringW( L"steering", L"speed", L"", value, 32, path.c_str() );
+        const float speed = static_cast< float >( _wtof( value ) );
+        if ( speed > 0.f && speed <= 5.f ) g_settings.steering_speed = speed;
+
+        GetPrivateProfileStringW( L"general", L"keys_width", L"", value, 32, path.c_str() );
+        const float keys_width = static_cast< float >( _wtof( value ) );
+        if ( keys_width >= 150.f && keys_width <= 800.f ) g_settings.keys_width = keys_width;
+
+        GetPrivateProfileStringW( L"brake", L"trailer_boost", L"", value, 32, path.c_str() );
+        const float boost = static_cast< float >( _wtof( value ) );
+        if ( boost >= 0.f && boost <= 200.f ) g_settings.trailer_brake_boost = boost;
+
+        const int air = GetPrivateProfileIntW( L"air", L"boost", 0, path.c_str() );
+        if ( air >= 0 && air <= 5 ) g_settings.air_boost = air;
     }
 
     void save()
@@ -252,6 +286,17 @@ namespace ts_extra_utilities::settings
             g_settings.reverse_lift ? L"1" : L"0", path.c_str() );
         WritePrivateProfileStringW( L"general", L"cargo_restore",
             g_settings.cargo_restore ? L"1" : L"0", path.c_str() );
+        WritePrivateProfileStringW( L"general", L"oversize_collapsed",
+            g_settings.oversize_collapsed ? L"1" : L"0", path.c_str() );
+        wchar_t buf[ 32 ] = {};
+        swprintf_s( buf, L"%.2f", static_cast< double >( g_settings.steering_speed ) );
+        WritePrivateProfileStringW( L"steering", L"speed", buf, path.c_str() );
+        swprintf_s( buf, L"%.0f", static_cast< double >( g_settings.keys_width ) );
+        WritePrivateProfileStringW( L"general", L"keys_width", buf, path.c_str() );
+        swprintf_s( buf, L"%.0f", static_cast< double >( g_settings.trailer_brake_boost ) );
+        WritePrivateProfileStringW( L"brake", L"trailer_boost", buf, path.c_str() );
+        WritePrivateProfileStringW( L"air", L"boost",
+            std::to_wstring( g_settings.air_boost ).c_str(), path.c_str() );
     }
 
     UINT key( const Action action )

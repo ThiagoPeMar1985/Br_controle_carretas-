@@ -6,8 +6,8 @@ BR Controle de Carretas 1.0
     - Plugin brasileiro independente: UI, documentação e mensagens ao
       usuário inteiramente em PT-BR
     - Foco exclusivo em conjuntos brasileiros (bitrem, rodotrem, cadeia
-      Cavalo -> C0 -> Dolly -> C2): o recurso de eixo direcional do plugin
-      original foi removido por completo
+      Cavalo -> C0 -> Dolly -> C2) e carretas especiais de carga
+      indivisivel/oversize com eixos direcionais
     - Renomeado: br_controle_de_carretas.dll, binds em
       %APPDATA%\br_controle_de_carretas\settings.ini, preset br-settings.ini
     - Diagnósticos de Hooks ficam internos — não aparecem na UI do usuário
@@ -44,8 +44,52 @@ BR Controle de Carretas 1.0
 
     - Selecao por eixo em cada carreta: so os eixos marcados respondem a
       tecla de lift do jogo
-    - "Erguer 1o eixo na re": engatou a re, sobe o primeiro eixo elevavel
-      de cada carreta; saiu da re, desce e volta a selecao salva
+    - "Eixo na re (vanderleia/4o eixo)": engatou a re, sobe o primeiro
+      eixo elevavel de cada carreta; saiu da re, desce e volta a selecao
+      salva
+
+  == Oversize — carretas de eixos direcionais ==
+
+    - Painel proprio na janela ("Oversize"), ao lado das teclas, para
+      carretas especiais de carga pesada/indivisivel
+    - Virar esquerda/direita: angulo dos eixos direcionais por tecla
+      (segurar move continuamente) ou pelas setas/slider da UI
+    - Centralizar: retorna os eixos suavemente ao zero na velocidade
+      configurada — nunca da um tranco no volante
+    - Bloquear/desbloquear direcionamento automatico: bloqueado, a carreta
+      obedece ao seu angulo; desbloqueado, volta a copiar o cavalo como no
+      jogo original. Virar uma carreta a bloqueia automaticamente
+    - Velocidade de resposta configuravel (0.1 a 2.0) — controla o ritmo
+      das teclas e do retorno ao centro, salva em settings.ini
+    - O hook so substitui o angulo em carretas bloqueadas e sempre chama o
+      setter nativo — a fisica por roda continua sendo do jogo
+    - Ponteiros de steering republicados a cada frame via atomicos —
+      trocar/recarregar carretas nao deixa ponteiro velho (evita crash)
+    - Carretas sem eixos direcionais sao ignoradas com aviso na UI
+
+  == Freio — distribuicao carreta/cavalo ==
+
+    - Slider "Carreta freia mais" (0 a 200% extra): o canal de freio que o
+      cavalo transmite pras carretas e amplificado, entao a carreta recebe
+      mais do que o cavalo no mesmo pedal — como na regulagem real de
+      carreta brasileira
+    - Na frenagem parcial a carreta segura primeiro: no piso escorregadio
+      ela trava e arrasta os eixos em linha reta em vez do cavalo dobrar
+      em L
+    - O canal do proprio cavalo nunca e alterado — a autoridade de
+      frenagem do conjunto inteiro e preservada
+    - So afeta carretas acopladas recebendo o broadcast do cavalo;
+      carreta solta mantem o spring brake nativo
+    - No pedal a fundo nao muda: os dois ja estao em 100% — o recurso age
+      na frenagem parcial/modulada, onde o L acontece
+    - Valor salvo em settings.ini ([brake] trailer_boost)
+
+  == Janela ==
+
+    - Painel de teclas redimensionavel (arraste a borda direita) — largura
+      salva em settings.ini, sem texto de bind cortado
+    - Painel Oversize recolhivel numa faixa fina com seta; estado salvo
+    - Colunas de carretas se ajustam automaticamente ao espaco restante
 
   == Estabilidade e correcoes (o que faz rodar liso, sem crashes) ==
 

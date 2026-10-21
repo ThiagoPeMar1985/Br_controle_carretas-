@@ -10,6 +10,12 @@ namespace ts_extra_utilities
         class vehicle_shared_u;
         class game_trailer_actor_u;
         class physics_trailer_u;
+        class vehicle_wheel_steering_data_t;
+
+        // called by the game every steering advance with the angle computed
+        // from the joint — hooked to substitute the user's angle on trailers
+        // whose steering is taken over
+        using set_individual_steering_fn = void __fastcall( vehicle_wheel_steering_data_t*, float );
 
         using crashes_when_disconnected_fn = void __fastcall( physics_trailer_u*, game_trailer_actor_u* );
         using physics_trailer_u_connect_slave_fn = uint64_t __fastcall( physics_trailer_u* );

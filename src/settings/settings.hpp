@@ -12,6 +12,10 @@ namespace ts_extra_utilities::settings
         ATTACH_DETACH_3, // toggle attach/detach of the trailer at index 2 (shown as "Carreta 3")
         ATTACH_TRUCK_2, // connect the index-1 trailer directly to the truck
         ATTACH_TRUCK_3, // connect the index-2 trailer directly to the truck
+        STEER_LEFT,     // steerable-axle trailers: turn wheels left (hold)
+        STEER_RIGHT,    // steerable-axle trailers: turn wheels right (hold)
+        STEER_CENTER,   // steerable-axle trailers: ease wheels back to center
+        TOGGLE_STEERING_LOCK, // take over / release automatic steering
         COUNT,
     };
 
@@ -30,6 +34,20 @@ namespace ts_extra_utilities::settings
         // cinematic teleports the set into the dock. Off = short teleports
         // (camera-0, convoy sync) move the truck freely
         bool cargo_restore = true;
+        // steering wheel response while a steer key is held, angle units
+        // per second (full lock = 1)
+        float steering_speed = 0.5f;
+        // Oversize (steerable axle) panel: hidden when the user collapses it
+        bool oversize_collapsed = false;
+        // width of the keybinds pane, user-resizable
+        float keys_width = 250.f;
+        // extra brake factor forwarded to coupled trailers, in percent of the
+        // truck's value (0 = native balance): the trailers brake proportionally
+        // harder so they take the load first on slippery surfaces
+        float trailer_brake_boost = 0.f;
+        // air compressor output multiplier: 0 = native, each step adds 100%
+        // of the native (rpm-dependent) production — N means N+1 times total
+        int32_t air_boost = 0;
     };
 
     extern Settings g_settings;
