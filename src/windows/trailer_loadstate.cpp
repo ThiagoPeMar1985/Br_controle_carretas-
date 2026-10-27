@@ -42,6 +42,51 @@ namespace ts_extra_utilities
     // arrastaria de volta pro ponto pré-teleporte
     int tp_cooldown = 0;
 
+    //========================================================================
+    // Estado da trava de estacionamento (parked lock)
+    //
+    // Uma carreta desatrelada só fica plantada enquanto o record de
+    // parked-state (+0x1188) reafirma a pose todo frame. Carretas soltas no
+    // meio da cadeia nunca ganham record (a fábrica dá purecall nelas — NÃO
+    // chamar), então update_parked_locks emula: snapshot do transform quando
+    // a junta cai e re-teleporte se derivar. Indexado pelo canon pra deslize
+    // de slot nunca apontar a trava pro objeto errado.
+    //========================================================================
+    hook_xform_t anchor_xform[ max_trailers ]{};
+    hook_xform_t anchor_home[ max_trailers ]{};
+    bool anchor_valid[ max_trailers ] = {};
+    bool anchor_settling[ max_trailers ] = {};
+    int anchor_settle[ max_trailers ] = {};
+    int anchor_age[ max_trailers ] = {};
+    int anchor_delay[ max_trailers ] = {};
+    bool record_tried[ max_trailers ] = {};
+    // a fábrica nativa de parked-record (0x1407B69E0, assinatura verificada):
+    // constrói o objeto de 0x198 bytes onde a trava de pose mora. O bloqueio
+    // dela em peças de meio de cadeia era uma purecall de componente —
+    // hk_purecall a engole. O global do manager sai do prólogo da própria
+    // fábrica (mov rsi, [rip+...] -> 0x1436AF828); o array de slots dele é
+    // +0x740 base + +0x748 count (verificado na tail call 0x140C377C0)
+    parked_record_factory_fn* parked_record_factory = nullptr;
+    void** parked_record_mgr = nullptr;
+
+    //========================================================================
+    // Snapshot do transform do conjunto
+    //
+    // O cinemático de carga rotaciona o conjunto inteiro — caminhão incluso
+    // — pros slots da doca através do teleport de ator (0x1405DE1E0). Esse
+    // hook fotografa o caminhão e cada slot de carreta logo antes do
+    // movimento; depois que a sequência assenta, restore_parked devolve o
+    // conjunto do jeito que o jogador estacionou (de ré continua de ré).
+    // Só movimentos curtos armam a restauração — um teleport através do mapa
+    // é viagem, não alinhamento de doca
+    //========================================================================
+    bool rig_armed = false;
+    uint32_t rig_restore_delay = 0;
+    hook_xform_t rig_truck_xform{};
+    bool rig_truck_valid = false;
+    uint8_t rig_replay_a3 = 0;
+    uint8_t rig_replay_a4 = 0;
+
     void render_cargo_restore_option()
     {
         ImGui::SeparatorText( "Carga separada" );

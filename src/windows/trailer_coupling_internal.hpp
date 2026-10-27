@@ -89,6 +89,15 @@ namespace ts_extra_utilities
 
     void snapshot_rig();
     void traffic_detach_tail();
+    void track_canon( void* );
+    bool claim_edge_ours( const void*, const void* );
+    void clear_claim_edge( const void* );
+    void set_claim_edge( void*, void* );
+    void dump_chain( const char* );
+    bool canon_all_trailer_objs();
+    bool trailer_is_known_parked( const void* );
+    bool trailer_maintenance_ready();
+    void sanitize_slave_walk( void* );
     void prune_lane_containers();
     void native_park_detached( void* );
     void update_parked_locks();
