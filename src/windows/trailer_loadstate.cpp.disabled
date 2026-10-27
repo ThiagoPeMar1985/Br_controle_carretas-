@@ -1,0 +1,398 @@
+// Save/load and cargo-machine persistence — the layout snapshot/restore that
+// reassembles the user's arrangement after a world reload, the rig transform
+// restore for the cargo cinematic, and the teleport/state-apply hooks that
+// watch the dock machine. Split out of trailer_coupling.cpp.
+
+#include "trailer_manipulation.hpp"
+#include "trailer_shared.hpp"
+
+#include <algorithm>
+#include <atomic>
+#include <cmath>
+#include <cstring>
+#include <intrin.h>
+#include <utility>
+#include <vector>
+
+#include "imgui.h"
+
+#include "common/scssdk_telemetry_truck_common_channels.h"
+
+#include "core.hpp"
+#include "hooks/function_hook.hpp"
+#include "memory/memory_utils.hpp"
+#include "prism/common.hpp"
+#include "prism/offsets.hpp"
+#include "prism/functions.hpp"
+#include "settings/settings.hpp"
+
+namespace ts_extra_utilities
+{
+
+    void snapshot_rig()
+    {
+        rig_truck_valid = false;
+        if ( auto* game_actor = CCore::g_instance->get_game_actor() )
+        {
+            void* truck = prism::offsets::field< void* >( game_actor, prism::offsets::game_actor_truck );
+            rig_truck_valid = truck != nullptr && hook_world( truck, rig_truck_xform );
+        }
+    }
+
+    float3_t quat_rot( const quat_t& q, const float3_t& v )
+    {
+        // t = 2 * cross(q.xyz, v);  v' = v + w*t + cross(q.xyz, t)
+        const float tx = 2.f * ( q.y * v.z - q.z * v.y );
+        const float ty = 2.f * ( q.z * v.x - q.x * v.z );
+        const float tz = 2.f * ( q.x * v.y - q.y * v.x );
+        return float3_t{
+            v.x + q.w * tx + q.y * tz - q.z * ty,
+            v.y + q.w * ty + q.z * tx - q.x * tz,
+            v.z + q.w * tz + q.x * ty - q.y * tx };
+    }
+
+    // puts back what a cargo load/unload respawn destroyed: every marked
+    // chain slot whose fresh object came back jointed is disconnected again
+    // and teleported to the transform it was parked at. Runs on the sim
+    // thread (queued op), descending index order so a tail trailer parked
+    // on its own leaves before the section it was taken with — each marked
+    // slot is the head of what the player actually detached
+    void restore_parked()
+    {
+        // put the rig itself back first — replay the game's own actor teleport
+        // with the pre-load transform and the original flags. The truck goes
+        // through its proper path (vfunc +0x2A8), attached trailers follow the
+        // actor-relative formation, and plugin-detached trailers are skipped
+        // by our own per-trailer teleport hook. Then the detach pass below
+        // re-parks the respawned sections
+        if ( rig_armed )
+        {
+            rig_armed = false;
+            // replaying the rig teleport with the snapshot transform yanks a
+            // settled jointed combination across the map mid-solve — only do
+            // it while a detached trailer still needs re-parking; if its
+            // marks were cleared since the arm there is nothing to restore
+            bool any_detached = false;
+            for ( int i = 0; i < max_trailers; ++i )
+            {
+                if ( detached_idx[ i ] ) { any_detached = true; break; }
+            }
+            if ( any_detached && rig_truck_valid && actor_teleport_hook != nullptr )
+            {
+                if ( auto* game_actor = CCore::g_instance->get_game_actor() )
+                {
+                    using fn_t = void __fastcall( void*, void*, uint8_t, uint8_t );
+                    actor_teleport_hook->get_original< fn_t >()(
+                        game_actor, &rig_truck_xform, rig_replay_a3, rig_replay_a4 );
+                }
+            }
+        }
+
+        for ( int i = static_cast< int >( max_trailers ) - 1; i >= 0; --i )
+        {
+            if ( !detached_idx[ i ] ) continue;
+            // a marked slot whose previous slot is also marked belongs to the
+            // same parked section — the section head's walk below covers it;
+            // disconnecting it here would split the parked combination apart
+            if ( i > 0 && detached_idx[ i - 1 ] && canon[ i - 1 ] != nullptr ) continue;
+            void* t = canon[ i ];
+            if ( t == nullptr || !readable_ptr( t ) || joint( t ) == nullptr ) continue;
+
+            // the parent it was respawned under — canon order is preserved
+            void* parent = nullptr;
+            bool parent_is_truck = false;
+            if ( auto* game_actor = CCore::g_instance->get_game_actor() )
+            {
+                parent = ( i == 0 || t == truck_towed )
+                    ? prism::offsets::field< void* >( game_actor, prism::offsets::game_actor_truck )
+                    : canon[ i - 1 ];
+                parent_is_truck = ( i == 0 || t == truck_towed );
+            }
+            CCore::g_instance->info( "Restoring detached trailer {} after cargo respawn", i );
+            if ( parent != nullptr )
+            {
+                disconnect_now( t, parent, parent_is_truck );
+            }
+
+            // teleport the head and every member still jointed to it back to
+            // its saved parked transform — straight through the original, so
+            // the pointer marks guarding the hook don't block the restore
+            for ( void* m = t; m != nullptr; )
+            {
+                const int mi = canon_index_of( m );
+                if ( mi >= 0 && parked_xform_valid[ mi ] && trailer_teleport_hook != nullptr )
+                {
+                    using teleport_fn_t = void __fastcall( void* /*trailer*/, void* /*transform*/ );
+                    trailer_teleport_hook->get_original< teleport_fn_t >()( m, &parked_xform[ mi ] );
+                    anchor_valid[ mi ] = false;
+                }
+                void* next = prism::offsets::field< void* >( m, prism::offsets::trailer_slave );
+                m = ( next != m && next != nullptr && joint( next ) != nullptr ) ? next : nullptr;
+            }
+        }
+    }
+
+    // the trailer-state record apply (0x1405E14D1 on game_actor+0x10): copies
+    // a recorded transform/velocity into the head trailer's state record and
+    // reconciles its joint through the attach/detach dispatchers — the path
+    // the cargo sequence uses to teleport the set into dock slots. A
+    // plugin-detached trailer keeps its current record untouched: it stays
+    // parked where the player left it
+    using trailer_state_apply_fn = void __fastcall( void* /*record*/ );
+    void __fastcall hk_trailer_state_apply( void* record )
+    {
+        void* trailer = record != nullptr
+            ? prism::offsets::field< void* >( record, 0xB8 ) : nullptr;
+        if ( trailer != nullptr && is_plugin_detached( trailer ) )
+        {
+            CCore::g_instance->info( "trailer state apply skipped: {:p} is plugin-detached", trailer );
+            return;
+        }
+        ++state_apply_depth;
+        __try
+        {
+            trailer_state_apply_hook->get_original< trailer_state_apply_fn >()( record );
+        }
+        __finally { --state_apply_depth; }
+    }
+
+    // the per-trailer teleport (0x140786320): the actor-teleport walks the
+    // trailer list and calls this on each one to move it into its dock slot.
+    // Trailer objects are NOT recreated — this is the call that actually
+    // drags a detached trailer to the dock during cargo load/unload, where
+    // it lands under its parent's hook and gets re-jointed. A
+    // plugin-detached trailer is a world object: it is never teleported,
+    // by any caller — dock alignment, garage, ferry, job start
+    using trailer_teleport_fn = void __fastcall( void* /*trailer*/, void* /*transform*/ );
+    void __fastcall hk_trailer_teleport( void* self, void* transform )
+    {
+        if ( self != nullptr && is_plugin_detached( self ) )
+        {
+            CCore::g_instance->info( "trailer teleport skipped: {:p} is plugin-detached", self );
+            return;
+        }
+        // untouched during world assembly — the slot-correction math reads
+        // snapshots taken at staging poses and would seat members in the
+        // void
+        if ( canon_age < 90 )
+        {
+            trailer_teleport_hook->get_original< trailer_teleport_fn >()( self, transform );
+            return;
+        }
+        const float* dst = static_cast< const float* >( transform );
+        // a jointed trailer can never occupy its parent's slot — same dst
+        // means the game lost its member offset (missing state record).
+        // Never write the game's transform buffer — the reconcile reads it
+        // back to compute the next member's slot. Run the original first,
+        // then re-teleport through our OWN buffer at the parent's final
+        // slot plus the trailer's snapshot offset — the whole formation
+        // lands translated, exactly as it was assembled
+        float3_t corrected{};
+        bool do_fix = false;
+        void* parent = self != nullptr
+            ? prism::offsets::field< void* >( self, prism::offsets::trailer_parent ) : nullptr;
+        if ( dst != nullptr && self != nullptr && joint( self ) != nullptr && tp_active )
+        {
+            const int ti = canon_index_of( self );
+            const int pi = canon_index_of( parent );
+            // latest recorded slot for the parent (search back — the
+            // reconcile calls each member more than once)
+            for ( int i = tp_n; i-- > 0; )
+            {
+                if ( tp_log[ i ].t != parent ) continue;
+                const float ddx = dst[ 0 ] - tp_log[ i ].orig.x;
+                const float ddz = dst[ 2 ] - tp_log[ i ].orig.z;
+                // a later reconcile pass can land the parent on its real
+                // slot while a member still arrives at the shared anchor —
+                // matching the first logged destination catches that too
+                const float hdx = dst[ 0 ] - tp_log[ 0 ].orig.x;
+                const float hdz = dst[ 2 ] - tp_log[ 0 ].orig.z;
+                if ( ( ddx * ddx + ddz * ddz < 1.f || hdx * hdx + hdz * hdz < 1.f ) &&
+                     ti >= 0 && pi >= 0 && tp_snap_ok[ ti ] && tp_snap_ok[ pi ] )
+                {
+                    // Y comes from the game's own destination, never the
+                    // origin formation delta — preserving the old snapshot's
+                    // height difference bakes the ORIGIN terrain slope into
+                    // the landing
+                    corrected = {
+                        tp_log[ i ].dst.x + ( tp_snap[ ti ].x - tp_snap[ pi ].x ),
+                        dst[ 1 ],
+                        tp_log[ i ].dst.z + ( tp_snap[ ti ].z - tp_snap[ pi ].z ) };
+                    do_fix = true;
+                }
+                break;
+            }
+        }
+        if ( dst != nullptr && tp_active && tp_n < 16 )
+        {
+            tp_log[ tp_n ].t = self;
+            tp_log[ tp_n ].orig = { dst[ 0 ], dst[ 1 ], dst[ 2 ] };
+            tp_log[ tp_n ].dst = do_fix ? corrected : tp_log[ tp_n ].orig;
+            ++tp_n;
+        }
+        // substitute OUR buffer for the game's transform — the trailer goes
+        // straight to its real slot and never spends a frame overlapping
+        // the parent at the anchor
+        if ( do_fix )
+        {
+            hook_xform_t fix = *static_cast< const hook_xform_t* >( transform );
+            fix.pos = corrected;
+            trailer_teleport_hook->get_original< trailer_teleport_fn >()( self, &fix );
+            CCore::g_instance->info( "trailer teleport {:p}: re-seated at corrected slot "
+                "({:.1f},{:.1f},{:.1f})", self, corrected.x, corrected.y, corrected.z );
+            return;
+        }
+        trailer_teleport_hook->get_original< trailer_teleport_fn >()( self, transform );
+    }
+
+    // the actor teleport (0x1405DE1E0): rotates/moves truck + attached set
+    // into the dock slots for the cargo cinematic — the same call travel
+    // teleports use. Snapshot the rig on the first call of a sequence, then
+    // arm the restore only when the move was short (a dock shuffle, not a
+    // ferry/garage/job hop across the map)
+    using actor_teleport_fn = void __fastcall( void* /*actor*/, void* /*arg*/, uint8_t, uint8_t );
+    void __fastcall hk_actor_teleport( void* self, void* arg, uint8_t a3, uint8_t a4 )
+    {
+        // pure passthrough while the world assembles — snapshot/settle math
+        // on half-built or staging-position trailers re-seats them in the
+        // void (dolly under the map)
+        if ( canon_age < 90 )
+        {
+            actor_teleport_hook->get_original< actor_teleport_fn >()( self, arg, a3, a4 );
+            return;
+        }
+        tp_n = 0;
+        tp_active = true;
+        // the reconcile seats members by walking the slave chain — a parked
+        // visibility claim makes it count a detached trailer as a member:
+        // it either gets dragged to the shared anchor on top of a real
+        // trailer, or shifts a real member into its slot. Hide the claims
+        // for the duration of the reconcile — the maintenance rebuilds
+        // them right after
+        sever_parked_claims();
+        // snapshot every canon trailer's position — the stacked-member
+        // correction needs the pre-teleport formation, and members get
+        // re-teleported mid-sequence so a live read drifts between
+        // reconcile passes
+        for ( int i = 0; i < max_trailers; ++i )
+        {
+            tp_snap_ok[ i ] = false;
+            if ( canon[ i ] == nullptr || !readable_ptr( canon[ i ] ) ) continue;
+            hook_xform_t xf{};
+            if ( hook_world( canon[ i ], xf ) ) { tp_snap[ i ] = xf.pos; tp_snap_ok[ i ] = true; }
+        }
+        const auto settle = [ & ]()
+        {
+            // final formation pass — the game sends every member to the
+            // head's anchor point and the reconcile can then move the head
+            // AGAIN, stranding members at offsets measured from the slot the
+            // head no longer occupies. Seat each jointed member at its
+            // parent's FINAL live position + the pre-teleport formation
+            // offset; Y tracks the parent's live height — the terrain at
+            // the destination is not the origin's
+            for ( int i = 0; i < max_trailers && canon[ i ] != nullptr; ++i )
+            {
+                void* t = canon[ i ];
+                // only members that rode along with the rig — a trailer
+                // jointed to a PARKED parent never got teleported and must
+                // keep its parked flags
+                if ( !readable_ptr( t ) || joint( t ) == nullptr || !trailer_is_live( t ) ) continue;
+                // a teleported member must not keep an armed parked record —
+                // the re-assert would yank it back to the pre-teleport pose
+                // every frame while physics holds it at the new spot
+                prism::offsets::field< uint8_t >( t, prism::offsets::trailer_parked ) = 0;
+                prism::offsets::field< uint8_t >( t, prism::offsets::trailer_parked_registered ) = 0;
+                void* parent = prism::offsets::field< void* >( t, prism::offsets::trailer_parent );
+                const int pi = canon_index_of( parent );
+                if ( pi < 0 || !tp_snap_ok[ i ] || !tp_snap_ok[ pi ] ) continue;
+                hook_xform_t pt{}, tt{};
+                if ( !hook_world( parent, pt ) || !hook_world( t, tt ) ) continue;
+                const float wx = pt.pos.x + ( tp_snap[ i ].x - tp_snap[ pi ].x );
+                const float wz = pt.pos.z + ( tp_snap[ i ].z - tp_snap[ pi ].z );
+                const float ex = tt.pos.x - wx;
+                const float ez = tt.pos.z - wz;
+                if ( ex * ex + ez * ez < 0.5f * 0.5f ) continue;
+                hook_xform_t fix = tt;
+                fix.pos.x = wx;
+                fix.pos.y = pt.pos.y;
+                fix.pos.z = wz;
+                using teleport_fn_t = void __fastcall( void*, void* );
+                trailer_teleport_hook->get_original< teleport_fn_t >()( t, &fix );
+                CCore::g_instance->info(
+                    "teleport settle: {:p} re-seated at formation slot ({:.1f}m off)",
+                    t, std::sqrt( ex * ex + ez * ez ) );
+            }
+        };
+        if ( !settings::g_settings.cargo_restore )
+        {
+            rig_armed = false;
+            actor_teleport_hook->get_original< actor_teleport_fn >()( self, arg, a3, a4 );
+            settle();
+            tp_active = false;
+            tp_cooldown = 90;
+            return;
+        }
+        const bool fresh = !rig_armed;
+        if ( fresh )
+        {
+            snapshot_rig();
+        }
+        actor_teleport_hook->get_original< actor_teleport_fn >()( self, arg, a3, a4 );
+        settle();
+        tp_active = false;
+        tp_cooldown = 90;
+        if ( !fresh || !rig_truck_valid )
+        {
+            return;
+        }
+        if ( auto* game_actor = CCore::g_instance->get_game_actor() )
+        {
+            void* truck = prism::offsets::field< void* >( game_actor, prism::offsets::game_actor_truck );
+            hook_xform_t now{};
+            if ( truck != nullptr && hook_world( truck, now ) )
+            {
+                const float dx = now.pos.x - rig_truck_xform.pos.x;
+                const float dz = now.pos.z - rig_truck_xform.pos.z;
+                // the restore exists to re-park plugin-detached trailers the
+                // dock sequence respawned into the set. With nothing detached
+                // the arm would only replay the rig teleport ~60 frames
+                // later, yanking a settled jointed combination mid-solve —
+                // camera-0/F9 launches were exactly this. No detached
+                // trailer → nothing to restore → never arm
+                bool any_detached = false;
+                bool any_displaced = false;
+                for ( int i = 0; i < max_trailers; ++i )
+                {
+                    if ( !detached_idx[ i ] ) continue;
+                    any_detached = true;
+                    // the dock sequence is the only caller that needs the
+                    // replay — it respawns detached trailers INTO the set or
+                    // scatters them off their parked marks. A travel/F9 hop
+                    // leaves them parked exactly where they were
+                    void* d = canon[ i ];
+                    if ( d == nullptr || !readable_ptr( d ) ) continue;
+                    if ( joint( d ) != nullptr ) { any_displaced = true; break; }
+                    if ( parked_xform_valid[ i ] )
+                    {
+                        hook_xform_t dx2{};
+                        if ( hook_world( d, dx2 ) )
+                        {
+                            const float mx = dx2.pos.x - parked_xform[ i ].pos.x;
+                            const float mz = dx2.pos.z - parked_xform[ i ].pos.z;
+                            if ( mx * mx + mz * mz > 2.f * 2.f ) { any_displaced = true; break; }
+                        }
+                    }
+                }
+                if ( any_detached && any_displaced && dx * dx + dz * dz < 200.f * 200.f )
+                {
+                    rig_armed = true;
+                    rig_restore_delay = 60;
+                    rig_replay_a3 = a3;
+                    rig_replay_a4 = a4;
+                    CCore::g_instance->info( "actor teleported ~{:.1f}m — rig restore armed",
+                        std::sqrt( dx * dx + dz * dz ) );
+                }
+            }
+        }
+    }
+}

@@ -44,6 +44,21 @@ namespace ts_extra_utilities::prism::offsets
     constexpr uint32_t trailer_parked_state = 0x1188; // object*, non-null while the parked state is tracked
     constexpr uint32_t trailer_parked = 0x1198; // byte, 1 = parked/locked, cleared by native attach
     constexpr uint32_t trailer_parked_registered = 0x1258; // byte, 1 = parked-state record registered; gates the per-frame pose re-assertion
+    constexpr uint32_t trailer_brace_state = 0x1190; // byte, 1 = landing gear down (re-asserted on parked pieces)
+
+    // Lamp feed + light source + hose state, read out of the native lamp
+    // bodies: the mask setter (0x1409DB4B0) writes the lamp byte at +0x2A0
+    // (the propagator fans it down the attach tree — +0x2A1/+0x2A2 are
+    // separate state, do not touch); +0x110 is the light-source context whose
+    // +0x18 owner the propagator repoints to the chain head — a detached
+    // trailer reads the SOURCE vehicle's mask through it, so pinning its
+    // source at itself makes it read its own (zeroed) mask; +0xE8D is the
+    // "lines connected" byte the cable builder checks.
+    constexpr uint32_t trailer_lamp_mask = 0x02A0; // byte, bit 0 = lamp feed on
+    constexpr uint32_t trailer_light_ctx = 0x0110; // light-source context object*, +0x18 = owner vehicle
+    constexpr uint32_t trailer_lines_connected = 0x0E8D; // byte, 1 = hoses drawn
+    constexpr uint32_t trailer_leg_up = 0x1284; // byte, 0 = landing gear down
+    constexpr uint32_t trailer_gear_lever = 0x1000; // byte, 0 = gear handle in "down" position
 
     // More fields from the native attach/detach code: connect_slave copies the
     // coupling byte parent->slave and passes the parent's chassis-type check to

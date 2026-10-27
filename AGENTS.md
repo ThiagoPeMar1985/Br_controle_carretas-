@@ -51,6 +51,42 @@ Reverse-engineered in eurotrucks2.exe 1.61.1.9s:
   first dead joint — the camera (and other consumers) then measures only the
   live combination.
 
+## Trailer teardown / liveness
+
+- **`trailer_is_live` walks UP, never DOWN.** `+0x1080` (`trailer_parent`)
+  and `+0xFE0` (joint) are only written on attach/detach, while our
+  maintenance rewrites `trailer_slave` every frame — a down-walk sees a
+  half-written chain and misclassifies a jointed trailer as parked for one
+  frame (the lamp pin then darkens it = the flicker).
+- **`vfunc_disconnect` impl = `exe+0x789C20`** (vfunc 99, shared by every
+  trailer-class vtable): releases `+0xFE0`, feeds the brake channel,
+  writes `+0x2A0=0` while walking `trailer_slave`, then clears `+0x1080`.
+  Every caller lands there — the T dispatcher (`call [rax+0x318]` at
+  `exe+0x5DDF03`), the queued sim-thread section teardown (via
+  `exe+0x4CF9E0`), and our own vcall. `hk_trailer_disconnect` severs the
+  chain at the first member that is jointless (our parked visibility
+  claims) or not a trailer-class object before calling the original —
+  both killed the native walker mid-teardown (fault at `0x140789CB7`,
+  `mov [rcx+0x2A0], edi` on a KERNELBASE pointer).
+- **`vfunc_connect` impls = `exe+0x639090` / `exe+0x7890A0`** (vfunc 98 —
+  different trailer classes use different impls, so BOTH are hooked). The
+  join walks `trailer_slave` through SELF-RECURSIVE helpers
+  (`exe+0x6390C0`/`exe+0x639220` call themselves on slave links) — a
+  parked claim to a limbo trailer aborts it mid-join with NO dump, and a
+  cyclic chain overflows the stack. `sever_parked_claims()` hides every
+  jointless slave edge for the duration of the call; maintenance rebuilds
+  the claims next frame.
+- **`is_trailer_obj(p)` = the real type check.** `vtbl[99] ==
+  exe+0x789C20` — every trailer class shares that disconnect impl.
+  `readable_ptr`/`plausible_object` are NOT enough: a freed trailer slot
+  recycled by a foreign allocation (observed: a pointer into KERNELBASE's
+  own pages) stays readable and can even hold exe-range data. The survey
+  `walk`, `canon_dead`, the claim severs and the lamp propagator all use
+  it — a dead canon entry used to get written into `trailer_slave` links
+  by maintenance and then killed the native walkers mid-teardown (the
+  race showed up as `X.slave` changing between the teardown loop's two
+  reads of `[r8]`).
+
 ## Logging conventions
 
 Keep only event logs (couple/decouple, anchor transitions, restores). No
