@@ -291,6 +291,10 @@ namespace ts_extra_utilities
         {
             prism::offsets::field< void* >( trailer, prism::offsets::trailer_slave ) = nullptr;
         }
+        // o dispatcher registra a cadeia slave INTEIRA atrás do trailer —
+        // corta todas as claims estacionadas, não só a dele, senão uma peça
+        // estacionada mais fundo vira membro fantasma e afunda sem trava
+        sever_parked_claims();
         native_chain_call_active.store( true, std::memory_order_release );
         attach_dispatch_hook->get_original< native_attach_dispatch_fn >()( game_actor, 1, 0, nullptr );
         native_chain_call_active.store( false, std::memory_order_release );
@@ -698,6 +702,11 @@ namespace ts_extra_utilities
         }
 
         CCore::g_instance->info( "Connecting trailer {:p} to {:p}", trailer, parent );
+        // mesma proteção do run_native_connect: o join anda trailer_slave
+        // por recursão e jointa o que encontrar — uma claim estacionada
+        // viva vira membro fantasma: perde a trava de estacionada, a âncora
+        // desarma (joint != nullptr) e ela afunda sem proteção
+        sever_parked_claims();
         native_chain_call_active.store( true, std::memory_order_release );
         vcall< prism::physics_trailer_u_connect_fn >( trailer, prism::offsets::vfunc_connect,
             parent, vec, 0, parent_is_truck || parent_coupling != 0, slave_hook );
@@ -1500,6 +1509,10 @@ namespace ts_extra_utilities
                 prism::offsets::field< void* >( head, prism::offsets::trailer_slave ) = nullptr;
             }
         }
+        // o dispatcher registra a cadeia slave INTEIRA — corta todas as
+        // claims estacionadas além da do head, senão uma peça mais fundo é
+        // jointada pela metade e afunda sem trava
+        sever_parked_claims();
         // the dispatcher walks the chain for registration — every link must
         // be a live trailer object or the internal teardown faults on it
         sanitize_slave_walk( head );
