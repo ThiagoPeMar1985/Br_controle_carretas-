@@ -286,21 +286,6 @@ namespace ts_extra_utilities
     parked_record_factory_fn* parked_record_factory = nullptr;
     void** parked_record_mgr = nullptr;
 
-    //========================================================================
-    // Teleport formation log — the stacked-member correction in
-    // hk_trailer_teleport and the formation settle in hk_actor_teleport
-    //========================================================================
-    tp_slot_t tp_log[ 16 ] = {};
-    int tp_n = 0;
-    bool tp_active = false;
-    float3_t tp_snap[ max_trailers ] = {};
-    quat_t tp_snap_q[ max_trailers ] = {};
-    bool tp_snap_ok[ max_trailers ] = {};
-    // frames the parked-anchor emulation stays off after an actor teleport —
-    // the dock re-joint sequence leaves trailers jointless for a few frames
-    // mid-move and the anchor would drag them back to the pre-teleport spot
-    int tp_cooldown = 0;
-
     // a free canon slot only auto-claims within this distance of the
     // mother's rear hook — farther means parked scenery, not a coupling
     // candidate (the spontaneous re-join fix)

@@ -26,6 +26,22 @@
 
 namespace ts_extra_utilities
 {
+    //========================================================================
+    // Log de formação em teleporte — a correção de membro empilhado em
+    // hk_trailer_teleport e o assentamento de formação em hk_actor_teleport
+    //========================================================================
+    tp_slot_t tp_log[ 16 ] = {};
+    int tp_n = 0;
+    bool tp_active = false;
+    float3_t tp_snap[ max_trailers ] = {};
+    quat_t tp_snap_q[ max_trailers ] = {};
+    bool tp_snap_ok[ max_trailers ] = {};
+    // frames que a emulação de âncora estacionada fica desligada depois de um
+    // teleport de ator — a sequência de re-joint da doca deixa as carretas
+    // sem junta por alguns frames no meio do movimento e a âncora as
+    // arrastaria de volta pro ponto pré-teleporte
+    int tp_cooldown = 0;
+
     void render_cargo_restore_option()
     {
         ImGui::SeparatorText( "Carga separada" );
