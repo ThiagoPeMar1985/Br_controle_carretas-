@@ -33,10 +33,8 @@ namespace ts_extra_utilities
     extern prism::vehicle_distribute_towed_mass_fn* distribute_towed_mass_fn;
     extern prism::game_actor_refresh_axle_lift_fn* refresh_axle_lift_fn;
     extern prism::console_execute_line_fn* execute_line_fn;
-    extern prism::traffic_register_anchor_fn* register_anchor_fn;
     extern void** traffic_manager_global;
     extern uint32_t* traffic_game_state;
-    extern uint32_t* anchor_reg_guard;
     extern anchor_relink_fn* relink_anchors_fn;
     extern prism::cvar_get_float_fn* get_cvar_float_fn;
     extern void* g_traffic_cvar;

@@ -604,11 +604,6 @@ namespace ts_extra_utilities
         void* j = vehicle != nullptr &&
                   readable_ptr( static_cast< uint8_t* >( vehicle ) + prism::offsets::trailer_physics_joint )
                       ? joint( vehicle ) : nullptr;
-        if ( vi >= 0 )
-        {
-            CCore::g_instance->info( "set_lines c{} {:p} state={} force={} joint={:p}",
-                vi, vehicle, state, force, j );
-        }
         if ( state == 0 && vi >= 0 && j != nullptr )
         {
             return;

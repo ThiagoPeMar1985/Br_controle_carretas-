@@ -50,14 +50,10 @@ namespace ts_extra_utilities
     // traffic-obstacle machinery read out of the native detach body:
     // - the world/vehicle manager singleton (rbx in the native detach); its
     //   +0x2B30 subsystem gets vfunc+0x138 (pre) and +0x1E0 (post) notifies
-    // - the parked-obstacle anchor update 0x140284250 (a locked transform
-    //   push through the anchor's internal buffer, not a register)
     // - the type-2 anchor re-link the native detach runs between the notifies
     // - the game-state dword (== 2 while in game) gating the update
-    prism::traffic_register_anchor_fn* register_anchor_fn = nullptr;
     void** traffic_manager_global = nullptr;
     uint32_t* traffic_game_state = nullptr;
-    uint32_t* anchor_reg_guard = nullptr;
     using anchor_relink_fn = void __fastcall( void* /*registry*/, uint32_t /*type*/ );
 
     // chase_camera lives in trailer_shared.hpp (the window dtor clears it)
@@ -633,32 +629,6 @@ namespace ts_extra_utilities
         }
     }
 
-    // native attach/detach anchor update: provider -> vfunc+0x28 yields the
-    // trailer's traffic-obstacle anchor, which then gets a transform pushed
-    // through 0x140284250 (a locked update, not a register), followed by
-    // provider vfunc+0x30. Runs only while the world is in state 2.
-    void push_anchor_update( void* provider, const void* xform32 )
-    {
-        if ( provider == nullptr || register_anchor_fn == nullptr ||
-            !plausible_vfunc( provider, 0x28 / 8 ) || !plausible_vfunc( provider, 0x30 / 8 ) )
-        {
-            return;
-        }
-        void* anchor = vcall< prism::provider_get_anchor_fn >( provider, 0x28 / 8 );
-        // the register call writes the 32-byte transform through the anchor's
-        // internal buffer — a wrong-typed provider yields a differently-shaped
-        // object whose buffer pointer is garbage, so the write lands wild
-        if ( anchor != nullptr && plausible_object( anchor ) &&
-            traffic_game_state != nullptr && *traffic_game_state == 2 )
-        {
-            struct { void* p; uint32_t d; } ctx{};
-            if ( anchor_reg_guard != nullptr ) ++*anchor_reg_guard;
-            register_anchor_fn( anchor, xform32, &ctx );
-            if ( anchor_reg_guard != nullptr ) --*anchor_reg_guard;
-        }
-        vcall< prism::vehicle_notify_decoupled_fn >( provider, 0x30 / 8 );
-    }
-
     //========================================================================
     // Native flow replicas — sim thread only
     //========================================================================
@@ -852,6 +822,7 @@ namespace ts_extra_utilities
 
     void repair_lamp_ctx_all();
     void sanitize_slave_walk( void* head );
+    void traffic_detach_tail();
     // drive the game's own detach dispatcher (the T path) at a chosen trailer
     // by pointing the actor's trailer-of-interest slot at it — identical to
     // what pressing T on the head does. Only used while the trailer sits on
@@ -962,28 +933,8 @@ namespace ts_extra_utilities
     // native attach re-registers them on recouple
 
 
-    // diag: dump the section's line-entity lists — which step drops the
-    // hoses behind the head, and which trailer's list actually owns them
-    inline void dump_lines( const char* tag, void* head )
-    {
-        for ( void* t = head; t != nullptr && readable_ptr( t ); )
-        {
-            char* const c = static_cast< char* >( t );
-            void* b = *reinterpret_cast< void** >( c + 0xE98 );
-            void* e = *reinterpret_cast< void** >( c + 0xEA0 );
-            const uintptr_t n = ( b != nullptr && e != nullptr && e >= b )
-                ? static_cast< uintptr_t >( reinterpret_cast< char* >( e ) -
-                    reinterpret_cast< char* >( b ) ) / 8 : 0;
-            CCore::g_instance->info( "lines {} {:p} n={} f={} joint={:p}",
-                tag, t, n, *reinterpret_cast< uint8_t* >( c + 0xE8D ), joint( t ) );
-            void* s = prism::offsets::field< void* >( t, prism::offsets::trailer_slave );
-            t = ( s != t && is_trailer_obj( s ) ) ? s : nullptr;
-        }
-    }
-
     void disconnect_now( void* trailer, void* parent, const bool parent_is_truck )
     {
-        dump_lines( "pre-detach", trailer );
         // a trailer sitting on the truck (or straight on the fifth wheel)
         // gets the NATIVE T-detach: the dispatcher drives the whole proper
         // sequence — joint release, parked-state record, traffic obstacle,
@@ -1071,7 +1022,6 @@ namespace ts_extra_utilities
             prism::offsets::field< void* >( trailer, prism::offsets::trailer_slave ) = kept_slave;
         }
 
-        dump_lines( "post-vfunc", trailer );
 
         // tell every component on both vehicles the coupling is gone — the
         // native detach notifies the vehicle component list (+0xE98) on both
@@ -1123,7 +1073,6 @@ namespace ts_extra_utilities
         {
             set_lines_fn( trailer, 0, 1 );
         }
-        dump_lines( "post-setlines", trailer );
 
         // rest of the native detach sequence: flag the trailer as parked, drop the
         // parent's wheel load, and rebuild the lines so the hoses between the
@@ -1174,7 +1123,6 @@ namespace ts_extra_utilities
                 rebuild_lines_fn( parent, trailer );
                 prism::offsets::field< void* >( trailer, prism::offsets::trailer_slave ) = slave;
             }
-            dump_lines( "post-rebuild", trailer );
             // native detach fires coupling events at every accessory on the
             // trailer (cargo, traffic-obstacle anchor) — without it the parked
             // trailer registers a lane modifier with a null owner and the
@@ -1187,27 +1135,7 @@ namespace ts_extra_utilities
             // native detach tail: notify the traffic subsystem, re-link the
             // type-2 obstacle anchors (rebinds the parked trailer's lane
             // modifier to its new owner), then the post notify
-            if ( traffic_manager_global != nullptr )
-            {
-                void* mgr = *traffic_manager_global;
-                void* sub = mgr != nullptr ? prism::offsets::field< void* >( mgr, 0x2B30 ) : nullptr;
-                if ( sub != nullptr ) vcall< prism::vehicle_notify_decoupled_fn >( sub, 0x138 / 8 );
-            }
-            if ( relink_anchors_fn != nullptr )
-            {
-                void* game_actor = CCore::g_instance->get_game_actor();
-                void* reg = game_actor != nullptr ? prism::offsets::field< void* >( game_actor, 0x30 ) : nullptr;
-                if ( reg != nullptr && readable_ptr( reinterpret_cast< uint8_t* >( reg ) + 0xD8 ) )
-                {
-                    relink_anchors_fn( reinterpret_cast< uint8_t* >( reg ) + 0xD8, 2 );
-                }
-            }
-            if ( traffic_manager_global != nullptr )
-            {
-                void* mgr = *traffic_manager_global;
-                void* sub = mgr != nullptr ? prism::offsets::field< void* >( mgr, 0x2B30 ) : nullptr;
-                if ( sub != nullptr ) vcall< prism::vehicle_notify_decoupled_fn >( sub, 0x1E0 / 8 );
-            }
+            traffic_detach_tail();
         }
         // native detach also unpairs the two vehicles' connectors and
         // re-applies the cables cvar with a null trailer (cables drop to the
@@ -1220,7 +1148,6 @@ namespace ts_extra_utilities
         {
             pair_vehicles_fn( parent, trailer );
         }
-        dump_lines( "post-pair", trailer );
         if ( auto* game_actor = CCore::g_instance->get_game_actor() )
         {
             void* truck = prism::offsets::field< void* >( game_actor, prism::offsets::game_actor_truck );
@@ -1244,7 +1171,6 @@ namespace ts_extra_utilities
                 const int mode = get_cvar_int_fn( cables_mode_cvar );
                 apply_cables_fn( truck, nullptr, 0, mode > 4 ? 4 : mode < 0 ? 0 : mode, 0 );
             }
-            dump_lines( "post-cables", trailer );
         }
         if ( trailer == truck_towed ) truck_towed = nullptr;
         // the native detach lowers the landing gear with its crank anim —
@@ -1340,7 +1266,6 @@ namespace ts_extra_utilities
                 }
             }
             play_brace_sound( trailer, true );
-            dump_lines( "post-connect-native", trailer );
             unhide_detached();
             return;
         }
@@ -1515,7 +1440,6 @@ namespace ts_extra_utilities
         }
         // pieces that stayed jointed behind the reattached head kept their
         // parked half-state — re-assert them too
-        dump_lines( "post-connect", trailer );
         unhide_detached();
     }
 
@@ -1620,6 +1544,32 @@ namespace ts_extra_utilities
     // exists — the nose falls through the floor), the traffic notifies and
     // the type-2 obstacle-anchor relink. Once per park event — the anim
     // rewind replays the manivela, so retries use the bare vfunc only
+    // Cauda de notificação do tráfego que o detach nativo roda depois de
+    // soltar uma peça: notify 0x138 no sub-manager, re-link das âncoras
+    // tipo-2 (re-liga o lane modifier da carreta estacionada ao novo dono)
+    // e notify 0x1E0 final. Sem isso a carreta registra um obstáculo com
+    // dono nulo e a varredura do tráfego quebra nele perto de estradas.
+    void traffic_detach_tail()
+    {
+        void* mgr = traffic_manager_global != nullptr ? *traffic_manager_global : nullptr;
+        void* sub = mgr != nullptr ? prism::offsets::field< void* >( mgr, 0x2B30 ) : nullptr;
+        if ( sub != nullptr ) vcall< prism::vehicle_notify_decoupled_fn >( sub, 0x138 / 8 );
+        if ( relink_anchors_fn != nullptr )
+        {
+            void* game_actor = CCore::g_instance->get_game_actor();
+            void* reg = game_actor != nullptr ? prism::offsets::field< void* >( game_actor, 0x30 ) : nullptr;
+            if ( reg != nullptr && readable_ptr( reinterpret_cast< uint8_t* >( reg ) + 0xD8 ) )
+            {
+                relink_anchors_fn( reinterpret_cast< uint8_t* >( reg ) + 0xD8, 2 );
+            }
+        }
+        if ( sub != nullptr ) vcall< prism::vehicle_notify_decoupled_fn >( sub, 0x1E0 / 8 );
+    }
+
+    // Estaciona uma carreta que já está sem junta (save carregado solta ou
+    // auto-mark): brace nativo (desce o pé e arma a trava de pose), freio de
+    // mão aplicado, animação da manivela e o registro de tráfego — a mesma
+    // cauda que o dispatcher de T executa, sem precisar de um pai.
     void native_park_detached( void* t )
     {
         if ( t == nullptr || !is_trailer_obj( t ) ) return;
@@ -1642,31 +1592,8 @@ namespace ts_extra_utilities
                 prism::offsets::field< float >( t, 0x1270 ) = 1.f;
                 brace_anim_fn( t, 1, 1.f / 3.f );
             }
-            if ( notify_decoupled_fn != nullptr )
-            {
-                notify_decoupled_fn( t );
-            }
-            if ( traffic_manager_global != nullptr )
-            {
-                void* mgr = *traffic_manager_global;
-                void* sub = mgr != nullptr ? prism::offsets::field< void* >( mgr, 0x2B30 ) : nullptr;
-                if ( sub != nullptr ) vcall< prism::vehicle_notify_decoupled_fn >( sub, 0x138 / 8 );
-            }
-            if ( relink_anchors_fn != nullptr )
-            {
-                void* game_actor = CCore::g_instance->get_game_actor();
-                void* reg = game_actor != nullptr ? prism::offsets::field< void* >( game_actor, 0x30 ) : nullptr;
-                if ( reg != nullptr && readable_ptr( reinterpret_cast< uint8_t* >( reg ) + 0xD8 ) )
-                {
-                    relink_anchors_fn( reinterpret_cast< uint8_t* >( reg ) + 0xD8, 2 );
-                }
-            }
-            if ( traffic_manager_global != nullptr )
-            {
-                void* mgr = *traffic_manager_global;
-                void* sub = mgr != nullptr ? prism::offsets::field< void* >( mgr, 0x2B30 ) : nullptr;
-                if ( sub != nullptr ) vcall< prism::vehicle_notify_decoupled_fn >( sub, 0x1E0 / 8 );
-            }
+            if ( notify_decoupled_fn != nullptr ) notify_decoupled_fn( t );
+            traffic_detach_tail();
             lane_prune_frames = 240;
         }
         __except ( EXCEPTION_EXECUTE_HANDLER )
@@ -2280,22 +2207,27 @@ namespace ts_extra_utilities
             }
         }
     }
-    void __fastcall hk_trailer_connect_a( void* trailer, void* parent, float3_t vec,
-                                          int state, bool slave_hook, bool is_slave )
+    // Corpo comum dos dois hooks de connect — duas vtables de classes
+    // diferentes de carreta chegam aqui, e cada uma precisa chamar o original
+    // do seu próprio hook. A cadeia parked é cortada antes da chamada porque
+    // o join nativo anda trailer_slave por recursão e aborta (ou entra em
+    // loop infinito) se encontrar um link nosso no meio.
+    void run_native_connect( void* trailer, void* parent, float3_t vec,
+                             int state, bool slave_hook, bool is_slave,
+                             prism::physics_trailer_u_connect_fn* orig )
     {
-        if ( trailer == nullptr || !is_trailer_obj( trailer ) ) return;
+        if ( trailer == nullptr || !is_trailer_obj( trailer ) || orig == nullptr ) return;
         native_chain_call_active.store( true, std::memory_order_release );
         sever_parked_claims();
         __try
         {
-            trailer_connect_hook->get_original< prism::physics_trailer_u_connect_fn >()(
-                trailer, parent, vec, state, slave_hook, is_slave );
+            orig( trailer, parent, vec, state, slave_hook, is_slave );
         }
         __except ( EXCEPTION_EXECUTE_HANDLER )
         {
-            // same canon-preserving rule as the disconnect fault: the trailer
-            // objects stay alive through a walk fault, only a dead canon
-            // justifies wiping it (relabelled buttons, vanished pieces)
+            // mesma regra do fault de disconnect: os objetos da carreta
+            // sobrevivem a uma falha do walk — só canon morto justifica
+            // zerar o estado (senão os botões trocam de carreta)
             const bool canon_alive = !canon_dead();
             CCore::g_instance->warning( "connect walk faulted on {:p} — canon {}", trailer,
                                         canon_alive ? "kept" : "reset" );
@@ -2306,28 +2238,17 @@ namespace ts_extra_utilities
         }
         native_chain_call_active.store( false, std::memory_order_release );
     }
+    void __fastcall hk_trailer_connect_a( void* trailer, void* parent, float3_t vec,
+                                          int state, bool slave_hook, bool is_slave )
+    {
+        run_native_connect( trailer, parent, vec, state, slave_hook, is_slave,
+            trailer_connect_hook->get_original< prism::physics_trailer_u_connect_fn >() );
+    }
     void __fastcall hk_trailer_connect_b( void* trailer, void* parent, float3_t vec,
                                           int state, bool slave_hook, bool is_slave )
     {
-        if ( trailer == nullptr || !is_trailer_obj( trailer ) ) return;
-        native_chain_call_active.store( true, std::memory_order_release );
-        sever_parked_claims();
-        __try
-        {
-            trailer_connect_hook2->get_original< prism::physics_trailer_u_connect_fn >()(
-                trailer, parent, vec, state, slave_hook, is_slave );
-        }
-        __except ( EXCEPTION_EXECUTE_HANDLER )
-        {
-            const bool canon_alive = !canon_dead();
-            CCore::g_instance->warning( "connect walk faulted on {:p} — canon {}", trailer,
-                                        canon_alive ? "kept" : "reset" );
-            if ( readable_ptr( trailer ) )
-                prism::offsets::field< void* >( trailer, prism::offsets::trailer_slave ) = nullptr;
-            clear_claim_edge( trailer );
-            if ( !canon_alive ) reset_trailer_state();
-        }
-        native_chain_call_active.store( false, std::memory_order_release );
+        run_native_connect( trailer, parent, vec, state, slave_hook, is_slave,
+            trailer_connect_hook2->get_original< prism::physics_trailer_u_connect_fn >() );
     }
 
     // the trailer-side joint release the native detach runs. The game's own
@@ -2667,9 +2588,7 @@ namespace ts_extra_utilities
         get_cvar_float_fn = reinterpret_cast< prism::cvar_get_float_fn* >( memory::get_address_from_offset( 0x1401DB560 ) );
         g_traffic_cvar = reinterpret_cast< void* >( memory::get_address_from_offset( 0x142D45500 ) );
         traffic_manager_global = reinterpret_cast< void** >( memory::get_address_from_offset( 0x1436AF7C8 ) );
-        register_anchor_fn = reinterpret_cast< prism::traffic_register_anchor_fn* >( memory::get_address_from_offset( 0x140284250 ) );
         relink_anchors_fn = reinterpret_cast< anchor_relink_fn* >( memory::get_address_from_offset( 0x140623C90 ) );
-        anchor_reg_guard = reinterpret_cast< uint32_t* >( memory::get_address_from_offset( 0x143051824 ) );
         traffic_game_state = reinterpret_cast< uint32_t* >( memory::get_address_from_offset( 0x143051820 ) );
 
         // the remaining native attach/detach calls (see declarations above)
@@ -3238,18 +3157,7 @@ namespace ts_extra_utilities
                 if ( entities ) set_lines_fn( live[ i ], 0, 1 );
             }
             bool any_parked = false;
-            bool any_det = false;
-            for ( uint32_t i = 0; i < ln; ++i )
-            {
-                any_parked |= parkedish[ i ];
-                any_det |= joint( live[ i ] ) == nullptr;
-            }
-            static uint32_t hose_dump = 0;
-            if ( any_det && ++hose_dump >= 180 )
-            {
-                hose_dump = 0;
-                dump_chain( "hose-state" );
-            }
+            for ( uint32_t i = 0; i < ln; ++i ) any_parked |= parkedish[ i ];
             // the +0xC8/slave pin is what keeps parked trailers VISIBLE —
             // it must run whenever the canon objects are valid, not only in
             // the narrow "ready" window: every frame a parked piece spends
