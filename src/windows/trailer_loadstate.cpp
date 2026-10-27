@@ -41,6 +41,11 @@ namespace ts_extra_utilities
     // sem junta por alguns frames no meio do movimento e a âncora as
     // arrastaria de volta pro ponto pré-teleporte
     int tp_cooldown = 0;
+    // um teleport de ATOR (doca/carga/balsa/garagem — o que move o conjunto
+    // inteiro) está em voo agora — a recusa do hk_trailer_teleport só vale
+    // dentro dele; teleports isolados (ex.: o snap de posicionamento do
+    // load) precisam pousar ou a carreta fica na pose de staging
+    bool in_actor_tp = false;
 
     //========================================================================
     // Estado da trava de estacionamento (parked lock)
@@ -226,14 +231,30 @@ namespace ts_extra_utilities
     using trailer_teleport_fn = void __fastcall( void* /*trailer*/, void* /*transform*/ );
     void __fastcall hk_trailer_teleport( void* self, void* transform )
     {
-        // the refusal only covers a JOINTLESS parked piece — a marked trailer
-        // still bolted to a parent that rides along in the same teleport
-        // MUST move with it: refusing it leaves the live joint stretched
-        // across the map and the solver drags the truck through the floor
-        if ( self != nullptr && is_plugin_detached( self ) && joint( self ) == nullptr )
+        // the refusal only covers a JOINTLESS parked piece being dragged by
+        // an ACTOR teleport (dock/cargo/ferry — the moves that relocate the
+        // rig). Isolated teleports MUST land: the load-time placement snap
+        // puts each parked trailer at its saved ground pose, and refusing
+        // that leaves it at the staging pose — it drops nose-first into the
+        // ground and the parked lock then freezes the sunken pose
+        if ( self != nullptr && is_plugin_detached( self ) &&
+             joint( self ) == nullptr && in_actor_tp )
         {
             CCore::g_instance->info( "trailer teleport skipped: {:p} is plugin-detached", self );
             return;
+        }
+        // um teleport isolado pousou numa peça nossa estacionada — a âncora
+        // recaptura a pose nova em vez de brigar com ela
+        if ( self != nullptr && is_plugin_detached( self ) &&
+             joint( self ) == nullptr )
+        {
+            const int ci = canon_index_of( self );
+            if ( ci >= 0 && anchor_valid[ ci ] )
+            {
+                anchor_valid[ ci ] = false;
+                anchor_settling[ ci ] = false;
+                anchor_delay[ ci ] = 0;
+            }
         }
         // a trailer riding along with the rig must not keep an armed parked
         // record — the parked machine would yank it back to the stored pose
@@ -407,7 +428,9 @@ namespace ts_extra_utilities
                 hook_xform_t xf{};
                 if ( hook_world( canon[ i ], xf ) ) { tp_snap[ i ] = xf.pos; tp_snap_q[ i ] = xf.quat; tp_snap_ok[ i ] = true; }
             }
+            in_actor_tp = true;
             actor_teleport_hook->get_original< actor_teleport_fn >()( self, arg, a3, a4 );
+            in_actor_tp = false;
             settle_all_members();
             tp_active = false;
             tp_cooldown = 90;
@@ -448,7 +471,9 @@ namespace ts_extra_utilities
         {
             snapshot_rig();
         }
+        in_actor_tp = true;
         actor_teleport_hook->get_original< actor_teleport_fn >()( self, arg, a3, a4 );
+        in_actor_tp = false;
         settle_all_members();
         tp_active = false;
         tp_cooldown = 90;
@@ -1266,11 +1291,15 @@ namespace ts_extra_utilities
                 // assentamento a cada frame
                 anchor_settling[ i ] = true;
                 const float hx = now.pos.x - anchor_home[ i ].pos.x;
+                const float hy = now.pos.y - anchor_home[ i ].pos.y;
                 const float hz = now.pos.z - anchor_home[ i ].pos.z;
-                if ( hx * hx + hz * hz > 1.5f * 1.5f && trailer_teleport_hook != nullptr )
+                // andou demais rolando livre OU afundou: assentar no pé é
+                // queda de centímetros — meio metro abaixo da casa é queda
+                // livre por falta de apoio, e seguir a descida capturaria a
+                // pose já afundada. Puxa de volta e deixa assentar de novo
+                if ( ( hx * hx + hz * hz > 1.5f * 1.5f || hy < -0.5f ) &&
+                     trailer_teleport_hook != nullptr )
                 {
-                    // andou demais rolando livre — puxa de volta pra pose do
-                    // detach e deixa assentar de novo a partir dali
                     using teleport_fn_t = void __fastcall( void* /*trailer*/, void* /*transform*/ );
                     trailer_teleport_hook->get_original< teleport_fn_t >()( t, &anchor_home[ i ] );
                     anchor_xform[ i ] = anchor_home[ i ];
