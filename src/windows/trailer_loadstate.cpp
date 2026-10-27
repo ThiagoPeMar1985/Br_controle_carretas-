@@ -66,6 +66,9 @@ namespace ts_extra_utilities
     int anchor_age[ max_trailers ] = {};
     int anchor_delay[ max_trailers ] = {};
     bool record_tried[ max_trailers ] = {};
+    int record_retry[ max_trailers ] = {};      // frames até a próxima tentativa
+    uint8_t record_quiet[ max_trailers ] = {};  // falhas já logadas (anti-spam)
+    bool record_mgr_logged[ max_trailers ] = {}; // diag "mgr inexistente" já logado
     // a fábrica nativa de parked-record (0x1407B69E0, assinatura verificada):
     // constrói o objeto de 0x198 bytes onde a trava de pose mora. O bloqueio
     // dela em peças de meio de cadeia era uma purecall de componente —
@@ -1195,13 +1198,23 @@ namespace ts_extra_utilities
             // TENTA de novo todo frame: quando qualquer park nativo o criar,
             // toda carreta em limbo ganha o record na próxima passada.
             void* mgr = readable_ptr( parked_record_mgr ) ? *parked_record_mgr : nullptr;
-            if ( prism::offsets::field< void* >( t, prism::offsets::trailer_parked_state ) == nullptr &&
-                !record_tried[ i ] &&
-                ( is_detached( t ) || is_plugin_detached( t ) ) &&
+            if ( record_retry[ i ] > 0 ) --record_retry[ i ];
+            const bool wants_record =
+                prism::offsets::field< void* >( t, prism::offsets::trailer_parked_state ) == nullptr &&
+                ( is_detached( t ) || is_plugin_detached( t ) );
+            if ( wants_record && mgr != nullptr ) record_mgr_logged[ i ] = false;
+            if ( wants_record && mgr == nullptr && !record_mgr_logged[ i ] )
+            {
+                record_mgr_logged[ i ] = true;
+                CCore::g_instance->info(
+                    "parked record manager ainda não existe — c{} segue na âncora emulada", i );
+            }
+            if ( wants_record &&
+                record_retry[ i ] == 0 &&
                 parked_record_factory != nullptr && parked_record_mgr != nullptr &&
                 mgr != nullptr )
             {
-                record_tried[ i ] = true;
+                void* rec = nullptr;
                 __try
                 {
                     parked_record_factory( t );
@@ -1211,7 +1224,6 @@ namespace ts_extra_utilities
                     const uint64_t nrec = mgr != nullptr && readable_ptr(
                         reinterpret_cast< uint8_t* >( mgr ) + 0x748 )
                         ? prism::offsets::field< uint64_t >( mgr, 0x748 ) : 0;
-                    void* rec = nullptr;
                     if ( it != nullptr && nrec > 0 && nrec < 0x1000 )
                     {
                         for ( uint64_t k = 0; k < nrec; ++k )
@@ -1225,20 +1237,31 @@ namespace ts_extra_utilities
                             }
                         }
                     }
-                    if ( rec != nullptr )
-                    {
-                        prism::offsets::field< void* >( t, prism::offsets::trailer_parked_state ) = rec;
-                        prism::offsets::field< uint8_t >( t, prism::offsets::trailer_parked ) = 1;
-                        prism::offsets::field< uint8_t >( t, prism::offsets::trailer_parked_registered ) = 1;
-                        CCore::g_instance->info( "parked record {:p} created for c{}", rec, i );
-                    }
-                    else
-                    {
-                        CCore::g_instance->warning( "parked record factory produced no record for c{}", i );
-                    }
                 }
                 __except ( factory_fault_filter( i, GetExceptionInformation() ) )
                 {
+                }
+                if ( rec != nullptr )
+                {
+                    prism::offsets::field< void* >( t, prism::offsets::trailer_parked_state ) = rec;
+                    prism::offsets::field< uint8_t >( t, prism::offsets::trailer_parked ) = 1;
+                    prism::offsets::field< uint8_t >( t, prism::offsets::trailer_parked_registered ) = 1;
+                    record_tried[ i ] = true;
+                    record_quiet[ i ] = 0;
+                    CCore::g_instance->info( "parked record {:p} created for c{}", rec, i );
+                }
+                else
+                {
+                    // falhou — retenta em ~2s em vez de desistir pra sempre:
+                    // o manager pode aparecer tarde ou a fábrica falhar uma
+                    // vez e a peça ficar presa na âncora emulada sem record
+                    record_retry[ i ] = 120;
+                    if ( record_quiet[ i ] < 5 )
+                    {
+                        ++record_quiet[ i ];
+                        CCore::g_instance->warning(
+                            "parked record factory produced no record for c{} — retrying", i );
+                    }
                 }
             }
             // um ponteiro de record sozinho não trava a carreta: o re-assert

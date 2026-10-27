@@ -66,6 +66,9 @@ namespace ts_extra_utilities
     extern int anchor_age[ max_trailers ];
     extern int anchor_delay[ max_trailers ];
     extern bool record_tried[ max_trailers ];
+    extern int record_retry[ max_trailers ];
+    extern uint8_t record_quiet[ max_trailers ];
+    extern bool record_mgr_logged[ max_trailers ];
     using parked_record_factory_fn = void __fastcall( void* );
     extern parked_record_factory_fn* parked_record_factory;
     extern void** parked_record_mgr;
@@ -99,6 +102,7 @@ namespace ts_extra_utilities
     bool trailer_is_known_parked( const void* );
     bool trailer_maintenance_ready();
     void sanitize_slave_walk( void* );
+    void sanitize_phys_walk( void* );
     void prune_lane_containers();
     void native_park_detached( void* );
     void update_parked_locks();
@@ -123,6 +127,7 @@ namespace ts_extra_utilities
     void reset_trailer_state();
     void sever_parked_claims();
     void restore_parked_claims();
+    void rebuild_parked_claim_links();
     void hk_connect_slave( prism::physics_trailer_u* );
     float hk_joint_walk( void*, float );
     void hk_phys_link( void*, void* );

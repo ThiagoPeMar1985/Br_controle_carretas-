@@ -220,22 +220,23 @@ namespace ts_extra_utilities
         if ( ctx == nullptr || !readable_ptr( ctx ) ||
              !readable_ptr( static_cast< uint8_t* >( ctx ) + 0x18 ) ) return;
         void* src = prism::offsets::field< void* >( ctx, 0x18 );
-        // o src precisa ser um objeto de veículo ESCRITA — plausible_object
-        // sozinho deixa passar slots reciclados cuja vtable parece do exe mas
-        // cuja página de +0x2A0 é read-only/liberada (o AV de lamp-cut no
-        // KERNELBASE). O teardown escreve [src+0x2A0] — a página tem que aceitar.
-        if ( src != nullptr && plausible_object( src ) )
+        if ( src == nullptr || src == m ) return;
+        // o src legítimo é sempre um veículo da cadeia: o caminhão, uma
+        // carreta do canon, ou o próprio membro (o pin de estacionada). O
+        // cheque antigo de plausible_object+VirtualQuery deixava passar
+        // ponteiro reciclado pra KERNELBASE — a página é readable e o .data
+        // dela é writable, mas a escrita do teardown em src+0x2A0 caía numa
+        // página não-writable = o AV de exe+0x789CB7 em TODO desatrelar,
+        // que matava o walk antes de limpar +0x1080 e deixava a carreta
+        // meio-desatrelada em limbo (piscada + balanço)
+        if ( auto* game_actor = CCore::g_instance->get_game_actor() )
         {
-            MEMORY_BASIC_INFORMATION mbi{};
-            if ( VirtualQuery( static_cast< uint8_t* >( src ) + prism::offsets::trailer_lamp_mask,
-                               &mbi, sizeof( mbi ) ) != 0 &&
-                 mbi.State == MEM_COMMIT &&
-                 ( mbi.Protect == PAGE_READWRITE || mbi.Protect == PAGE_WRITECOPY ||
-                   mbi.Protect == PAGE_EXECUTE_READWRITE || mbi.Protect == PAGE_EXECUTE_WRITECOPY ) )
-            {
-                return;
-            }
+            void* truck = prism::offsets::field< void* >( game_actor, prism::offsets::game_actor_truck );
+            if ( src == truck ) return;
         }
+        if ( canon_index_of( src ) >= 0 ) return;
+        CCore::g_instance->warning(
+            "lamp ctx: {:p} tinha src {:p} reciclado — repinado em self", m, src );
         prism::offsets::field< void* >( ctx, 0x18 ) = m;
     }
     void repair_lamp_ctx_all()

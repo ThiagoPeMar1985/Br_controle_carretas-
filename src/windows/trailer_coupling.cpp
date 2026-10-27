@@ -246,6 +246,11 @@ namespace ts_extra_utilities
         // every link must be a live trailer or the teardown faults on it
         sanitize_slave_walk( trailer );
         sanitize_slave_walk( prev );
+        // o dispatcher interno anda a cadeia bypassando o hook de vfunc —
+        // saneia o grafo físico também, senão uma aresta pra slot morto mata
+        // o detach no meio e deixa a carreta meio-desatrelada em limbo
+        sanitize_phys_walk( trailer );
+        if ( prev != nullptr ) sanitize_phys_walk( prev );
         dump_chain( "pre-detach(slot)" );
         native_chain_call_active.store( true, std::memory_order_release );
         detach_dispatch_hook->get_original< detach_fn_t >()( game_actor, 1, 0 );
@@ -330,23 +335,8 @@ namespace ts_extra_utilities
     // native attach re-registers them on recouple
 
 
-    void sever_parked_claims();
-    void restore_parked_claims();
-
-    // esconde as claims estacionadas durante TODA a chamada de detach e
-    // religa ao sair — em qualquer caminho (dispatcher nativo ou réplica) a
-    // peça de trás fica inalcançável ~1 frame e a máquina de visibilidade a
-    // esconde/re-registra = a piscada em todo desatrelar. O guard cobre os
-    // dois returns da função
-    struct parked_claim_guard_t
-    {
-        parked_claim_guard_t() { sever_parked_claims(); }
-        ~parked_claim_guard_t() { restore_parked_claims(); }
-    };
-
     void disconnect_now( void* trailer, void* parent, const bool parent_is_truck )
     {
-        parked_claim_guard_t claim_guard;
         // a trailer sitting on the truck (or straight on the fifth wheel)
         // gets the NATIVE T-detach: the dispatcher drives the whole proper
         // sequence — joint release, parked-state record, traffic obstacle,
@@ -382,6 +372,10 @@ namespace ts_extra_utilities
                 // the gear-crank noise the native path skips while the brace
                 // model is missing
                 play_brace_sound( trailer, false );
+                // reescreve as claims já na topologia pós-detach — senão a
+                // seção solta fica inalcançável até o próximo frame e a
+                // máquina de visibilidade pisca ela
+                rebuild_parked_claim_links();
                 traffic_detach_done.store( true, std::memory_order_release );
                 return;
             }
@@ -606,6 +600,10 @@ namespace ts_extra_utilities
         // the parked machine hides a trailer it can no longer reach through
         // the live chain — re-assert it before the frame ends
         unhide_detached();
+        // reescreve as claims já na topologia pós-detach — senão a seção
+        // solta fica inalcançável até o próximo frame e a máquina de
+        // visibilidade pisca ela
+        rebuild_parked_claim_links();
         // joint is dead now — a detach genuinely completed, so a later "whole
         // set coupled" state means the user re-assembled it and traffic may
         // be restored
@@ -1106,6 +1104,42 @@ namespace ts_extra_utilities
             head = next;
         }
     }
+    // o teardown também pode andar o grafo físico (+0x60 sobe pro pai,
+    // +0x68 desce pro filho): um membro alcançado por aí com o lamp-src
+    // reciclado — ou uma aresta apontando pra slot morto — mata o walk em
+    // exe+0x789CB7 ANTES de limpar +0x1080, e a carreta fica meio-desatrelada
+    // em limbo (piscada + balanço). Saneia os dois sentidos: conserta o ctx
+    // das carretas e corta arestas pra objetos que não são veículo nenhum
+    void sanitize_phys_walk( void* trailer )
+    {
+        if ( trailer == nullptr || !readable_ptr( trailer ) ) return;
+        void* truck = nullptr;
+        if ( auto* game_actor = CCore::g_instance->get_game_actor() )
+        {
+            truck = prism::offsets::field< void* >( game_actor, prism::offsets::game_actor_truck );
+        }
+        for ( int dir = 0; dir < 2; ++dir )
+        {
+            const uint32_t edge = dir == 0 ? 0x60 : 0x68;
+            uint32_t pd = 0;
+            for ( void* cur = trailer;
+                  cur != nullptr && readable_ptr( cur ) && pd++ < max_trailers * 4; )
+            {
+                if ( is_trailer_obj( cur ) ) repair_lamp_ctx( cur );
+                void* next = prism::offsets::field< void* >( cur, edge );
+                if ( next == nullptr || next == cur ) break;
+                if ( !is_trailer_obj( next ) && next != truck &&
+                     !plausible_vfunc( next, 99 ) )
+                {
+                    CCore::g_instance->warning(
+                        "phys walk: severed dead link {:p} -> {:p}", cur, next );
+                    prism::offsets::field< void* >( cur, edge ) = nullptr;
+                    break;
+                }
+                cur = next;
+            }
+        }
+    }
     void __fastcall hk_trailer_disconnect( void* trailer )
     {
         if ( trailer == nullptr || !is_trailer_obj( trailer ) ) return;
@@ -1158,6 +1192,7 @@ namespace ts_extra_utilities
             if ( chain_n < max_trailers * 2 ) chain_members[ chain_n++ ] = slave;
             t = slave;
         }
+        sanitize_phys_walk( trailer );
         native_chain_call_active.store( true, std::memory_order_release );
         __try
         {
@@ -1384,6 +1419,10 @@ namespace ts_extra_utilities
         // every link must be a live trailer or the teardown faults on it
         sanitize_slave_walk( prism::offsets::field< void* >( self, prism::offsets::game_actor_trailer ) );
         if ( towed != nullptr ) sanitize_slave_walk( towed );
+        // idem pro grafo físico — o dispatcher anda ele internamente e uma
+        // aresta pra slot morto mata o teardown em exe+0x789CB7
+        sanitize_phys_walk( prism::offsets::field< void* >( self, prism::offsets::game_actor_trailer ) );
+        if ( towed != nullptr ) sanitize_phys_walk( towed );
         dump_chain( "pre-detach(T)" );
         native_chain_call_active.store( true, std::memory_order_release );
         detach_dispatch_hook->get_original< native_detach_dispatch_fn >()( self, dl, r8 );
@@ -1437,6 +1476,10 @@ namespace ts_extra_utilities
         {
             prism::offsets::field< void* >( self, prism::offsets::game_actor_trailer ) = canon[ 0 ];
         }
+        // reescreve as claims já na topologia pós-detach — senão a seção
+        // solta fica inalcançável até o próximo frame e a máquina de
+        // visibilidade pisca ela
+        rebuild_parked_claim_links();
     }
 
     // the native attach dispatcher (0x1405DCC20) — every native re-attach

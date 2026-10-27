@@ -227,6 +227,9 @@ namespace ts_extra_utilities
         for ( auto& v : anchor_valid ) v = false;
         for ( auto& v : anchor_settling ) v = false;
         for ( auto& v : record_tried ) v = false;
+        for ( auto& v : record_retry ) v = 0;
+        for ( auto& v : record_quiet ) v = 0;
+        for ( auto& v : record_mgr_logged ) v = false;
         anchor_delay[ 0 ] = 0;
         truck_towed = nullptr;
         attach_target = nullptr;
@@ -891,6 +894,139 @@ namespace ts_extra_utilities
     // Per-frame update — chain refresh, convoy state, attach hotkeys
     //========================================================================
 
+    // Escreve a topologia de claims das peças estacionadas — extraído de
+    // refresh_trailer_chain pra rodar também no fim de um detach: sem isso a
+    // seção recém-solta fica inalcançável ~1 frame e a máquina de
+    // visibilidade a esconde/mostra = a piscada em todo desatrelar.
+    // Re-deriva live[]/parkedish[]/towed/towing sozinha pra ficar standalone
+    void rebuild_parked_claim_links()
+    {
+        if ( native_chain_call_active.load( std::memory_order_acquire ) ||
+             !canon_all_trailer_objs() )
+        {
+            return;
+        }
+        void* live[ max_trailers ] = {};
+        bool parkedish[ max_trailers ] = {};
+        uint32_t ln = 0;
+        void* truck = nullptr;
+        if ( auto* game_actor = CCore::g_instance->get_game_actor() )
+        {
+            truck = prism::offsets::field< void* >( game_actor, prism::offsets::game_actor_truck );
+        }
+        for ( uint32_t i = 0; i < max_trailers && canon[ i ] != nullptr; ++i )
+        {
+            void* t = canon[ i ];
+            if ( t == nullptr || !plausible_object( t ) ) continue;
+            live[ ln ] = t;
+            // "live" = a cadeia de juntas bate no caminhão — carreta presa
+            // num pai ESTACIONADO é do conjunto parked
+            bool live_to_truck = false;
+            for ( void* cur = t; cur != nullptr && joint( cur ) != nullptr; )
+            {
+                void* p = prism::offsets::field< void* >( cur, prism::offsets::trailer_parent );
+                if ( p == truck ) { live_to_truck = true; break; }
+                if ( p == nullptr || p == cur || !readable_ptr( p ) ) break;
+                cur = p;
+            }
+            parkedish[ ln ] = !live_to_truck;
+            ++ln;
+        }
+        if ( ln == 0 ) return;
+        void* towed = truck != nullptr && readable_ptr( truck )
+            ? prism::offsets::field< void* >( truck, 0x15A8 ) : nullptr;
+        const bool towing = towed != nullptr && joint( towed ) != nullptr;
+        // the writes: while the truck tows nothing, every piece's
+        // slave = its canonical successor — the parked machine's
+        // own claim shape, which keeps every parked piece
+        // reachable and visible. Written tail-to-head so no
+        // intermediate state passes through a cycle either.
+        // WHILE TOWING the model changes: the trailer on the
+        // fifth wheel IS the head — parked pieces claim nothing
+        // (a claim is what made the game treat the parked piece
+        // as "the truck's trailer": hoses, markers, the wrong-T
+        // detach — all of it followed the claim root). Jointed
+        // pieces keep whatever slave the native chain gave them
+        for ( uint32_t i = ln; i-- > 0; )
+        {
+            if ( towing ) continue;   // parked pieces hang at the tail below
+            void** slave = &prism::offsets::field< void* >( live[ i ], prism::offsets::trailer_slave );
+            void* want = ( i + 1 < ln ) ? live[ i + 1 ] : nullptr;
+            if ( *slave != want ) *slave = want;
+            if ( parkedish[ i ] ) set_claim_edge( live[ i ], want );
+            else clear_claim_edge( live[ i ] );
+        }
+        if ( towing )
+        {
+            // parked pieces hang after the last piece whose joint
+            // chain reaches the truck — a member bolted to a parked
+            // parent is parked too and appending after it writes a
+            // backward claim into its own parent. Written
+            // TAIL-TO-HEAD: a mid-pass write that points an upstream
+            // piece at a downstream one whose stale link still aims
+            // back (canon[1].slave=canon[0] while canon[0].slave is
+            // still canon[1]) forms a 2-cycle for a few cycles —
+            // a concurrent native chain walker spins on it forever
+            // and dies by stack overflow with no crash record
+            void* last_live = nullptr;
+            for ( uint32_t i = 0; i < ln; ++i )
+                if ( !parkedish[ i ] ) last_live = live[ i ];
+            void* next = nullptr;
+            for ( uint32_t i = ln; i-- > 0; )
+            {
+                if ( !parkedish[ i ] ) continue;
+                void* t = live[ i ];
+                void** sl = &prism::offsets::field< void* >( t, prism::offsets::trailer_slave );
+                // peça com record nativo registrado é sustentada pela própria
+                // máquina de estacionamento — claimada atrás do conjunto vivo,
+                // o walker nativo a trata como membro do comboio e reescreve a
+                // pose dela todo frame (a âncora re-aserta de volta = a
+                // tremida). Sem claim não há caminho pro walker: ela fica
+                // exatamente onde está, independente do que está engatado.
+                // Se o record cair, o claim volta sozinho no próximo frame
+                if ( prism::offsets::field< void* >( t, prism::offsets::trailer_parked_state ) != nullptr &&
+                     prism::offsets::field< uint8_t >( t, prism::offsets::trailer_parked_registered ) != 0 &&
+                     parked_record_listed( t ) )
+                {
+                    if ( *sl != nullptr && claim_edge_ours( t, *sl ) ) *sl = nullptr;
+                    clear_claim_edge( t );
+                    continue;
+                }
+                if ( *sl != next ) *sl = next;
+                set_claim_edge( t, next );
+                next = t;
+            }
+            void* anchor = last_live != nullptr ? last_live : towed;
+            // last_live is the deepest live piece in canon order,
+            // not necessarily the physical tail — a repaired or
+            // native link can leave a jointed member behind it.
+            // Walk jointed slaves to the real tail so the parked
+            // append never overwrites a live link
+            uint32_t ad = 0;
+            for ( void* s = readable_ptr( anchor )
+                      ? prism::offsets::field< void* >( anchor, prism::offsets::trailer_slave )
+                      : nullptr;
+                  s != nullptr && s != anchor && is_trailer_obj( s ) &&
+                  joint( s ) != nullptr && ++ad <= max_trailers;
+                  s = prism::offsets::field< void* >( anchor, prism::offsets::trailer_slave ) )
+            {
+                anchor = s;
+            }
+            void** sl = &prism::offsets::field< void* >( anchor, prism::offsets::trailer_slave );
+            if ( *sl != next ) *sl = next;
+            set_claim_edge( anchor, next );
+        }
+        // +0xC8 = the real head: the trailer physically on the
+        // fifth wheel while towing, the canonical parked root
+        // otherwise (that is what the attach marker/T-attach
+        // resolver needs when nothing is coupled)
+        if ( auto* game_actor = CCore::g_instance->get_game_actor() )
+        {
+            prism::offsets::field< void* >( game_actor, prism::offsets::game_actor_trailer ) =
+                towing ? towed : live[ 0 ];
+        }
+    }
+
     // rebuilds trailers[] from game_actor and merges in truck_towed: a spliced
     // trailer no longer appears in the chain walk, but keeps being listed so
     // the UI and hotkeys can still reach it while it sits on the truck
@@ -1255,79 +1391,10 @@ namespace ts_extra_utilities
                     // teardown novo de mangueiras
                     if ( jointed ) lines_torn[ i ] = false;
                 }
-                // the writes: while the truck tows nothing, every piece's
-                // slave = its canonical successor — the parked machine's
-                // own claim shape, which keeps every parked piece
-                // reachable and visible. Written tail-to-head so no
-                // intermediate state passes through a cycle either.
-                // WHILE TOWING the model changes: the trailer on the
-                // fifth wheel IS the head — parked pieces claim nothing
-                // (a claim is what made the game treat the parked piece
-                // as "the truck's trailer": hoses, markers, the wrong-T
-                // detach — all of it followed the claim root). Jointed
-                // pieces keep whatever slave the native chain gave them
-                for ( uint32_t i = ln; i-- > 0; )
-                {
-                    if ( towing ) continue;   // parked pieces hang at the tail below
-                    void** slave = &prism::offsets::field< void* >( live[ i ], prism::offsets::trailer_slave );
-                    void* want = ( i + 1 < ln ) ? live[ i + 1 ] : nullptr;
-                    if ( *slave != want ) *slave = want;
-                    if ( parkedish[ i ] ) set_claim_edge( live[ i ], want );
-                    else clear_claim_edge( live[ i ] );
-                }
-                if ( towing )
-                {
-                    // parked pieces hang after the last piece whose joint
-                    // chain reaches the truck — a member bolted to a parked
-                    // parent is parked too and appending after it writes a
-                    // backward claim into its own parent. Written
-                    // TAIL-TO-HEAD: a mid-pass write that points an upstream
-                    // piece at a downstream one whose stale link still aims
-                    // back (canon[1].slave=canon[0] while canon[0].slave is
-                    // still canon[1]) forms a 2-cycle for a few cycles —
-                    // a concurrent native chain walker spins on it forever
-                    // and dies by stack overflow with no crash record
-                    void* last_live = nullptr;
-                    for ( uint32_t i = 0; i < ln; ++i )
-                        if ( !parkedish[ i ] ) last_live = live[ i ];
-                    void* next = nullptr;
-                    for ( uint32_t i = ln; i-- > 0; )
-                    {
-                        if ( !parkedish[ i ] ) continue;
-                        void** sl = &prism::offsets::field< void* >( live[ i ], prism::offsets::trailer_slave );
-                        if ( *sl != next ) *sl = next;
-                        set_claim_edge( live[ i ], next );
-                        next = live[ i ];
-                    }
-                    void* anchor = last_live != nullptr ? last_live : towed;
-                    // last_live is the deepest live piece in canon order,
-                    // not necessarily the physical tail — a repaired or
-                    // native link can leave a jointed member behind it.
-                    // Walk jointed slaves to the real tail so the parked
-                    // append never overwrites a live link
-                    uint32_t ad = 0;
-                    for ( void* s = readable_ptr( anchor )
-                              ? prism::offsets::field< void* >( anchor, prism::offsets::trailer_slave )
-                              : nullptr;
-                          s != nullptr && s != anchor && is_trailer_obj( s ) &&
-                          joint( s ) != nullptr && ++ad <= max_trailers;
-                          s = prism::offsets::field< void* >( anchor, prism::offsets::trailer_slave ) )
-                    {
-                        anchor = s;
-                    }
-                    void** sl = &prism::offsets::field< void* >( anchor, prism::offsets::trailer_slave );
-                    if ( *sl != next ) *sl = next;
-                    set_claim_edge( anchor, next );
-                }
-                // +0xC8 = the real head: the trailer physically on the
-                // fifth wheel while towing, the canonical parked root
-                // otherwise (that is what the attach marker/T-attach
-                // resolver needs when nothing is coupled)
-                if ( auto* game_actor = CCore::g_instance->get_game_actor() )
-                {
-                    prism::offsets::field< void* >( game_actor, prism::offsets::game_actor_trailer ) =
-                        towing ? towed : live[ 0 ];
-                }
+                // a escrita dos links ficou em rebuild_parked_claim_links —
+                // a mesma função roda no fim do detach pra não deixar a
+                // seção solta inalcançável nem um frame (a piscada)
+                rebuild_parked_claim_links();
                 // cycle guard — whatever wrote the links, a slave chain
                 // that revisits a piece makes a concurrent native walker
                 // spin forever; sever the link that closes the loop
