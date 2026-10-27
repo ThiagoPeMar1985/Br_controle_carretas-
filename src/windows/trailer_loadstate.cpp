@@ -432,6 +432,7 @@ namespace ts_extra_utilities
             actor_teleport_hook->get_original< actor_teleport_fn >()( self, arg, a3, a4 );
             in_actor_tp = false;
             settle_all_members();
+            restore_parked_claims();
             tp_active = false;
             tp_cooldown = 90;
             return;
@@ -475,6 +476,7 @@ namespace ts_extra_utilities
         actor_teleport_hook->get_original< actor_teleport_fn >()( self, arg, a3, a4 );
         in_actor_tp = false;
         settle_all_members();
+        restore_parked_claims();
         tp_active = false;
         tp_cooldown = 90;
         if ( !rig_truck_valid ) return;

@@ -302,6 +302,7 @@ namespace ts_extra_utilities
         {
             prism::offsets::field< void* >( trailer, prism::offsets::trailer_slave ) = claim;
         }
+        restore_parked_claims();
         prism::offsets::field< void* >( game_actor, prism::offsets::game_actor_trailer ) = prev;
         return joint( trailer ) != nullptr;
     }
@@ -711,6 +712,7 @@ namespace ts_extra_utilities
         vcall< prism::physics_trailer_u_connect_fn >( trailer, prism::offsets::vfunc_connect,
             parent, vec, 0, parent_is_truck || parent_coupling != 0, slave_hook );
         native_chain_call_active.store( false, std::memory_order_release );
+        restore_parked_claims();
 
         // the +0xC8 visibility walk only reaches a trailer through slave
         // links: the native chain writes the claim during its own connect,
@@ -1185,6 +1187,15 @@ namespace ts_extra_utilities
         native_chain_call_active.store( false, std::memory_order_release );
     }
 
+    // claims estacionadas cortadas por sever_parked_claims — restauradas no
+    // fim da MESMA chamada nativa. Antes a manutenção só religava no frame
+    // seguinte, deixando a peça inalcançável um frame inteiro: a máquina de
+    // visibilidade a escondia e re-registrava (a piscada no engate) e o
+    // registro da peça ligava/desligava o suporte físico (as tremidas)
+    struct severed_edge_t { void* parent; void* child; };
+    severed_edge_t severed_edges[ max_trailers ];
+    int severed_edge_count = 0;
+
     // vfunc_connect impls (vfunc 98 — exe+0x639090 / exe+0x7890A0, shared by
     // the trailer-class vtables): the native join processes the slave chain
     // through SELF-RECURSIVE walkers (exe+0x6390C0 / exe+0x639220 call
@@ -1196,6 +1207,7 @@ namespace ts_extra_utilities
     // and the original then sees only real section members
     void sever_parked_claims()
     {
+        severed_edge_count = 0;
         // not while the world assembles: trailers spawn before their joints
         // form, so every staged link reads jointless — cutting them mid-
         // reassembly strands the not-yet-connected members (Failed to init
@@ -1225,8 +1237,29 @@ namespace ts_extra_utilities
             {
                 prism::offsets::field< void* >( t, prism::offsets::trailer_slave ) = nullptr;
                 clear_claim_edge( t );
+                if ( severed_edge_count < static_cast< int >( max_trailers ) )
+                    severed_edges[ severed_edge_count++ ] = { t, slave };
             }
         }
+    }
+
+    // religa as claims cortadas — roda no fim de cada chamada nativa. Só
+    // religa se o join não escreveu nada no lugar (uma aresta real criada
+    // pelo attach vence) e a peça continua sem junta
+    void restore_parked_claims()
+    {
+        for ( int i = 0; i < severed_edge_count; ++i )
+        {
+            void* p = severed_edges[ i ].parent;
+            void* c = severed_edges[ i ].child;
+            if ( readable_ptr( p ) && readable_ptr( c ) && joint( c ) == nullptr &&
+                 prism::offsets::field< void* >( p, prism::offsets::trailer_slave ) == nullptr )
+            {
+                prism::offsets::field< void* >( p, prism::offsets::trailer_slave ) = c;
+                set_claim_edge( p, c );
+            }
+        }
+        severed_edge_count = 0;
     }
     // Corpo comum dos dois hooks de connect — duas vtables de classes
     // diferentes de carreta chegam aqui, e cada uma precisa chamar o original
@@ -1257,6 +1290,7 @@ namespace ts_extra_utilities
             clear_claim_edge( trailer );
             if ( !canon_alive ) reset_trailer_state();
         }
+        restore_parked_claims();
         native_chain_call_active.store( false, std::memory_order_release );
     }
     void __fastcall hk_trailer_connect_a( void* trailer, void* parent, float3_t vec,
@@ -1523,6 +1557,7 @@ namespace ts_extra_utilities
         {
             prism::offsets::field< void* >( head, prism::offsets::trailer_slave ) = severed_slave;
         }
+        restore_parked_claims();
         if ( released_marks && joint( head ) == nullptr )
         {
             // the dispatcher ran but nothing coupled — re-protect the

@@ -122,6 +122,7 @@ namespace ts_extra_utilities
     void unhide_detached();
     void reset_trailer_state();
     void sever_parked_claims();
+    void restore_parked_claims();
     void hk_connect_slave( prism::physics_trailer_u* );
     float hk_joint_walk( void*, float );
     void hk_phys_link( void*, void* );
