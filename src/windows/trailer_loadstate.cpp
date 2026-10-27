@@ -529,4 +529,513 @@ namespace ts_extra_utilities
             }
         }
     }
+
+    //========================================================================
+    // Registro de estacionamento (parked-state record) e obstáculo de lane
+    //========================================================================
+
+    // Filtro SEH que loga ONDE dentro da fábrica de records a falha aconteceu
+    // — o catch genérico não distingue deref de componente morto de frame de
+    // chamador velho; o RIP nomeia o local exato.
+    int factory_fault_filter( uint32_t i, EXCEPTION_POINTERS* ep )
+    {
+        const auto rip = ep != nullptr && ep->ContextRecord != nullptr
+            ? ep->ContextRecord->Rip : 0;
+        const auto base = reinterpret_cast< uint64_t >( GetModuleHandle( nullptr ) );
+        CCore::g_instance->warning(
+            "parked record factory faulted for c{} at exe+0x{:X} code=0x{:X}",
+            i, rip >= base ? rip - base : rip,
+            ep != nullptr && ep->ExceptionRecord != nullptr
+                ? ep->ExceptionRecord->ExceptionCode : 0 );
+        return EXCEPTION_EXECUTE_HANDLER;
+    }
+
+    // O record da carreta está realmente dentro da scan-list do manager?
+    // Um record linkado em +0x1188 mas ausente de mgr+0x740/+0x748 é INERTE —
+    // o re-assert de pose só itera esse array, então uma carreta vinda de
+    // save pode mostrar record + flag armada e mesmo assim cair fisicamente.
+    bool parked_record_listed( void* t )
+    {
+        void* mgr = readable_ptr( parked_record_mgr ) ? *parked_record_mgr : nullptr;
+        if ( mgr == nullptr ) return false;
+        __try
+        {
+            void** it = readable_span( mgr, 0x750 ) >= 0x750
+                ? prism::offsets::field< void** >( mgr, 0x740 ) : nullptr;
+            const uint64_t n = it != nullptr
+                ? prism::offsets::field< uint64_t >( mgr, 0x748 ) : 0;
+            if ( it == nullptr || n == 0 || n >= 0x1000 ||
+                 readable_span( it, n * sizeof( void* ) ) < n * sizeof( void* ) )
+                return false;
+            for ( uint64_t k = 0; k < n; ++k )
+            {
+                if ( it[ k ] != nullptr && readable_ptr( it[ k ] ) &&
+                     prism::offsets::field< void* >( it[ k ], 0x178 ) == t )
+                    return true;
+            }
+        }
+        __except ( EXCEPTION_EXECUTE_HANDLER ) {}
+        return false;
+    }
+
+    // Tira todo record desta carreta da scan-list do manager — enquanto
+    // continuar listada, a máquina de estacionamento re-asserta a pose
+    // guardada do record contra a carreta viva a cada frame.
+    void parked_record_unlist( void* t )
+    {
+        __try
+        {
+            void* mgr = readable_ptr( parked_record_mgr ) ? *parked_record_mgr : nullptr;
+            void** it = mgr != nullptr && readable_span( mgr, 0x750 ) >= 0x750
+                ? prism::offsets::field< void** >( mgr, 0x740 ) : nullptr;
+            auto* nrec = it != nullptr
+                ? &prism::offsets::field< uint64_t >( mgr, 0x748 ) : nullptr;
+            if ( nrec == nullptr || *nrec == 0 || *nrec >= 0x1000 ||
+                 readable_span( it, *nrec * sizeof( void* ) ) < *nrec * sizeof( void* ) )
+                return;
+            for ( uint64_t k = 0; k < *nrec; ++k )
+            {
+                if ( it[ k ] != nullptr && readable_ptr( it[ k ] ) &&
+                     prism::offsets::field< void* >( it[ k ], 0x178 ) == t )
+                {
+                    std::memmove( it + k, it + k + 1, ( *nrec - k - 1 ) * sizeof( void* ) );
+                    --*nrec;
+                    --k;
+                }
+            }
+        }
+        __except ( EXCEPTION_EXECUTE_HANDLER ) {}
+    }
+
+    // Todo container visto pelo hook de insert fica cacheado aqui e é podado —
+    // a região de position-find (exe+0x94E3CB) também é alcançada por chamadas
+    // FORA do insert (erase de obstáculo no un-park) e dereferencia +0x88 sem
+    // checar (AV em exe+0x94E45C, 48ms depois de um detach liberar o node).
+    // Órfãos aparecem em EVENTOS (a queda da junta libera o owner-node do
+    // obstáculo), então a poda densa só roda na janela pós-detach + uma
+    // cadência lenta — scan por frame custava 2 syscalls VirtualQuery por
+    // elemento e crescia com as listas do tráfego.
+    void* lane_containers[ 128 ] = {};
+    uint32_t lane_prune_frames = 0;
+    uint32_t lane_prune_idle = 0;
+
+    // O elemento ainda tem owner-node vivo? SEH lê o campo direto —
+    // VirtualQuery por elemento era o custo de syscall que escalava com as
+    // listas de obstáculo do mundo.
+    bool lane_element_dead( void* el )
+    {
+        if ( el == nullptr ) return true;
+        void* owner = nullptr;
+        __try
+        {
+            owner = *reinterpret_cast< void** >( static_cast< uint8_t* >( el ) + 0x88 );
+        }
+        __except ( EXCEPTION_EXECUTE_HANDLER )
+        {
+            return true;
+        }
+        return owner == nullptr;
+    }
+
+    // Remove entradas órfãs de todos os containers de lane-obstacle vistos —
+    // uma entrada cujo owner-node foi liberado sem o slot sair do array quebra
+    // o scan inteiro na worker thread do tráfego.
+    void prune_lane_containers()
+    {
+        for ( auto& c : lane_containers )
+        {
+            if ( c == nullptr ) continue;
+            if ( !readable_ptr( c ) ||
+                 !readable_ptr( static_cast< uint8_t* >( c ) + 0x10 ) )
+            {
+                c = nullptr;
+                continue;
+            }
+            __try
+            {
+                void** elements = *reinterpret_cast< void*** >( static_cast< uint8_t* >( c ) + 8 );
+                auto* count = reinterpret_cast< uint64_t* >( static_cast< uint8_t* >( c ) + 0x10 );
+                if ( elements == nullptr || !readable_ptr( elements ) || *count > 0x10000 )
+                {
+                    c = nullptr;
+                    continue;
+                }
+                uint64_t n = *count;
+                for ( uint64_t i = n; i-- > 0; )
+                {
+                    void* el = elements[ i ];
+                    if ( lane_element_dead( el ) )
+                    {
+                        CCore::g_instance->info( "lane obstacle: pruned dead entry {:p}", el );
+                        memmove( &elements[ i ], &elements[ i + 1 ], ( n - i - 1 ) * sizeof( void* ) );
+                        --n;
+                    }
+                }
+                if ( n != *count )
+                {
+                    // worker no meio do scan com count velho dereferencia
+                    // elements[n] — deixa a última entrada VIVA no lugar da
+                    // morta que o memmove expôs
+                    if ( n > 0 ) elements[ n ] = elements[ n - 1 ];
+                    *count = n;
+                }
+            }
+            __except ( EXCEPTION_EXECUTE_HANDLER )
+            {
+                // container liberado ou realocado no meio da poda — descarta
+                c = nullptr;
+            }
+        }
+    }
+
+    // Hook do insert ordenado de lane-obstacle (0x14094DFC0, roda nas worker
+    // threads do tráfego): o scan dereferencia o +0x88 de cada elemento — o
+    // owner-node dentro do link inline do obstáculo — então uma entrada morta
+    // quebra o job inteiro. É exatamente o estado em que um obstáculo de
+    // carreta estacionada órfão pode ficar. Sanitiza o container alvo antes
+    // do original rodar: elementos com owner-node nulo (ou memória morta)
+    // saem, e o original só vê entradas vivas.
+    using lane_obstacle_insert_fn = uint8_t __fastcall( void* /*node*/, void* /*link*/, float /*pos*/ );
+    uint8_t __fastcall hk_lane_obstacle_insert( void* node, void* link, float pos )
+    {
+        if ( node != nullptr && link != nullptr && plausible_vfunc( link, 1 ) )
+        {
+            using type_fn = uint32_t __fastcall( void* );
+            const auto get_type = reinterpret_cast< type_fn* >( ( *reinterpret_cast< void** const* >( link ) )[ 1 ] );
+            // tipo de link 0xFFF = a lista de lane-elements ordenada por
+            // posição — o caminho cujo scan dereferencia +0x88 sem checar
+            if ( get_type( link ) == 0xFFF && plausible_vfunc( node, 0xD0 / 8 ) )
+            {
+                using container_fn = void* __fastcall( void* );
+                const auto get_container = reinterpret_cast< container_fn* >( ( *reinterpret_cast< void** const* >( node ) )[ 0xD0 / 8 ] );
+                void* container = get_container( node );
+                if ( readable_ptr( container ) && readable_ptr( static_cast< uint8_t* >( container ) + 0x18 ) )
+                {
+                    // lembra o container — a poda por frame mantém os caminhos
+                    // de erase/scan fora deste insert sem crash também
+                    for ( auto& c : lane_containers )
+                    {
+                        if ( c == container ) break;
+                        if ( c == nullptr ) { c = container; break; }
+                    }
+                    void** elements = *reinterpret_cast< void*** >( static_cast< uint8_t* >( container ) + 8 );
+                    auto* count = reinterpret_cast< uint64_t* >( static_cast< uint8_t* >( container ) + 0x10 );
+                    if ( elements != nullptr && readable_ptr( elements ) && *count <= 0x10000 )
+                    {
+                        uint64_t n = *count;
+                        for ( uint64_t i = n; i-- > 0; )
+                        {
+                            void* el = elements[ i ];
+                            if ( lane_element_dead( el ) )
+                            {
+                                CCore::g_instance->info( "lane obstacle: pruned dead entry {:p}", el );
+                                memmove( &elements[ i ], &elements[ i + 1 ], ( n - i - 1 ) * sizeof( void* ) );
+                                --n;
+                            }
+                        }
+                        *count = n;
+                    }
+                }
+            }
+        }
+        return lane_obstacle_insert_hook->get_original< lane_obstacle_insert_fn >()( node, link, pos );
+    }
+
+    // Estaciona uma carreta que já está sem junta (save carregado solta ou
+    // auto-mark): brace nativo (desce o pé e arma a trava de pose), freio de
+    // mão aplicado, animação da manivela que CONSTRÓI o apoio físico do pé
+    // (sem a anim o +0x126C marca baixado mas nenhum corpo de apoio existe —
+    // a frente atravessa o chão) e o registro de tráfego — a mesma cauda que
+    // o dispatcher de T executa, sem precisar de um pai.
+    void native_park_detached( void* t )
+    {
+        if ( t == nullptr || !is_trailer_obj( t ) ) return;
+        __try
+        {
+            if ( prism::offsets::field< void* >( t, prism::offsets::trailer_parked_state ) != nullptr )
+            {
+                prism::offsets::field< uint8_t >( t, prism::offsets::trailer_parked ) = 1;
+                prism::offsets::field< uint8_t >( t, prism::offsets::trailer_parked_registered ) = 1;
+            }
+            if ( plausible_vfunc( t, 0x328 / 8 ) )
+            {
+                vcall< prism::physics_trailer_u_set_trailer_brace_fn >( t, 0x328 / 8, true );
+            }
+            prism::offsets::field< float >( t, prism::offsets::trailer_brake ) = 1.f;
+            prism::offsets::field< float >( t, prism::offsets::trailer_service_brake ) = 0.f;
+            prism::offsets::field< uint8_t >( t, prism::offsets::trailer_brake_forced ) = 1;
+            if ( brace_anim_fn != nullptr )
+            {
+                prism::offsets::field< float >( t, 0x1270 ) = 1.f;
+                brace_anim_fn( t, 1, 1.f / 3.f );
+            }
+            if ( notify_decoupled_fn != nullptr ) notify_decoupled_fn( t );
+            traffic_detach_tail();
+            lane_prune_frames = 240;
+        }
+        __except ( EXCEPTION_EXECUTE_HANDLER )
+        {
+            CCore::g_instance->warning( "native park sequence faulted on {:p}", t );
+        }
+    }
+
+    //========================================================================
+    // Trava de estacionamento por frame (roda dentro de update_convoy_state)
+    //========================================================================
+
+    // Carreta sem junta e sem parked-record (+0x1188) não tem âncora: o record
+    // é o que re-asserta a pose estacionada a cada frame — freio de roda
+    // sozinho só desliza. A fábrica nativa roda uma vez por slot (a purecall
+    // dela no meio da cadeia é engolida pelo hk_purecall); as peças pra quem
+    // ela nunca produz record ganham a trava emulada: fotografa a pose uma
+    // vez na queda da junta e teleporta de volta quando deriva.
+    // Suspenso logo após um teleport de ator: a sequência de re-joint da doca
+    // deixa as carretas sem junta no meio do movimento e a âncora brigaria
+    // com o posicionamento do próprio jogo.
+    void update_parked_locks()
+    {
+        if ( tp_cooldown > 0 ) --tp_cooldown;
+        for ( uint32_t i = 0; i < max_trailers && canon[ i ] != nullptr; ++i )
+        {
+            if ( tp_cooldown > 0 )
+            {
+                anchor_valid[ i ] = false;
+                anchor_settling[ i ] = false;
+                anchor_delay[ i ] = 0;
+                continue;
+            }
+            void* t = canon[ i ];
+            // só as NOSSAS peças desatreladas ganham a trava emulada — uma
+            // carreta sem junta e sem marca (respawn do jogo, estacionada por
+            // um T-detach simples, ainda assentando sozinha) é problema do
+            // jogo; pinar uma pose de meio-assentamento a congela no ar
+            if ( !readable_ptr( t ) || joint( t ) != nullptr ||
+                 ( !is_detached( t ) && !is_plugin_detached( t ) ) )
+            {
+                anchor_valid[ i ] = false;
+                anchor_settling[ i ] = false;
+                anchor_delay[ i ] = 0;
+                continue;
+            }
+            // roda a fábrica de record nativa uma vez — o bloqueador dela no
+            // meio da cadeia era uma purecall de componente que o hk_purecall
+            // engole — e linka o record registrado de volta em trailer+0x1188
+            // com as flags que o dispatcher arma na mesma condição.
+            // A fábrica dereferencia o singleton do MANAGER de records em
+            // +0x558 antes de tudo — ele só existe depois que alguma carreta
+            // foi estacionada pelo fluxo NATIVO (fault: mov r8,[rsi+0x558],
+            // rsi=null, AV em exe+0x7B6A03). Pula enquanto não existe e
+            // TENTA de novo todo frame: quando qualquer park nativo o criar,
+            // toda carreta em limbo ganha o record na próxima passada.
+            void* mgr = readable_ptr( parked_record_mgr ) ? *parked_record_mgr : nullptr;
+            if ( prism::offsets::field< void* >( t, prism::offsets::trailer_parked_state ) == nullptr &&
+                !record_tried[ i ] &&
+                ( is_detached( t ) || is_plugin_detached( t ) ) &&
+                parked_record_factory != nullptr && parked_record_mgr != nullptr &&
+                mgr != nullptr )
+            {
+                record_tried[ i ] = true;
+                __try
+                {
+                    parked_record_factory( t );
+                    void** it = mgr != nullptr && readable_ptr(
+                        reinterpret_cast< uint8_t* >( mgr ) + 0x748 )
+                        ? prism::offsets::field< void** >( mgr, 0x740 ) : nullptr;
+                    const uint64_t nrec = mgr != nullptr && readable_ptr(
+                        reinterpret_cast< uint8_t* >( mgr ) + 0x748 )
+                        ? prism::offsets::field< uint64_t >( mgr, 0x748 ) : 0;
+                    void* rec = nullptr;
+                    if ( it != nullptr && nrec > 0 && nrec < 0x1000 )
+                    {
+                        for ( uint64_t k = 0; k < nrec; ++k )
+                        {
+                            void* e = it[ k ];
+                            if ( e != nullptr && readable_ptr( e ) &&
+                                prism::offsets::field< void* >( e, 0x178 ) == t )
+                            {
+                                rec = e;
+                                break;
+                            }
+                        }
+                    }
+                    if ( rec != nullptr )
+                    {
+                        prism::offsets::field< void* >( t, prism::offsets::trailer_parked_state ) = rec;
+                        prism::offsets::field< uint8_t >( t, prism::offsets::trailer_parked ) = 1;
+                        prism::offsets::field< uint8_t >( t, prism::offsets::trailer_parked_registered ) = 1;
+                        CCore::g_instance->info( "parked record {:p} created for c{}", rec, i );
+                    }
+                    else
+                    {
+                        CCore::g_instance->warning( "parked record factory produced no record for c{}", i );
+                    }
+                }
+                __except ( factory_fault_filter( i, GetExceptionInformation() ) )
+                {
+                }
+            }
+            // um ponteiro de record sozinho não trava a carreta: o re-assert
+            // nativo de pose só roda enquanto o record está na scan-list do
+            // manager E +0x1258 continua armado — uma carreta de save pode
+            // carregar record+flag sem estar na lista, o que deixa o record
+            // INERTE e a carreta caindo enquanto a âncora fica pulada à toa
+            if ( prism::offsets::field< void* >( t, prism::offsets::trailer_parked_state ) != nullptr &&
+                !record_tried[ i ] &&
+                prism::offsets::field< uint8_t >( t, prism::offsets::trailer_parked_registered ) != 0 &&
+                parked_record_listed( t ) )
+            {
+                anchor_valid[ i ] = false;
+                anchor_settling[ i ] = false;
+                anchor_delay[ i ] = 0;
+                continue;
+            }
+            // carência sem junta — a âncora não pode capturar nos primeiros
+            // frames depois da queda da junta: load/assembly segura as
+            // carretas sem junta enquanto o jogo as reposiciona por poses de
+            // preparo como (0,0,-512), e ancorar uma dessas teleporta a
+            // carreta pro vazio no frame seguinte
+            if ( anchor_delay[ i ] < 40 )
+            {
+                ++anchor_delay[ i ];
+                continue;
+            }
+            if ( !anchor_valid[ i ] )
+            {
+                anchor_valid[ i ] = hook_world( t, anchor_xform[ i ] );
+                anchor_home[ i ] = anchor_xform[ i ];
+                anchor_settle[ i ] = 0;
+                anchor_age[ i ] = 0;
+                anchor_settling[ i ] = true;
+                continue;
+            }
+            hook_xform_t now{};
+            if ( !hook_world( t, now ) || trailer_teleport_hook == nullptr ) continue;
+            ++anchor_age[ i ];
+            const float mx = now.pos.x - anchor_xform[ i ].pos.x;
+            const float my = now.pos.y - anchor_xform[ i ].pos.y;
+            const float mz = now.pos.z - anchor_xform[ i ].pos.z;
+            const quat_t& aq = anchor_xform[ i ].quat;
+            const float qdot = aq.w * now.quat.w + aq.x * now.quat.x +
+                               aq.y * now.quat.y + aq.z * now.quat.z;
+            const float rotd = 1.f - std::fabs( qdot );   // 0 = mesma rotação
+            const bool moving = mx * mx + my * my + mz * mz > 0.02f * 0.02f || rotd > 0.001f;
+            if ( anchor_settle[ i ] < 30 && anchor_age[ i ] < 240 )
+            {
+                // fase de assentamento: uma carreta recém-desatrelada ainda
+                // está tombando em cima do apoio — segue a pose em vez de
+                // travar, senão a pose nivelada guardada briga com o
+                // assentamento a cada frame
+                anchor_settling[ i ] = true;
+                const float hx = now.pos.x - anchor_home[ i ].pos.x;
+                const float hz = now.pos.z - anchor_home[ i ].pos.z;
+                if ( hx * hx + hz * hz > 1.5f * 1.5f && trailer_teleport_hook != nullptr )
+                {
+                    // andou demais rolando livre — puxa de volta pra pose do
+                    // detach e deixa assentar de novo a partir dali
+                    using teleport_fn_t = void __fastcall( void* /*trailer*/, void* /*transform*/ );
+                    trailer_teleport_hook->get_original< teleport_fn_t >()( t, &anchor_home[ i ] );
+                    anchor_xform[ i ] = anchor_home[ i ];
+                    anchor_settle[ i ] = 0;
+                    continue;
+                }
+                if ( moving )
+                {
+                    anchor_xform[ i ] = now;
+                    anchor_settle[ i ] = 0;
+                }
+                else
+                {
+                    ++anchor_settle[ i ];
+                }
+                continue;
+            }
+            anchor_settling[ i ] = false;
+            // nunca trava uma pose caída: se a pose guardada está visivelmente
+            // inclinada, o park nativo ainda deve apoio real pra essa carreta
+            // (o pé nunca foi acionado) — recaptura e continua seguindo em vez
+            // de congelar ela com a frente afundada no chão
+            {
+                const quat_t& q = anchor_xform[ i ].quat;
+                const float up_y = 1.f - 2.f * ( q.x * q.x + q.z * q.z );
+                if ( up_y < 0.85f )
+                {
+                    anchor_valid[ i ] = false;
+                    anchor_settling[ i ] = true;
+                    continue;
+                }
+            }
+            if ( mx * mx + my * my + mz * mz > 0.01f * 0.01f || rotd > 0.0004f )
+            {
+                // travado — emula o parked-record nativo: re-asserta a pose
+                // INTEIRA guardada (posição E rotação, incluindo Y) em
+                // qualquer deriva real. Um pin só de posição nunca enxerga
+                // uma carreta balançando: ela pivota no ponto de contato sem
+                // mexer a origem, e tolerar deriva vertical deixa a frente
+                // afundar pra sempre abaixo do limiar
+                using teleport_fn_t = void __fastcall( void* /*trailer*/, void* /*transform*/ );
+                trailer_teleport_hook->get_original< teleport_fn_t >()( t, &anchor_xform[ i ] );
+            }
+        }
+    }
+
+    // Uma carreta de volta ao convoy precisa estar totalmente desestacionada
+    // — mas o parked-record (+0x1188) TEM que ficar linkado: o registro de
+    // obstáculo de tráfego o referencia, e órfaná-lo deixa uma entrada de
+    // lane morta que a varredura do tráfego quebra. O que de fato re-asserta
+    // a pose estacionada é o update por frame gated pelo flag de registro
+    // +0x1258 — então o byte de parked e esse flag caem, o record fica.
+    // Só carretas JOINTADAS: uma peça sem junta fica na cadeia de propósito,
+    // e limpar as flags dela briga com a manutenção que as re-asserta.
+    void unpark_jointed( const bool* in_convoy )
+    {
+        for ( uint32_t i = 0; i < trailer_count; ++i )
+        {
+            if ( !in_convoy[ i ] ) continue;
+            void* t = trailers[ i ];
+            if ( joint( t ) == nullptr ) continue;
+            const bool parked_flag = prism::offsets::field< uint8_t >( t, prism::offsets::trailer_parked ) != 0;
+            const bool parked_rec = prism::offsets::field< void* >( t, prism::offsets::trailer_parked_state ) != nullptr;
+            // só um estado estacionado vivo precisa de limpeza — o record
+            // (+0x1188) fica linkado de propósito pro registro de tráfego, e
+            // a presença dele sozinha não pode re-disparar isso (dispararia
+            // todo frame e zeraria os canais de freio da carreta engatada)
+            const bool parked_reg = prism::offsets::field< uint8_t >( t, prism::offsets::trailer_parked_registered ) != 0;
+            if ( !parked_flag && !parked_reg ) continue;
+            // os bytes de flag caem todo frame — duas escritas que fecham o
+            // gate que o re-assert de pose lê, mesmo se a máquina de
+            // estacionamento os re-armar entre passadas. O trabalho por junta
+            // era carregado inteiro e chaveado pela posição em trailers[], que
+            // ROTACIONA durante o reboque — uma carreta re-jointada podia
+            // herdar o selo de "feito" de outra peça e brigar com a máquina de
+            // estacionamento pra sempre (o re-assert por frame contra a junta
+            // viva é a guerra de física que derruba o sim pra 3-5 FPS)
+            prism::offsets::field< uint8_t >( t, prism::offsets::trailer_parked ) = 0;
+            prism::offsets::field< uint8_t >( t, prism::offsets::trailer_parked_registered ) = 0;
+            static void* unparked_t[ max_trailers ] = {};
+            static void* unparked_j[ max_trailers ] = {};
+            uint32_t slot = max_trailers, free_slot = max_trailers;
+            for ( uint32_t s = 0; s < max_trailers; ++s )
+            {
+                if ( unparked_t[ s ] == t ) { slot = s; break; }
+                if ( unparked_t[ s ] == nullptr && free_slot == max_trailers ) free_slot = s;
+            }
+            if ( slot == max_trailers )
+            {
+                if ( free_slot == max_trailers ) continue;
+                slot = free_slot;
+                unparked_t[ slot ] = t;
+                unparked_j[ slot ] = nullptr;
+            }
+            if ( unparked_j[ slot ] == joint( t ) ) continue;
+            unparked_j[ slot ] = joint( t );
+            prism::offsets::field< float >( t, prism::offsets::trailer_brake ) = 0.f;
+            prism::offsets::field< uint8_t >( t, prism::offsets::trailer_brake_forced ) = 0;
+            // tira o record da scan-list da máquina de estacionamento —
+            // enquanto ficar listado, o manager re-arma as flags e re-asserta
+            // a pose guardada contra a junta viva todo frame. O record em si
+            // continua linkado na carreta (+0x1188) pro registro de tráfego
+            if ( parked_rec ) parked_record_unlist( t );
+            CCore::g_instance->info( "un-parked trailer {} (flag {} record {})", i, parked_flag, parked_rec );
+        }
+    }
 }

@@ -3,6 +3,7 @@
 
 #include "trailer_manipulation.hpp"
 #include "trailer_shared.hpp"
+#include "trailer_coupling_internal.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -320,5 +321,65 @@ namespace ts_extra_utilities
             if ( boosted > park )
                 park = boosted;
         }
+    }
+
+    //========================================================================
+    // Canais de freio do convoy + spring-brake das peças desatreladas
+    //========================================================================
+
+    // Espelha os canais de freio do caminhão direto em cada carreta do convoy:
+    // o caminho nativo de service-brake precisa das flags de conector
+    // pneumático que o pair_vehicles_fn arma, que a nossa réplica não
+    // reconstrói por completo — então uma carreta engatada pelo plugin rola
+    // sem freio e empurra o caminhão. A física consome +0x730 direto (o loop
+    // de spring-brake também escreve lá), então jogar os valores do caminhão
+    // lá freia a carreta. Broadcasts nativos trazem os mesmos números quando
+    // o caminho nativo funciona.
+    // E a carreta desatrelada TEM que continuar com spring-brake: o detach
+    // escreve trailer_brake (+0x760) = 1 uma vez, mas o loop nativo por frame
+    // que mantém carretas sem junta freadas é gated pelo coupling-state do
+    // caminhão — enquanto outra carreta continua engatada (state 5) nada
+    // reaplica. Pina o fator de spring + demanda zerada a cada frame. O teste
+    // é live-reachability, NÃO "joint == nullptr": uma carreta ainda jointada
+    // a um pai ESTACIONADO faz parte de uma seção estacionada e tem que ficar
+    // freada também. Enquanto a peça está assentando (anchor_settling —
+    // tombando em cima do apoio, rolando até o equilíbrio) as rodas NÃO podem
+    // travar: um dolly de eixo único com CG atrás do eixo precisa rolar uns
+    // centímetros pra achar a pose de repouso — rodas travadas o deixam
+    // balançando num ponto de contato só.
+    void update_convoy_brakes( void* truck, const bool* in_convoy )
+    {
+        if ( truck != nullptr )
+        {
+            const float pedal = prism::offsets::field< float >( truck, prism::offsets::trailer_service_brake );
+            const float retarder = prism::offsets::field< float >( truck, 0x14C8 );
+            const float service = pedal > retarder ? pedal : retarder;
+            const float brake = prism::offsets::field< float >( truck, prism::offsets::trailer_brake );
+            const uint8_t forced = prism::offsets::field< uint8_t >( truck, prism::offsets::trailer_brake_forced );
+            for ( uint32_t i = 0; i < trailer_count; ++i )
+            {
+                if ( !in_convoy[ i ] ) continue;
+                void* t = trailers[ i ];
+                prism::offsets::field< float >( t, prism::offsets::trailer_service_brake ) = service;
+                prism::offsets::field< float >( t, prism::offsets::trailer_brake ) = brake;
+                prism::offsets::field< uint8_t >( t, prism::offsets::trailer_brake_forced ) = forced;
+            }
+        }
+        const auto pin_dead = []( void* t )
+        {
+            if ( t == nullptr || !readable_ptr( t ) ||
+                 !readable_ptr( static_cast< uint8_t* >( t ) + prism::offsets::trailer_physics_joint ) ||
+                 trailer_is_live( t ) )
+            {
+                return;
+            }
+            const int bi = canon_index_of( t );
+            const float brake = bi >= 0 && anchor_settling[ bi ] ? 0.25f : 1.f;
+            prism::offsets::field< float >( t, prism::offsets::trailer_brake ) = brake;
+            prism::offsets::field< float >( t, prism::offsets::trailer_service_brake ) = 0.f;
+            prism::offsets::field< uint8_t >( t, prism::offsets::trailer_brake_forced ) = brake >= 1.f ? 1 : 0;
+        };
+        for ( uint32_t i = 0; i < trailer_count; ++i ) pin_dead( trailers[ i ] );
+        for ( void* d : detached_trailers ) pin_dead( d );
     }
 }

@@ -88,6 +88,17 @@ namespace ts_extra_utilities
     extern void* provider_vtbl;
 
     void snapshot_rig();
+    void traffic_detach_tail();
+    void prune_lane_containers();
+    void native_park_detached( void* );
+    void update_parked_locks();
+    void unpark_jointed( const bool* in_convoy );
+    void update_convoy_brakes( void* truck, const bool* in_convoy );
+    bool parked_record_listed( void* );
+    void parked_record_unlist( void* );
+    int factory_fault_filter( uint32_t, EXCEPTION_POINTERS* );
+    extern uint32_t lane_prune_frames;
+    extern uint32_t lane_prune_idle;
     float3_t quat_rot( const quat_t&, const float3_t& );
     float3_t attach_offset( void*, bool );
     bool native_attach_via_slot( void* );
@@ -138,4 +149,6 @@ namespace ts_extra_utilities
     void refresh_all_lines();
     void pin_ctx_lamp_state( void* );
     void lamp_ctx_sweep( void* );
+    void repair_lamp_ctx( void* );
+    void repair_lamp_ctx_all();
 }

@@ -207,6 +207,45 @@ namespace ts_extra_utilities
     // repoint its source at itself: it reads its own (zeroed) mask and goes
     // natively dark, while the live set keeps the real feed. The native
     // attach flow rewrites the source on recouple. Non-live is the test
+    // Repara o "src" de lamp-cut morto apontando pro próprio membro — o
+    // teardown nativo escreve [src+0x2A0] onde src = [[m+0x110]+0x18]; um
+    // slot reciclado apontando pra páginas de DLL de sistema (KERNELBASE no
+    // AV em exe+0x789CB7) joga essa escrita em cima de código. Precisa rodar
+    // em toda carreta que o dispatcher pode atravessar — as chamadas de
+    // disconnect internas dele podem bypassar o hook da vtable.
+    void repair_lamp_ctx( void* m )
+    {
+        if ( m == nullptr || !readable_ptr( m ) ) return;
+        void* ctx = prism::offsets::field< void* >( m, prism::offsets::trailer_light_ctx );
+        if ( ctx == nullptr || !readable_ptr( ctx ) ||
+             !readable_ptr( static_cast< uint8_t* >( ctx ) + 0x18 ) ) return;
+        void* src = prism::offsets::field< void* >( ctx, 0x18 );
+        // o src precisa ser um objeto de veículo ESCRITA — plausible_object
+        // sozinho deixa passar slots reciclados cuja vtable parece do exe mas
+        // cuja página de +0x2A0 é read-only/liberada (o AV de lamp-cut no
+        // KERNELBASE). O teardown escreve [src+0x2A0] — a página tem que aceitar.
+        if ( src != nullptr && plausible_object( src ) )
+        {
+            MEMORY_BASIC_INFORMATION mbi{};
+            if ( VirtualQuery( static_cast< uint8_t* >( src ) + prism::offsets::trailer_lamp_mask,
+                               &mbi, sizeof( mbi ) ) != 0 &&
+                 mbi.State == MEM_COMMIT &&
+                 ( mbi.Protect == PAGE_READWRITE || mbi.Protect == PAGE_WRITECOPY ||
+                   mbi.Protect == PAGE_EXECUTE_READWRITE || mbi.Protect == PAGE_EXECUTE_WRITECOPY ) )
+            {
+                return;
+            }
+        }
+        prism::offsets::field< void* >( ctx, 0x18 ) = m;
+    }
+    void repair_lamp_ctx_all()
+    {
+        for ( uint32_t i = 0; i < max_trailers && canon[ i ] != nullptr; ++i )
+        {
+            repair_lamp_ctx( canon[ i ] );
+        }
+    }
+
     // (not joint==null): a trailer bolted to a parked parent is parked too
     // the lamp update reads the SOURCE vehicle's +0x2A0 through [ctx+0x18]
     // for the mask channels, but most channels (reverse, blinkers, aux)
