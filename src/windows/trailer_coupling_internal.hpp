@@ -94,6 +94,9 @@ namespace ts_extra_utilities
     void update_parked_locks();
     void unpark_jointed( const bool* in_convoy );
     void update_convoy_brakes( void* truck, const bool* in_convoy );
+    void install_crash_tracer();
+    void init_purecall_fake();
+    void* hk_purecall( void* );
     bool parked_record_listed( void* );
     void parked_record_unlist( void* );
     int factory_fault_filter( uint32_t, EXCEPTION_POINTERS* );
@@ -141,7 +144,6 @@ namespace ts_extra_utilities
     void sample_provider_vtbl( void* );
     void* find_trailer_provider( void* );
     void cache_trailer_actor( void*, void* );
-    void push_anchor_update( void*, const void* );
     bool canon_dead();
     void update_landing_gear();
     void* light_source_of( void* );

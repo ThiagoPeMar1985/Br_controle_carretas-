@@ -547,6 +547,160 @@ namespace ts_extra_utilities
     }
 
     //========================================================================
+    // Ator/provider de obstáculo de tráfego das carretas
+    //========================================================================
+
+    // cache trailer -> trailer-actor: preenchido sempre que o scan de slots
+    // funciona, pra continuar alcançando o actor depois que a carreta
+    // desatrela e some dos slots do game_actor
+    std::pair< void*, void* > trailer_actors[ max_trailers ] = {};
+
+    // O detach nativo resolve o actor da carreta solta pelo array de slots em
+    // game_actor+0x1D38 (entradas de 0x28, entry+0 = actor). O backpointer do
+    // actor pra carreta fica num offset que essa build não documenta, então
+    // em vez de chutar os campos do actor são escaneados por um ponteiro de
+    // volta pra carreta — auto-descoberta.
+    // A âncora de obstáculo de tráfego da carreta estacionada é um componente
+    // dela mesma, não do slot array — a vtable do provider é amostrada do
+    // actor da carreta cabeça (o único slot que o nativo preenche) e casada
+    // contra os campos da própria carreta na hora do detach.
+    void* provider_vtbl = nullptr;
+
+    void* find_trailer_actor( void* trailer, void* game_actor )
+    {
+        if ( trailer == nullptr || game_actor == nullptr ) return nullptr;
+        for ( uint32_t s = 0; s < 16; ++s )
+        {
+            void* entry = reinterpret_cast< uint8_t* >( game_actor ) + 0x1D38 + s * 0x28;
+            if ( !readable_ptr( reinterpret_cast< uint8_t* >( entry ) + 8 ) ) break;
+            void* actor = *reinterpret_cast< void** >( entry );
+            if ( !plausible_object( actor ) ) continue;
+            for ( uint32_t bo = 8; bo < 0x400; bo += 8 )
+            {
+                if ( prism::offsets::field< void* >( actor, bo ) == trailer )
+                {
+                    return actor;
+                }
+            }
+        }
+        // sem backpointer em lugar nenhum: a posição da carreta na cadeia
+        // mapeia pro mesmo índice de slot — pega se o slot tiver actor real
+        for ( uint32_t i = 0; i < trailer_count; ++i )
+        {
+            if ( trailers[ i ] != trailer ) continue;
+            void* entry = reinterpret_cast< uint8_t* >( game_actor ) + 0x1D38 + i * 0x28;
+            void* actor = *reinterpret_cast< void** >( entry );
+            if ( plausible_object( actor ) )
+            {
+                return actor;
+            }
+            break;
+        }
+        // fallback pelo cache: quando a carreta sai do convoy o actor dela
+        // some do slot array inteiro — uma carreta desatrelada só é achada
+        // pelo ponteiro cacheado enquanto ela ainda estava engatada
+        for ( uint32_t i = 0; i < max_trailers; ++i )
+        {
+            if ( trailer_actors[ i ].first == trailer )
+            {
+                void* cached = trailer_actors[ i ].second;
+                return plausible_object( cached ) ? cached : nullptr;
+            }
+        }
+        // último recurso com a vtable amostrada: acha o objeto em forma de
+        // actor — qualquer coisa cujo campo +0x1F0 segura um provider do tipo
+        // certo — dentro da própria carreta e pelo game_actor. Carretas de
+        // meio de cadeia mantêm o actor fora do array de slots (só a cabeça)
+        if ( provider_vtbl != nullptr )
+        {
+            auto actor_at = [ & ]( void* obj ) -> void*
+            {
+                if ( obj == nullptr || !plausible_object( obj ) ||
+                    !readable_ptr( reinterpret_cast< uint8_t* >( obj ) + 0x1F0 ) )
+                {
+                    return nullptr;
+                }
+                void* prov = prism::offsets::field< void* >( obj, 0x1F0 );
+                return prov != nullptr && plausible_object( prov ) &&
+                    *reinterpret_cast< void** >( prov ) == provider_vtbl ? obj : nullptr;
+            };
+            for ( uintptr_t off = 0x100; off < 0x2000; off += 8 )
+            {
+                if ( !readable_ptr( reinterpret_cast< uint8_t* >( trailer ) + off ) ) continue;
+                if ( void* a = actor_at( prism::offsets::field< void* >( trailer, off ) ) )
+                {
+                    return a;
+                }
+            }
+            for ( uintptr_t off = 0x1C00; off < 0x3000; off += 8 )
+            {
+                if ( !readable_ptr( reinterpret_cast< uint8_t* >( game_actor ) + off ) ) continue;
+                void* a = actor_at( prism::offsets::field< void* >( game_actor, off ) );
+                if ( a == nullptr ) continue;
+                return a;
+            }
+        }
+        return nullptr;
+    }
+
+    void sample_provider_vtbl( void* game_actor )
+    {
+        if ( provider_vtbl != nullptr || game_actor == nullptr ) return;
+        void* actor = prism::offsets::field< void* >( game_actor, 0x1D38 );
+        if ( !plausible_object( actor ) ||
+            !readable_ptr( reinterpret_cast< uint8_t* >( actor ) + 0x1F0 ) )
+        {
+            return;
+        }
+        void* provider = prism::offsets::field< void* >( actor, 0x1F0 );
+        if ( provider != nullptr && plausible_object( provider ) &&
+            plausible_vfunc( provider, 0x28 / 8 ) && plausible_vfunc( provider, 0x30 / 8 ) )
+        {
+            provider_vtbl = *reinterpret_cast< void** >( provider );
+        }
+    }
+
+    // escaneia os campos da própria carreta (e do objeto de parked-state)
+    // procurando um componente cuja vtable case com o provider amostrado —
+    // a carreta estacionada carrega a âncora de obstáculo dentro dela
+    void* find_trailer_provider( void* trailer )
+    {
+        if ( trailer == nullptr || provider_vtbl == nullptr ) return nullptr;
+        auto scan = [ & ]( void* obj, uintptr_t end ) -> void*
+        {
+            if ( obj == nullptr ) return nullptr;
+            for ( uintptr_t off = 0; off < end; off += 8 )
+            {
+                if ( !readable_ptr( reinterpret_cast< uint8_t* >( obj ) + off ) ) continue;
+                void* cand = *reinterpret_cast< void** >( reinterpret_cast< uint8_t* >( obj ) + off );
+                if ( cand != nullptr && plausible_object( cand ) &&
+                    *reinterpret_cast< void** >( cand ) == provider_vtbl )
+                {
+                    return cand;
+                }
+            }
+            return nullptr;
+        };
+        if ( void* p = scan( trailer, 0x1400 ) ) return p;
+        return scan( prism::offsets::field< void* >( trailer, prism::offsets::trailer_parked_state ), 0x800 );
+    }
+
+    void cache_trailer_actor( void* trailer, void* game_actor )
+    {
+        if ( trailer == nullptr ) return;
+        sample_provider_vtbl( game_actor );
+        void* actor = find_trailer_actor( trailer, game_actor );
+        for ( uint32_t i = 0; i < max_trailers; ++i )
+        {
+            if ( trailer_actors[ i ].first == trailer || trailer_actors[ i ].first == nullptr )
+            {
+                trailer_actors[ i ] = { trailer, actor };
+                return;
+            }
+        }
+    }
+
+    //========================================================================
     // Registro de estacionamento (parked-state record) e obstáculo de lane
     //========================================================================
 
@@ -796,8 +950,132 @@ namespace ts_extra_utilities
     }
 
     //========================================================================
+    // Proteção contra crashes: purecall fake + tracer de AV
+    //========================================================================
+
+    // CRT __purecall (0x141D23610): nós de listener mortos em carretas
+    // desatreladas ainda recebem vfunc por slots puros pela máquina de
+    // estacionamento — o handler original mata o processo. Retornar null é o
+    // que o caminho de implementação-faltante do chamador tolera; a fábrica
+    // de parked-record completa com um membro nulo em vez de morrer.
+    // Tracer permanente: qualquer AV não-tratado no processo loga o RIP da
+    // falha e os registradores — o abort silencioso do teardown e o crash da
+    // fábrica eram invisíveis sem ele. First chance, pass-through
+    // (CONTINUE_SEARCH) pra o crash handling do próprio jogo ainda rodar.
+    LONG WINAPI crash_tracer( EXCEPTION_POINTERS* ep )
+    {
+        if ( ep == nullptr || ep->ExceptionRecord == nullptr ) return EXCEPTION_CONTINUE_SEARCH;
+        const auto code = ep->ExceptionRecord->ExceptionCode;
+        if ( code != EXCEPTION_ACCESS_VIOLATION && code != EXCEPTION_STACK_OVERFLOW &&
+             code != 0xE24C4A02 /* purecall */ )
+        {
+            return EXCEPTION_CONTINUE_SEARCH;
+        }
+        const auto rip = ep->ContextRecord != nullptr ? ep->ContextRecord->Rip : 0;
+        const auto base = reinterpret_cast< uint64_t >( GetModuleHandle( nullptr ) );
+        CCore::g_instance->warning(
+            "AV 0x{:X} at exe+0x{:X} rax={:p} rbx={:p} rcx={:p} rdx={:p} rsi={:p} rdi={:p} r8={:p} addr={:p}",
+            code, rip >= base ? rip - base : rip,
+            ep->ContextRecord ? reinterpret_cast< void* >( ep->ContextRecord->Rax ) : nullptr,
+            ep->ContextRecord ? reinterpret_cast< void* >( ep->ContextRecord->Rbx ) : nullptr,
+            ep->ContextRecord ? reinterpret_cast< void* >( ep->ContextRecord->Rcx ) : nullptr,
+            ep->ContextRecord ? reinterpret_cast< void* >( ep->ContextRecord->Rdx ) : nullptr,
+            ep->ContextRecord ? reinterpret_cast< void* >( ep->ContextRecord->Rsi ) : nullptr,
+            ep->ContextRecord ? reinterpret_cast< void* >( ep->ContextRecord->Rdi ) : nullptr,
+            ep->ContextRecord ? reinterpret_cast< void* >( ep->ContextRecord->R8 ) : nullptr,
+            ep->ExceptionRecord->NumberParameters > 1
+                ? reinterpret_cast< void* >( ep->ExceptionRecord->ExceptionInformation[ 1 ] ) : nullptr );
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
+    void install_crash_tracer()
+    {
+        static PVOID h = AddVectoredExceptionHandler( 1, crash_tracer );
+        if ( h != nullptr )
+        {
+            CCore::g_instance->info( "crash tracer installed" );
+        }
+    }
+
+    // O iterador de componentes em exe+0x927C60 dereferencia o retorno do
+    // purecall sem checar (call [rax+0x40] depois mov rdx,[rax] + call
+    // [rdx+8] — switch de tipo em 0x3000/0x7000/0xF000/0x17000). Retornar
+    // null quebra ele; entrega um componente benigno cujas vfuncs retornam
+    // null — eax=0 não casa nenhum case do switch, então o iterador pula o
+    // componente morto e segue. Só o range dessa função ganha o fake: a
+    // fábrica de record e o site de comparação 0x9277F4 dependem do null que
+    // já tratam.
+    void* __fastcall purecall_null_vfunc( void* /*self*/ ) { return nullptr; }
+    void* purecall_fake_vtbl[ 16 ] = {};
+    struct purecall_fake_t { void* vtbl; uint8_t pad[ 248 ]; };
+    purecall_fake_t purecall_fake = { purecall_fake_vtbl };
+
+    void init_purecall_fake()
+    {
+        for ( auto& slot : purecall_fake_vtbl )
+        {
+            slot = reinterpret_cast< void* >( &purecall_null_vfunc );
+        }
+    }
+
+    void* __fastcall hk_purecall( void* /*object*/ )
+    {
+        const auto ret = reinterpret_cast< uint64_t >( _ReturnAddress() );
+        const auto base = reinterpret_cast< uint64_t >( GetModuleHandle( nullptr ) );
+        const auto rva = ret - base;
+        static uint64_t seen[ 32 ] = {};
+        for ( auto& s : seen )
+        {
+            if ( s == ret ) break;
+            if ( s == 0 )
+            {
+                s = ret;
+                CCore::g_instance->warning( "purecall swallowed at exe+0x{:X}", rva );
+                break;
+            }
+        }
+        if ( rva >= 0x927C60 && rva < 0x927CBF ) return &purecall_fake;
+        return nullptr;
+    }
+
+    //========================================================================
     // Trava de estacionamento por frame (roda dentro de update_convoy_state)
     //========================================================================
+
+    // A máquina de estacionamento esconde uma carreta que não alcança mais
+    // pela cadeia viva — regra de visibilidade do próprio parked-record.
+    // Uma carreta desatrelada pelo plugin tem que continuar no mundo, então
+    // uma vez por detach re-assertamos as flags de parked + brace; peças sem
+    // record recebem o transform re-escrito no lugar atual (o mesmo nudge
+    // "estou aqui" que o parked-record faz).
+    void unhide_detached()
+    {
+        // reconciliação de meio-teleporte: as juntas leem null por alguns
+        // frames e um nudge de pose aqui briga com o posicionamento do jogo
+        if ( tp_cooldown > 0 ) return;
+        for ( uint32_t i = 0; i < max_trailers && canon[ i ] != nullptr; ++i )
+        {
+            void* t = canon[ i ];
+            if ( !readable_ptr( t ) || joint( t ) != nullptr ) continue;
+            if ( !is_detached( t ) && !is_plugin_detached( t ) ) continue;
+            if ( prism::offsets::field< void* >( t, prism::offsets::trailer_parked_state ) != nullptr )
+            {
+                prism::offsets::field< uint8_t >( t, prism::offsets::trailer_parked ) = 1;
+                prism::offsets::field< uint8_t >( t, prism::offsets::trailer_parked_registered ) = 1;
+                prism::offsets::field< uint8_t >( t, prism::offsets::trailer_brace_state ) = 1;
+            }
+            else if ( trailer_teleport_hook != nullptr )
+            {
+                hook_xform_t xf{};
+                if ( hook_world( t, xf ) )
+                {
+                    using teleport_fn_t = void __fastcall( void*, void* );
+                    trailer_teleport_hook->get_original< teleport_fn_t >()( t, &xf );
+                }
+            }
+        }
+    }
+
+
 
     // Carreta sem junta e sem parked-record (+0x1188) não tem âncora: o record
     // é o que re-asserta a pose estacionada a cada frame — freio de roda
