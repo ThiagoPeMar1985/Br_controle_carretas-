@@ -1036,21 +1036,6 @@ namespace ts_extra_utilities
         if ( parent != nullptr && child != nullptr &&
              readable_ptr( parent ) && readable_ptr( child ) )
         {
-            // aresta física nunca pode nascer numa peça estacionada marcada —
-            // o único link até ela é a claim de visibilidade; fisicalizar
-            // isso a prende no conjunto vivo e o solver a puxa todo frame
-            // enquanto a âncora/record a segura = as tremidas. No attach
-            // real as marcas já caíram antes do vfunc, então o filtro é seguro
-            if ( is_detached( child ) || is_plugin_detached( child ) )
-            {
-                static int pl_parked_logged = 0;
-                if ( pl_parked_logged++ < 8 )
-                {
-                    CCore::g_instance->warning(
-                        "phys link refused: child {:p} is parked/detached", child );
-                }
-                return;
-            }
             void* up = parent;
             for ( int i = 0; i < 128 && up != nullptr && readable_ptr( up ); ++i )
             {
@@ -1133,14 +1118,6 @@ namespace ts_extra_utilities
         // keep the pieces behind the head reachable instead of orphaning them
         void* chain_members[ max_trailers * 2 ] = {};
         uint32_t chain_n = 0;
-        // grava as claims cortadas no walk pra religar no fim da própria
-        // call — buffer LOCAL porque um dispatch de attach pode disparar
-        // esse vfunc no meio (clobberaria o buffer de sever_parked_claims).
-        // Sem o religamento imediato a peça atrás fica inalcançável um frame
-        // inteiro e a máquina de visibilidade a esconde = a piscada no detach
-        void* cut_parents[ max_trailers ] = {};
-        void* cut_children[ max_trailers ] = {};
-        int cut_n = 0;
         // a cyclic chain (leaf claim + real link both physicalized) would
         // walk forever — a real section is never deeper than the canon count
         uint32_t depth = 0;
@@ -1158,13 +1135,6 @@ namespace ts_extra_utilities
                 joint( slave ) == nullptr;
             if ( bad || ++depth > max_trailers )
             {
-                if ( slave != t && is_trailer_obj( slave ) && joint( slave ) == nullptr &&
-                     cut_n < static_cast< int >( max_trailers ) )
-                {
-                    cut_parents[ cut_n ] = t;
-                    cut_children[ cut_n ] = slave;
-                    ++cut_n;
-                }
                 prism::offsets::field< void* >( t, prism::offsets::trailer_slave ) = nullptr;
                 clear_claim_edge( t );
                 break;
@@ -1215,19 +1185,6 @@ namespace ts_extra_utilities
             clear_claim_edge( trailer );
         }
         native_chain_call_active.store( false, std::memory_order_release );
-        // religa as claims cortadas — só onde o original não deixou uma
-        // aresta real no lugar e a peça continua sem junta
-        for ( int i = 0; i < cut_n; ++i )
-        {
-            void* p = cut_parents[ i ];
-            void* c = cut_children[ i ];
-            if ( readable_ptr( p ) && readable_ptr( c ) && joint( c ) == nullptr &&
-                 prism::offsets::field< void* >( p, prism::offsets::trailer_slave ) == nullptr )
-            {
-                prism::offsets::field< void* >( p, prism::offsets::trailer_slave ) = c;
-                set_claim_edge( p, c );
-            }
-        }
     }
 
     // claims estacionadas cortadas por sever_parked_claims — restauradas no

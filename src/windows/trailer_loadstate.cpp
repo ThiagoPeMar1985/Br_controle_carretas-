@@ -1183,28 +1183,6 @@ namespace ts_extra_utilities
                 anchor_delay[ i ] = 0;
                 continue;
             }
-            // uma peça estacionada não pode estar no grafo físico de tração
-            // (+0x60 sobe pro pai, +0x68 desce pro filho): um link stale —
-            // criado antes da marca, ou por uma claim que o hk_phys_link
-            // antigo deixava passar — faz o solver puxar ela todo frame
-            // enquanto a âncora/record a segura = as tremidas. Corta dos
-            // dois lados pra não deixar meio-link pendurado
-            void* phys_up = prism::offsets::field< void* >( t, 0x60 );
-            if ( phys_up != nullptr )
-            {
-                if ( readable_ptr( phys_up ) &&
-                     prism::offsets::field< void* >( phys_up, 0x68 ) == t )
-                    prism::offsets::field< void* >( phys_up, 0x68 ) = nullptr;
-                prism::offsets::field< void* >( t, 0x60 ) = nullptr;
-            }
-            void* phys_down = prism::offsets::field< void* >( t, 0x68 );
-            if ( phys_down != nullptr )
-            {
-                if ( readable_ptr( phys_down ) &&
-                     prism::offsets::field< void* >( phys_down, 0x60 ) == t )
-                    prism::offsets::field< void* >( phys_down, 0x60 ) = nullptr;
-                prism::offsets::field< void* >( t, 0x68 ) = nullptr;
-            }
             // roda a fábrica de record nativa uma vez — o bloqueador dela no
             // meio da cadeia era uma purecall de componente que o hk_purecall
             // engole — e linka o record registrado de volta em trailer+0x1188
