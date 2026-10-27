@@ -233,6 +233,11 @@ namespace ts_extra_utilities
     // the physical moment the hook broke; hose teardown runs there, not at
     // dispatch time (the async crank drops the joint seconds after)
     inline bool canon_was_jointed[ max_trailers ] = {};
+    // teardown de mangueiras da peça estacionada já rodou neste slot do
+    // canon — set_lines(state=0) só ESCONDE entidades sem removê-las do
+    // vetor, então chamar por frame nunca termina; rearma quando a carreta
+    // engata de novo
+    inline bool lines_torn[ max_trailers ] = {};
 
     // a native call that walks trailer_slave / lamp ctx (disconnect/connect
     // vfuncs, attach/detach dispatchers) is running on the sim thread — the

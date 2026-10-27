@@ -93,6 +93,7 @@ namespace ts_extra_utilities
     bool claim_edge_ours( const void*, const void* );
     void clear_claim_edge( const void* );
     void set_claim_edge( void*, void* );
+    void sever_all_claims();
     void dump_chain( const char* );
     bool canon_all_trailer_objs();
     bool trailer_is_known_parked( const void* );

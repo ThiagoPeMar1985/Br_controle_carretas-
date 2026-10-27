@@ -180,13 +180,41 @@ namespace ts_extra_utilities
         return true;
     }
 
+    // corta todos os links slave que nós escrevemos — usado no reset e no
+    // shutdown pra nenhum walker nativo encontrar claim nosso apontando pra
+    // objeto que já morreu. Só zera o slave quando o link atual ainda é o
+    // que nós mesmos pusemos
+    void sever_all_claims()
+    {
+        __try
+        {
+            for ( auto& edge : synthetic_edges )
+            {
+                void* owner = edge.owner.load( std::memory_order_acquire );
+                void* child = edge.child.load( std::memory_order_acquire );
+                if ( is_trailer_obj( owner ) )
+                {
+                    void** sl = &prism::offsets::field< void* >( owner, prism::offsets::trailer_slave );
+                    if ( *sl == child ) *sl = nullptr;
+                }
+                edge.owner.store( nullptr, std::memory_order_release );
+                edge.child.store( nullptr, std::memory_order_release );
+            }
+        }
+        __except ( EXCEPTION_EXECUTE_HANDLER ) {}
+    }
+
     // zera todo ponteiro e marca cacheada — chamado por canon_dead e pelos
     // wrappers SEH pra uma falha nunca deixar rastreador montado pela metade
     void reset_trailer_state()
     {
+        // o mundo está indo embora (reload ou quit): corta os claims antes
+        // de largar os ponteiros, senão o teardown nativo anda links mortos
+        sever_all_claims();
         for ( auto& c : canon ) c = nullptr;
         for ( auto& j : canon_was_jointed ) j = false;
         for ( auto& j : canon_jointless_frames ) j = 0;
+        for ( auto& j : lines_torn ) j = false;
         for ( auto& edge : synthetic_edges )
         {
             edge.owner.store( nullptr, std::memory_order_release );
@@ -319,6 +347,13 @@ namespace ts_extra_utilities
 
     CTrailerManipulation::~CTrailerManipulation()
     {
+        // devolve o mundo limpo antes de soltar os hooks: nossos claims
+        // slave sintéticos ficam na cadeia de +0xC8 e o teardown do mundo
+        // anda esses links em carretas já meio-destruídas — o hang/crash no
+        // quit era walker nativo encontrando claim que a manutenção ainda
+        // mantinha. Só escreve em objeto que ainda é carreta válida, e só
+        // zera o link quando ele é nosso
+        sever_all_claims();
         steering_reset();
         set_individual_steering_hook.reset();
         release_all_axles();
@@ -1149,10 +1184,25 @@ namespace ts_extra_utilities
                 {
                     continue;
                 }
+                // teardown uma vez por marca, não por frame: state=0 só
+                // ESCONDE as entidades de linha, não as remove do vetor —
+                // um gate "lista não-vazia" nunca se fecha e chamaria a
+                // função nativa a cada frame. E a faixa +0xE98..+0xEA0 tem
+                // que parecer um vetor sano: em algumas classes de carreta
+                // esses campos guardam lixo que leria como bilhões de
+                // entidades
+                const int ci = canon_index_of( live[ i ] );
+                if ( ci >= 0 && lines_torn[ ci ] ) continue;
                 char* const tl = static_cast< char* >( live[ i ] );
-                const bool entities = *reinterpret_cast< void** >( tl + 0xE98 ) !=
-                    *reinterpret_cast< void** >( tl + 0xEA0 );
-                if ( entities ) set_lines_fn( live[ i ], 0, 1 );
+                void* const lbeg = *reinterpret_cast< void** >( tl + 0xE98 );
+                void* const lend = *reinterpret_cast< void** >( tl + 0xEA0 );
+                const ptrdiff_t nent = static_cast< const char* >( lend ) -
+                    static_cast< const char* >( lbeg );
+                if ( nent > 0 && nent <= 0x1000 && readable_ptr( lbeg ) )
+                {
+                    set_lines_fn( live[ i ], 0, 1 );
+                    if ( ci >= 0 ) lines_torn[ ci ] = true;
+                }
             }
             bool any_parked = false;
             for ( uint32_t i = 0; i < ln; ++i ) any_parked |= parkedish[ i ];
@@ -1201,6 +1251,9 @@ namespace ts_extra_utilities
                         }
                     }
                     canon_was_jointed[ i ] = jointed;
+                    // engatou de novo — um desengate futuro precisa de um
+                    // teardown novo de mangueiras
+                    if ( jointed ) lines_torn[ i ] = false;
                 }
                 // the writes: while the truck tows nothing, every piece's
                 // slave = its canonical successor — the parked machine's
