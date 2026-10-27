@@ -330,8 +330,23 @@ namespace ts_extra_utilities
     // native attach re-registers them on recouple
 
 
+    void sever_parked_claims();
+    void restore_parked_claims();
+
+    // esconde as claims estacionadas durante TODA a chamada de detach e
+    // religa ao sair — em qualquer caminho (dispatcher nativo ou réplica) a
+    // peça de trás fica inalcançável ~1 frame e a máquina de visibilidade a
+    // esconde/re-registra = a piscada em todo desatrelar. O guard cobre os
+    // dois returns da função
+    struct parked_claim_guard_t
+    {
+        parked_claim_guard_t() { sever_parked_claims(); }
+        ~parked_claim_guard_t() { restore_parked_claims(); }
+    };
+
     void disconnect_now( void* trailer, void* parent, const bool parent_is_truck )
     {
+        parked_claim_guard_t claim_guard;
         // a trailer sitting on the truck (or straight on the fifth wheel)
         // gets the NATIVE T-detach: the dispatcher drives the whole proper
         // sequence — joint release, parked-state record, traffic obstacle,

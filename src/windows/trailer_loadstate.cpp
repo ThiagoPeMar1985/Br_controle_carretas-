@@ -60,6 +60,7 @@ namespace ts_extra_utilities
     hook_xform_t anchor_xform[ max_trailers ]{};
     hook_xform_t anchor_home[ max_trailers ]{};
     bool anchor_valid[ max_trailers ] = {};
+    int anchor_fixes[ max_trailers ] = {};
     bool anchor_settling[ max_trailers ] = {};
     int anchor_settle[ max_trailers ] = {};
     int anchor_age[ max_trailers ] = {};
@@ -1244,9 +1245,12 @@ namespace ts_extra_utilities
             // nativo de pose só roda enquanto o record está na scan-list do
             // manager E +0x1258 continua armado — uma carreta de save pode
             // carregar record+flag sem estar na lista, o que deixa o record
-            // INERTE e a carreta caindo enquanto a âncora fica pulada à toa
+            // INERTE e a carreta caindo enquanto a âncora fica pulada à toa.
+            // O gate NÃO olha record_tried: um record criado pela nossa
+            // fábrica e registrado na lista é tão nativo quanto um de save —
+            // com o !record_tried a âncora emulada brigava com o re-assert
+            // nativo do record que nós mesmos criamos = a carreta balançando
             if ( prism::offsets::field< void* >( t, prism::offsets::trailer_parked_state ) != nullptr &&
-                !record_tried[ i ] &&
                 prism::offsets::field< uint8_t >( t, prism::offsets::trailer_parked_registered ) != 0 &&
                 parked_record_listed( t ) )
             {
@@ -1272,6 +1276,7 @@ namespace ts_extra_utilities
                 anchor_settle[ i ] = 0;
                 anchor_age[ i ] = 0;
                 anchor_settling[ i ] = true;
+                anchor_fixes[ i ] = 0;
                 continue;
             }
             hook_xform_t now{};
@@ -1344,6 +1349,16 @@ namespace ts_extra_utilities
                 // afundar pra sempre abaixo do limiar
                 using teleport_fn_t = void __fastcall( void* /*trailer*/, void* /*transform*/ );
                 trailer_teleport_hook->get_original< teleport_fn_t >()( t, &anchor_xform[ i ] );
+                // diagnóstico one-shot: se a âncora re-pina dezenas de vezes
+                // seguidas, algo está brigando pela pose (a carreta
+                // "balançando sozinha") — o drift médio diz quão forte
+                if ( ++anchor_fixes[ i ] == 60 )
+                {
+                    CCore::g_instance->warning(
+                        "anchor: c{} re-pinada {}x — drift atual {:.3f}m (briga pela pose?)",
+                        i, anchor_fixes[ i ],
+                        std::sqrt( mx * mx + my * my + mz * mz ) );
+                }
             }
         }
     }
