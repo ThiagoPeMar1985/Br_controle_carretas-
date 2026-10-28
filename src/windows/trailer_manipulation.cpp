@@ -404,6 +404,7 @@ namespace ts_extra_utilities
         cam_update_hook.reset();
         lamp_mask_hook.reset();
         lamp_propagate_hook.reset();
+        trailer_dtor_hook.reset();
         apply_cables_hook.reset();
         set_lines_hook.reset();
         rebuild_lines_hook.reset();

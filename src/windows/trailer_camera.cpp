@@ -212,11 +212,32 @@ namespace ts_extra_utilities
         static uint32_t solo_settle = 0;      // frames waited before pinning the solo zoom
         static void* last_forced_anchor = reinterpret_cast< void* >( ~0ull );
 
+        // a loose trailer only matters to the camera while it is near the
+        // truck — one parked in another city (a job trailer waiting to be
+        // picked up, a garage return) must not keep the override alive: it
+        // pinned the solo zoom and re-measured the combination forever
+        void* cam_truck = nullptr;
+        hook_xform_t truck_xf{};
+        bool truck_pos_ok = false;
+        if ( auto* ga = CCore::g_instance->get_game_actor() )
+        {
+            cam_truck = prism::offsets::field< void* >( ga, prism::offsets::game_actor_truck );
+            truck_pos_ok = cam_truck != nullptr && readable_ptr( cam_truck ) && hook_world( cam_truck, truck_xf );
+        }
+        const auto near_truck = [ & ]( void* t )
+        {
+            if ( !truck_pos_ok || t == nullptr || !readable_ptr( t ) ) return true;
+            hook_xform_t tx{};
+            if ( !hook_world( t, tx ) ) return true;
+            const float dx = tx.pos.x - truck_xf.pos.x;
+            const float dz = tx.pos.z - truck_xf.pos.z;
+            return dx * dx + dz * dz < 150.f * 150.f;
+        };
         bool any_detached = false;
         for ( uint32_t i = 0; i < trailer_count; ++i )
         {
             void* t = trailers[ i ];
-            if ( t != nullptr && joint( t ) == nullptr )
+            if ( t != nullptr && joint( t ) == nullptr && near_truck( t ) )
             {
                 any_detached = true;
                 break;
@@ -224,7 +245,7 @@ namespace ts_extra_utilities
         }
         for ( void* d : detached_trailers )
         {
-            if ( d != nullptr ) any_detached = true;
+            if ( d != nullptr && near_truck( d ) ) any_detached = true;
         }
 
         const int wheel = CCore::g_instance->consume_in_game_wheel();
@@ -325,9 +346,13 @@ namespace ts_extra_utilities
                     // value for a moment — capturing it now pins the camera far
                     // behind a truck that tows nothing. Let the native lerp settle
                     if ( ++solo_settle < 90 ) return;
+                    // a distance under 3 m is a camera still in a transition
+                    // (garage exit, cinematic) — pinning it puts the camera
+                    // inside the cab; keep the native behaviour until it settles
+                    const float live_dist = prism::offsets::field< float >( chase, 0x4DC );
+                    if ( live_dist < 3.f ) { solo_settle = 60; return; }
                     saved_zoom_min = prism::offsets::field< float >( chase, 0x480 );
-                    zoom_dist = prism::offsets::field< float >( chase, 0x4DC );
-                    if ( zoom_dist < 0.5f ) zoom_dist = prism::offsets::field< float >( chase, 0x4D8 );
+                    zoom_dist = live_dist;
                 }
                 zoom_dist -= static_cast< float >( wheel ) * ( 2.0f / 120.0f );   // ~2m per notch
                 if ( zoom_dist < 0.5f ) zoom_dist = 0.5f;

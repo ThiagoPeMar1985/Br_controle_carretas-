@@ -244,7 +244,7 @@ namespace ts_extra_utilities
         // puts each parked trailer at its saved ground pose, and refusing
         // that leaves it at the staging pose — it drops nose-first into the
         // ground and the parked lock then freezes the sunken pose
-        if ( self != nullptr && is_plugin_detached( self ) &&
+        if ( settings::g_settings.cargo_restore && self != nullptr && is_plugin_detached( self ) &&
              joint( self ) == nullptr && in_actor_tp )
         {
             CCore::g_instance->info( "trailer teleport skipped: {:p} is plugin-detached", self );
@@ -427,7 +427,7 @@ namespace ts_extra_utilities
                 const float dot = std::fabs( req->quat.w * cur.quat.w + req->quat.x * cur.quat.x +
                                              req->quat.y * cur.quat.y + req->quat.z * cur.quat.z );
                 const float deg = 2.f * std::acos( dot > 1.f ? 1.f : dot ) * 57.29578f;
-                if ( dist < 3000.f ) cargo_seq_ms = steady_ms();
+                if ( dist < 3000.f && settings::g_settings.cargo_restore ) cargo_seq_ms = steady_ms();
                 const bool block = settings::g_settings.cargo_restore && dist < 3000.f;
                 CCore::g_instance->info(
                     "actor teleport request: {:.1f}m, {:.1f}deg turn, a3={} a4={} -> {}",
@@ -1216,6 +1216,31 @@ namespace ts_extra_utilities
             ep->ContextRecord ? reinterpret_cast< void* >( ep->ContextRecord->R8 ) : nullptr,
             ep->ExceptionRecord->NumberParameters > 1
                 ? reinterpret_cast< void* >( ep->ExceptionRecord->ExceptionInformation[ 1 ] ) : nullptr );
+        // RIP outside the exe image = a jump through a freed/corrupt vtable.
+        // The caller is still on the stack: list the first exe addresses found
+        // near RSP so the log shows which game routine made the bad call
+        static int stack_dumps = 0;
+        const auto* dos = reinterpret_cast< const IMAGE_DOS_HEADER* >( base );
+        const auto* nt = reinterpret_cast< const IMAGE_NT_HEADERS64* >( base + dos->e_lfanew );
+        const uint64_t image_end = base + nt->OptionalHeader.SizeOfImage;
+        if ( ep->ContextRecord != nullptr && ( rip < base || rip >= image_end ) && stack_dumps < 4 )
+        {
+            ++stack_dumps;
+            const auto* sp = reinterpret_cast< const uint64_t* >( ep->ContextRecord->Rsp );
+            std::string found;
+            int n = 0;
+            for ( int k = 0; k < 96 && n < 14; ++k )
+            {
+                if ( !readable_ptr( sp + k ) ) break;
+                const uint64_t v = sp[ k ];
+                if ( v >= base && v < image_end )
+                {
+                    found += fmt::format( " [rsp+0x{:X}]=exe+0x{:X}", k * 8, v - base );
+                    ++n;
+                }
+            }
+            CCore::g_instance->warning( "AV stack (RIP outside exe):{}", found );
+        }
         return EXCEPTION_CONTINUE_SEARCH;
     }
     void install_crash_tracer()

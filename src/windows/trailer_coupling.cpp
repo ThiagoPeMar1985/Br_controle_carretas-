@@ -215,9 +215,11 @@ namespace ts_extra_utilities
         const float gap = hook_gap( trailer, parent, parent_is_truck );
         if ( gap < 0.f ) return false; // cannot measure: keep the old fail-open
         CCore::g_instance->info( "Hook gap trailer {:p} to {:p}: {:.2f}m", trailer, parent, gap );
-        // bitrem chains measure ~6-7 m at touching distance — keep one limit
-        // that works for every configuration instead of one per layout
-        return gap > 7.f;
+        // bitrem chains measure ~6.9 m at touching distance (log: 6.85-7.03 m
+        // with the trailers backed right up to each other) and a hair more
+        // when the player stops a little short — 7.0 m refused a correct
+        // coupling. One limit for every layout, with room up to 8.0 m
+        return gap > 8.f;
     }
 
     //========================================================================
@@ -1381,6 +1383,7 @@ namespace ts_extra_utilities
     // same problem plugin detaches needed the detached registry for. Mark the
     // head trailer after every native detach that actually killed its joint
     using native_detach_dispatch_fn = void __fastcall( void* /*game_actor*/, uint8_t /*dl*/, uint64_t /*r8*/ );
+    void* __fastcall hk_trailer_dtor( void* self, uint64_t flags );
     void __fastcall hk_detach_dispatch_raw( void* self, uint8_t dl, uint64_t r8 );
     void __fastcall hk_detach_dispatch( void* self, uint8_t dl, uint64_t r8 )
     {
@@ -1514,6 +1517,8 @@ namespace ts_extra_utilities
     // is refused: wherever the player left it, it stays — the load/unload
     // sequence may not pull it back onto the fifth wheel or the chain.
     // Natively detached trailers are unaffected: T re-attach still works
+    // set by the wrapper: the game itself (not the player's T key) called the attach
+    bool attach_from_game = false;
     void __fastcall hk_attach_dispatch_raw( void* self, uint8_t dl, uint64_t r8, void* settle_override );
     void __fastcall hk_attach_dispatch( void* self, uint8_t dl, uint64_t r8, void* settle_override )
     {
@@ -1535,6 +1540,7 @@ namespace ts_extra_utilities
             CCore::g_instance->warning( "Puxe o freio de mão para engatar" );
             return;
         }
+        attach_from_game = caller != 0x9F7DD6;
         __try { hk_attach_dispatch_raw( self, dl, r8, settle_override ); }
         __except ( EXCEPTION_EXECUTE_HANDLER )
         {
@@ -1611,7 +1617,10 @@ namespace ts_extra_utilities
             hook_xform_t hxf{};
             const bool under_hook = truck != nullptr && hook_world( head, hxf ) &&
                 hook_gap( head, truck, true ) < attach_gap_limit;
-            if ( !under_hook )
+            // checkbox off = the game's own reassembly (teleport to the trailer,
+            // garage, cargo) works like stock: it may couple a parked piece
+            const bool free_mode = !settings::g_settings.cargo_restore && attach_from_game;
+            if ( !under_hook && !free_mode )
             {
                 CCore::g_instance->info( "attach dispatcher skipped: trailer {:p} is plugin-detached", head );
                 return;
@@ -1899,6 +1908,13 @@ namespace ts_extra_utilities
         {
             lamp_mask_hook->hook();
         }
+        trailer_dtor_hook = CCore::g_instance->get_hooks_manager()->register_function_hook(
+            "trailer_dtor", memory::get_address_from_offset( 0x1406359E0 ),
+            reinterpret_cast< uint64_t >( &hk_trailer_dtor ) );
+        if ( trailer_dtor_hook != nullptr )
+        {
+            trailer_dtor_hook->hook();
+        }
         // the propagator's raw +0x2A0 stores bypass the mask setter — the
         // detached-trailer cut has to live here too or the pin loses the
         // per-tick race
@@ -1979,6 +1995,54 @@ namespace ts_extra_utilities
     // check the game crashes on while a trailer is detached, and connect_slave,
     // which would otherwise re-attach the trailers behind the one being connected.
     // Returns false when attach/detach is unavailable on this build.
+    // trailer deleting destructor (0x1406359E0, vtable slot 0): the game
+    // destroys the job trailer when the job is dismissed/finished. Its base
+    // destructor follows trailer_slave and treats whatever it finds as a real
+    // coupled member — our visibility claims (jointless slave links between
+    // parked pieces) make it run teardown on pieces that were never coupled
+    // and it jumps through a bad vtable (log: AV with RIP in the heap, stack
+    // exe+0x6359F4 -> exe+0x7845E5). Cut every claim that touches the dying
+    // trailer before the original runs; maintenance rebuilds the rest
+    using trailer_dtor_fn = void* __fastcall( void* /*self*/, uint64_t /*flags*/ );
+    void* __fastcall hk_trailer_dtor( void* self, uint64_t flags )
+    {
+        if ( self != nullptr && canon_age >= 90 && canon_index_of( self ) >= 0 && is_trailer_obj( self ) )
+        {
+            int cut = 0;
+            for ( uint32_t i = 0; i < max_trailers && canon[ i ] != nullptr; ++i )
+            {
+                void* c = canon[ i ];
+                if ( c == self || !readable_ptr( c ) || !is_trailer_obj( c ) ) continue;
+                if ( prism::offsets::field< void* >( c, prism::offsets::trailer_slave ) == self &&
+                     joint( self ) == nullptr )
+                {
+                    prism::offsets::field< void* >( c, prism::offsets::trailer_slave ) = nullptr;
+                    clear_claim_edge( c );
+                    ++cut;
+                }
+            }
+            void* sl = prism::offsets::field< void* >( self, prism::offsets::trailer_slave );
+            if ( sl != nullptr && ( !is_trailer_obj( sl ) || joint( sl ) == nullptr ) )
+            {
+                prism::offsets::field< void* >( self, prism::offsets::trailer_slave ) = nullptr;
+                ++cut;
+            }
+            // the per-frame sim update calls a vfunc on game_actor+0xC8 — if the
+            // chain head still points at the trailer being freed it reads a
+            // dead object (log: AV at exe+0x4CFBF8 right after the destructors)
+            if ( auto* game_actor = CCore::g_instance->get_game_actor() )
+            {
+                if ( prism::offsets::field< void* >( game_actor, prism::offsets::game_actor_trailer ) == self )
+                {
+                    prism::offsets::field< void* >( game_actor, prism::offsets::game_actor_trailer ) = nullptr;
+                    ++cut;
+                }
+            }
+            CCore::g_instance->info( "trailer destructor on c{}: {} claim link(s) cut", canon_index_of( self ), cut );
+        }
+        return trailer_dtor_hook->get_original< trailer_dtor_fn >()( self, flags );
+    }
+
     SCSAPI_VOID on_parking_brake( const scs_string_t, const scs_u32_t, const scs_value_t* const value, const scs_context_t )
     {
         parking_brake_on.store( value != nullptr && value->value_bool.value != 0, std::memory_order_relaxed );

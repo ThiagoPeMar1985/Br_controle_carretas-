@@ -138,6 +138,7 @@ namespace ts_extra_utilities
     inline std::shared_ptr< CFunctionHook > cam_update_hook = nullptr;
     inline std::shared_ptr< CFunctionHook > lamp_mask_hook = nullptr;
     inline std::shared_ptr< CFunctionHook > lamp_propagate_hook = nullptr;
+    inline std::shared_ptr< CFunctionHook > trailer_dtor_hook = nullptr;
     inline std::shared_ptr< CFunctionHook > set_lines_hook = nullptr;
     inline std::shared_ptr< CFunctionHook > apply_cables_hook = nullptr;
     inline std::shared_ptr< CFunctionHook > rebuild_lines_hook = nullptr;
