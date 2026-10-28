@@ -899,6 +899,58 @@ namespace ts_extra_utilities
         return EXCEPTION_EXECUTE_HANDLER;
     }
 
+    // experimento "ator nativo": loga o que o jogo realmente registra por
+    // carreta — o manager de parked-records (existe? quantos records? de
+    // quem?) e os slots de ator em game_actor+0x1D38. Só leitura
+    void dump_native_registry()
+    {
+        void* mgr = readable_ptr( parked_record_mgr ) ? *parked_record_mgr : nullptr;
+        CCore::g_instance->info( "  registry: global at {:p} (exe+0x{:X}) readable={} raw={:p}",
+            static_cast< void* >( parked_record_mgr ),
+            reinterpret_cast< uint64_t >( parked_record_mgr ) -
+                reinterpret_cast< uint64_t >( GetModuleHandle( nullptr ) ),
+            readable_ptr( parked_record_mgr ), mgr );
+        __try
+        {
+            if ( mgr == nullptr || readable_span( mgr, 0x750 ) < 0x750 )
+            {
+                CCore::g_instance->info( "  registry: parked-record manager {:p} (none)", mgr );
+            }
+            else
+            {
+                void** it = prism::offsets::field< void** >( mgr, 0x740 );
+                const uint64_t n = prism::offsets::field< uint64_t >( mgr, 0x748 );
+                CCore::g_instance->info( "  registry: manager {:p} records={}", mgr, n );
+                if ( it != nullptr && n < 0x40 && readable_span( it, n * sizeof( void* ) ) >= n * sizeof( void* ) )
+                {
+                    for ( uint64_t k = 0; k < n; ++k )
+                    {
+                        void* rec = it[ k ];
+                        void* owner = rec != nullptr && readable_ptr( rec )
+                            ? prism::offsets::field< void* >( rec, 0x178 ) : nullptr;
+                        CCore::g_instance->info( "    record {:p} -> trailer {:p} (c{})",
+                            rec, owner, canon_index_of( owner ) );
+                    }
+                }
+            }
+            if ( auto* game_actor = CCore::g_instance->get_game_actor() )
+            {
+                for ( uint32_t s = 0; s < 8; ++s )
+                {
+                    void* entry = reinterpret_cast< uint8_t* >( game_actor ) + 0x1D38 + s * 0x28;
+                    if ( !readable_ptr( reinterpret_cast< uint8_t* >( entry ) + 8 ) ) break;
+                    void* actor = *reinterpret_cast< void** >( entry );
+                    CCore::g_instance->info( "  actor slot {}: {:p}{}", s, actor,
+                        actor != nullptr && plausible_object( actor ) ? "" : " (empty)" );
+                }
+            }
+        }
+        __except ( EXCEPTION_EXECUTE_HANDLER )
+        {
+            CCore::g_instance->warning( "registry dump faulted" );
+        }
+    }
+
     // O record da carreta está realmente dentro da scan-list do manager?
     // Um record linkado em +0x1188 mas ausente de mgr+0x740/+0x748 é INERTE —
     // o re-assert de pose só itera esse array, então uma carreta vinda de

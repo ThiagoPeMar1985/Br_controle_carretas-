@@ -105,6 +105,7 @@ namespace ts_extra_utilities
     void sanitize_phys_walk( void* );
     void prune_lane_containers();
     void native_park_detached( void* );
+    void dump_native_registry();
     void update_parked_locks();
     void unpark_jointed( const bool* in_convoy );
     void update_convoy_brakes( void* truck, const bool* in_convoy );

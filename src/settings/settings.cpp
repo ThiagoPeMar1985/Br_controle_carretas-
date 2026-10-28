@@ -188,6 +188,8 @@ namespace ts_extra_utilities::settings
         g_settings.steering_speed = 0.5f;
         g_settings.oversize_collapsed = false;
         g_settings.keys_width = 250.f;
+        g_settings.ui_tab = 0;
+        g_settings.license_key[ 0 ] = 0;
         g_settings.trailer_brake_boost = 0.f;
         g_settings.air_boost = 0;
 
@@ -245,6 +247,12 @@ namespace ts_extra_utilities::settings
         g_settings.reverse_lift = GetPrivateProfileIntW( L"axle_lift", L"reverse_lift", 1, path.c_str() ) != 0;
         g_settings.cargo_restore = GetPrivateProfileIntW( L"general", L"cargo_restore", 1, path.c_str() ) != 0;
         g_settings.oversize_collapsed = GetPrivateProfileIntW( L"general", L"oversize_collapsed", 0, path.c_str() ) != 0;
+        g_settings.ui_tab = GetPrivateProfileIntW( L"general", L"ui_tab", 0, path.c_str() );
+        if ( g_settings.ui_tab < -1 || g_settings.ui_tab > 3 ) g_settings.ui_tab = 0;
+        wchar_t lic_in[ 256 ] = {};
+        GetPrivateProfileStringW( L"license", L"key", L"", lic_in, 256, path.c_str() );
+        WideCharToMultiByte( CP_UTF8, 0, lic_in, -1,
+            g_settings.license_key, sizeof( g_settings.license_key ), nullptr, nullptr );
 
         wchar_t value[ 32 ] = {};
         GetPrivateProfileStringW( L"steering", L"speed", L"", value, 32, path.c_str() );
@@ -288,6 +296,11 @@ namespace ts_extra_utilities::settings
             g_settings.cargo_restore ? L"1" : L"0", path.c_str() );
         WritePrivateProfileStringW( L"general", L"oversize_collapsed",
             g_settings.oversize_collapsed ? L"1" : L"0", path.c_str() );
+        WritePrivateProfileStringW( L"general", L"ui_tab",
+            std::to_wstring( g_settings.ui_tab ).c_str(), path.c_str() );
+        wchar_t lic_out[ 256 ] = {};
+        MultiByteToWideChar( CP_UTF8, 0, g_settings.license_key, -1, lic_out, 256 );
+        WritePrivateProfileStringW( L"license", L"key", lic_out, path.c_str() );
         wchar_t buf[ 32 ] = {};
         swprintf_s( buf, L"%.2f", static_cast< double >( g_settings.steering_speed ) );
         WritePrivateProfileStringW( L"steering", L"speed", buf, path.c_str() );

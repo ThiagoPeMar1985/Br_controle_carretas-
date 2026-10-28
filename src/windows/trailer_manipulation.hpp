@@ -24,6 +24,10 @@ namespace ts_extra_utilities
         void render_keybind_row( int i ) const;
         void render_keybinds() const;
         void render_oversize() const;
+        void render_keys_tab() const;
+        void render_oversize_tab() const;
+        void render_trailers_tab() const;
+        void render_license_tab() const;
         void connect_trailer( uint32_t i ) const;
         void disconnect_trailer( uint32_t i ) const;
         void toggle_attach( uint32_t i ) const;

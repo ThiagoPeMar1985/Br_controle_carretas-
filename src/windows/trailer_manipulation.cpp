@@ -138,8 +138,7 @@ namespace ts_extra_utilities
             char* const tl = live_obj ? static_cast< char* >( t ) : nullptr;
             const uint8_t e8d = tl != nullptr ? *reinterpret_cast< uint8_t* >( tl + 0xE8D ) : uint8_t( 0xFF );
             const uint32_t ent = tl != nullptr
-                ? static_cast< uint32_t >( ( *reinterpret_cast< uint64_t* >( tl + 0xEA0 ) -
-                      *reinterpret_cast< uint64_t* >( tl + 0xE98 ) ) / 8 ) : 0;
+                ? static_cast< uint32_t >( *reinterpret_cast< uint64_t* >( tl + 0xEA0 ) ) : 0;
             CCore::g_instance->info(
                 "  c{} {:p} joint={:p} parent={:p} slave={:p} rec={:p} "
                 "det={} pdet={} parked={} e8d={} ent={} {}",
@@ -153,6 +152,7 @@ namespace ts_extra_utilities
                 e8d, ent,
                 live_obj ? "" : "DEAD" );
         }
+        dump_native_registry();
     }
 
     // qualquer entrada do canon que deixou de ser um objeto-carreta válido
@@ -807,14 +807,42 @@ namespace ts_extra_utilities
         ImGui::PushStyleColor( ImGuiCol_CheckMark, ui::pdv( 0x27AE60 ) );
         ImGui::PushStyleColor( ImGuiCol_Separator, ui::pdv( 0x444444 ) );
 
-        ImGui::SetNextWindowSize( ImVec2( 1150.f, 500.f ), ImGuiCond_FirstUseEver );
+        ImGui::SetNextWindowSize( ImVec2( 560.f, 540.f ), ImGuiCond_FirstUseEver );
         ImGui::Begin( "Controle de Carretas" );
 
-        // left pane: keybinds, resizable by dragging the right border — the
-        // chosen width is kept in settings.ini
-        const float left_w = settings::g_settings.keys_width;
-        ImGui::BeginChild( "##keybinds", ImVec2( left_w, 0.f ),
-            ImGuiChildFlags_Border | ImGuiChildFlags_ResizeX );
+        // folder tabs: click switches, re-clicking the open tab collapses it
+        // for the session — the open tab itself is persisted to settings.ini
+        static const char* tab_names[] = { "Teclas", "Oversize", "Carretas", "Licença" };
+        for ( int t = 0; t < 4; ++t )
+        {
+            if ( t > 0 ) ImGui::SameLine();
+            const bool open = settings::g_settings.ui_tab == t;
+            if ( ImGui::Selectable( tab_names[ t ], open, 0, ImVec2( 110.f, 0.f ) ) )
+            {
+                settings::g_settings.ui_tab = open ? -1 : t;
+                if ( !open ) settings::save();
+            }
+        }
+        ImGui::Separator();
+
+        switch ( settings::g_settings.ui_tab )
+        {
+        case 0: this->render_keys_tab(); break;
+        case 1: this->render_oversize_tab(); break;
+        case 2: this->render_trailers_tab(); break;
+        case 3: this->render_license_tab(); break;
+        default: break;
+        }
+
+        ImGui::End();
+        ImGui::PopStyleColor( 16 );
+        ImGui::PopStyleVar( 5 );
+    }
+
+    // the Teclas tab: the window binds plus every truck-side assist
+    void CTrailerManipulation::render_keys_tab() const
+    {
+        ImGui::BeginChild( "##keys", ImVec2( 0.f, 0.f ) );
         ImGui::SeparatorText( "Teclas" );
         this->render_keybinds();
         ImGui::SeparatorText( "Assistente" );
@@ -853,48 +881,22 @@ namespace ts_extra_utilities
         ImGui::TextWrapped( "Compressor por rotação" );
         ImGui::TextDisabled( "multiplica a produção de ar (que já sobe com o giro) — sem mexer no consumo" );
         ImGui::EndChild();
-        // the pane re-lays itself out automatically since every child sizes
-        // from the available width; persist once the user lets go
-        const float dragged_w = ImGui::GetItemRectSize().x;
-        if ( dragged_w > 0.f && dragged_w != settings::g_settings.keys_width )
-        {
-            settings::g_settings.keys_width = dragged_w;
-            if ( !ImGui::IsMouseDown( ImGuiMouseButton_Left ) ) settings::save();
-        }
+    }
 
-        ImGui::SameLine();
+    // the Oversize tab: steerable-axle controls (trailer_steering.cpp)
+    void CTrailerManipulation::render_oversize_tab() const
+    {
+        ImGui::BeginChild( "##oversize", ImVec2( 0.f, 0.f ) );
+        ImGui::SeparatorText( "Oversize" );
+        this->render_oversize();
+        ImGui::EndChild();
+    }
 
-        // Oversize (steerable-axle) pane next to the keys — collapsible to a
-        // thin strip so it stays out of the way when unused
-        if ( settings::g_settings.oversize_collapsed )
-        {
-            ImGui::BeginChild( "##oversize_min", ImVec2( 34.f, 0.f ), ImGuiChildFlags_Border );
-            if ( ImGui::Button( ">>", ImVec2( -1.f, ImGui::GetFrameHeight() ) ) )
-            {
-                settings::g_settings.oversize_collapsed = false;
-                settings::save();
-            }
-            ImGui::EndChild();
-        }
-        else
-        {
-            ImGui::BeginChild( "##oversize", ImVec2( 290.f, 0.f ), ImGuiChildFlags_Border );
-            if ( ImGui::Button( "<<", ImVec2( ImGui::GetFrameHeight() * 1.6f, 0.f ) ) )
-            {
-                settings::g_settings.oversize_collapsed = true;
-                settings::save();
-            }
-            ImGui::SameLine();
-            ImGui::SeparatorText( "Oversize" );
-            this->render_oversize();
-            ImGui::EndChild();
-        }
-
-        ImGui::SameLine();
-
-        // right pane: one column per trailer, side by side — CANON order so
-        // "Carreta N" is always the same physical piece no matter how the
-        // rotated trailers[] list is currently arranged
+    // the Carretas tab: one fixed column per trailer, side by side — CANON
+    // order so "Carreta N" is always the same physical piece no matter how
+    // the rotated trailers[] list is currently arranged
+    void CTrailerManipulation::render_trailers_tab() const
+    {
         ImGui::BeginChild( "##trailers", ImVec2( 0.f, 0.f ) );
         uint32_t canon_count = 0;
         while ( canon_count < max_trailers && canon[ canon_count ] != nullptr ) ++canon_count;
@@ -927,11 +929,82 @@ namespace ts_extra_utilities
             }
         }
         ImGui::EndChild();
-
-        ImGui::End();
-        ImGui::PopStyleColor( 16 );
-        ImGui::PopStyleVar( 5 );
     }
+
+    // the Licença tab — screen only: the key is stored in settings.ini, the
+    // validation/generation is not wired yet, so nothing is ever locked
+    void CTrailerManipulation::render_license_tab() const
+    {
+        ImGui::BeginChild( "##license", ImVec2( 0.f, 0.f ) );
+
+        ImGui::SeparatorText( "Sobre" );
+        ImGui::TextWrapped( "BR Controle de Carretas" );
+        ImGui::TextWrapped( "Copyright periard_br — todos os direitos reservados." );
+        ImGui::TextWrapped( "Feito por periard_br. Contato com o desenvolvedor no Discord: periard_br" );
+        ui::text_disabled_wrapped(
+            "usa um mapa em que o plugin trava ou não funciona? chame no "
+            "Discord e peça um bypass ou as correções necessárias para esse mapa" );
+
+        ImGui::SeparatorText( "Máquina" );
+        ImGui::TextWrapped( "ID do hardware" );
+        ImGui::Selectable( "(indisponível nesta versão)", false,
+            ImGuiSelectableFlags_Disabled, ImVec2( 170.f, 0.f ) );
+        ui::text_disabled_wrapped(
+            "envie este código na compra — a licença fica atrelada a este PC" );
+
+        ImGui::SeparatorText( "Licença" );
+        // edit buffer kept apart from the stored key: typing must not disturb
+        // the saved key — only Ativar commits it
+        static char edit_key[ 256 ] = {};
+        static bool edit_loaded = false;
+        if ( !edit_loaded )
+        {
+            strncpy_s( edit_key, settings::g_settings.license_key, _TRUNCATE );
+            edit_loaded = true;
+        }
+        ImGui::SetNextItemWidth( -1.f );
+        ImGui::InputTextWithHint( "##license_key", "cole a chave emitida pelo site",
+            edit_key, sizeof( edit_key ) );
+        if ( ImGui::Button( "Ativar" ) )
+        {
+            strncpy_s( settings::g_settings.license_key, edit_key, _TRUNCATE );
+            settings::save();
+        }
+        ImGui::SameLine();
+        ImGui::BeginDisabled( settings::g_settings.license_key[ 0 ] == 0 );
+        if ( ImGui::Button( "Limpar" ) )
+        {
+            edit_key[ 0 ] = 0;
+            settings::g_settings.license_key[ 0 ] = 0;
+            settings::save();
+        }
+        ImGui::EndDisabled();
+        if ( settings::g_settings.license_key[ 0 ] == 0 )
+            ui::text_disabled_wrapped( "nenhuma chave informada" );
+        else
+            ui::text_disabled_wrapped( "chave salva — a validação ainda não está ativa nesta versão" );
+        ImGui::TextWrapped(
+            "A licença é ANUAL: vale por 365 dias a partir da ativação. "
+            "Depois desse prazo ela expira e o plugin fica bloqueado até a "
+            "licença ser renovada." );
+
+        ImGui::SeparatorText( "Compra" );
+        ui::text_disabled_wrapped(
+            "a página da loja está sendo preparada — o link de compra abrirá "
+            "por este botão quando estiver no ar" );
+        ImGui::BeginDisabled();
+        ImGui::Button( "Abrir página da loja" );
+        ImGui::EndDisabled();
+
+        ImGui::SeparatorText( "Privacidade" );
+        ui::text_disabled_wrapped(
+            "nenhum dado é coletado. o hash do ID do hardware é usado somente "
+            "para gerar a sua licença — nada é enviado para lugar nenhum e "
+            "nada é guardado além da chave que você cola aqui" );
+
+        ImGui::EndChild();
+    }
+
     //========================================================================
     // Per-frame update — chain refresh, convoy state, attach hotkeys
     //========================================================================
@@ -1332,6 +1405,16 @@ namespace ts_extra_utilities
             // pieces WE parked: a trailer mid-spawn during world load is
             // jointless with half-built line entities and tearing them
             // down then crashes the build
+            // safety net: a piece that is not coupled to anything must never
+            // show hoses — re-run the once-per-mark teardown about once a
+            // second, so whatever re-raised the entities (respawn, native
+            // cascade, the game's own line pass) is undone
+            static uint32_t torn_tick = 0;
+            if ( ++torn_tick >= 60 )
+            {
+                torn_tick = 0;
+                for ( auto& torn : lines_torn ) torn = false;
+            }
             for ( uint32_t i = 0; i < ln && tp_cooldown <= 0; ++i )
             {
                 if ( !jl[ i ] ) continue;
@@ -1373,13 +1456,40 @@ namespace ts_extra_utilities
                 if ( ci >= 0 && lines_torn[ ci ] ) continue;
                 char* const tl = static_cast< char* >( live[ i ] );
                 void* const lbeg = *reinterpret_cast< void** >( tl + 0xE98 );
-                void* const lend = *reinterpret_cast< void** >( tl + 0xEA0 );
-                const ptrdiff_t nent = static_cast< const char* >( lend ) -
-                    static_cast< const char* >( lbeg );
+                // +0xE98 = array pointer, +0xEA0 = ENTRY COUNT (not an end
+                // pointer — reading it as one made nent garbage and the
+                // teardown below never ran)
+                const ptrdiff_t nent = static_cast< ptrdiff_t >( *reinterpret_cast< uint64_t* >( tl + 0xEA0 ) );
                 if ( nent > 0 && nent <= 0x1000 && readable_ptr( lbeg ) )
                 {
                     set_lines_fn( live[ i ], 0, 1 );
                     if ( ci >= 0 ) lines_torn[ ci ] = true;
+                }
+            }
+            // an uncoupled slave edge must carry no cable: a coupled piece
+            // whose slave claim points at a jointless canon piece gets the
+            // connector pair + its outgoing lines broken, about once a second
+            // (the respawn / native passes rebuild them after the first break)
+            static bool edge_done[ max_trailers ] = {};
+            if ( torn_tick == 0 ) for ( auto& d : edge_done ) d = false;
+            for ( uint32_t i = 0; i < ln && tp_cooldown <= 0; ++i )
+            {
+                void* p = live[ i ];
+                if ( joint( p ) == nullptr ) continue;
+                void* sl = prism::offsets::field< void* >( p, prism::offsets::trailer_slave );
+                if ( sl == nullptr || sl == p || !is_trailer_obj( sl ) || joint( sl ) != nullptr ) continue;
+                const int si = canon_index_of( sl );
+                if ( si < 0 || edge_done[ si ] ) continue;
+                edge_done[ si ] = true;
+                CCore::g_instance->info( "uncoupled edge c{} -> c{}: breaking its cables", canon_index_of( p ), si );
+                if ( set_lines_fn != nullptr ) set_lines_fn( sl, 0, 1 );
+                if ( pair_vehicles_fn != nullptr ) pair_vehicles_fn( p, sl );
+                if ( rebuild_lines_fn != nullptr )
+                {
+                    void* keep = prism::offsets::field< void* >( sl, prism::offsets::trailer_slave );
+                    prism::offsets::field< void* >( sl, prism::offsets::trailer_slave ) = nullptr;
+                    rebuild_lines_fn( p, nullptr );
+                    prism::offsets::field< void* >( sl, prism::offsets::trailer_slave ) = keep;
                 }
             }
             bool any_parked = false;

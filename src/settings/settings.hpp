@@ -41,6 +41,10 @@ namespace ts_extra_utilities::settings
         bool oversize_collapsed = false;
         // width of the keybinds pane, user-resizable
         float keys_width = 250.f;
+        // active UI tab (0 Teclas, 1 Oversize, 2 Carretas, 3 Licença); -1 = collapsed
+        int32_t ui_tab = 0;
+        // license key issued by the site (screen only, not validated yet)
+        char license_key[ 256 ] = {};
         // extra brake factor forwarded to coupled trailers, in percent of the
         // truck's value (0 = native balance): the trailers brake proportionally
         // harder so they take the load first on slippery surfaces
