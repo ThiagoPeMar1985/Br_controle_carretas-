@@ -41,6 +41,7 @@ namespace ts_extra_utilities
     // sem junta por alguns frames no meio do movimento e a âncora as
     // arrastaria de volta pro ponto pré-teleporte
     int tp_cooldown = 0;
+    int tp_block_watch = 0;
     // um teleport de ATOR (doca/carga/balsa/garagem — o que move o conjunto
     // inteiro) está em voo agora — a recusa do hk_trailer_teleport só vale
     // dentro dele; teleports isolados (ex.: o snap de posicionamento do
@@ -167,7 +168,7 @@ namespace ts_extra_utilities
             // a marked slot whose previous slot is also marked belongs to the
             // same parked section — the section head's walk below covers it;
             // disconnecting it here would split the parked combination apart
-            if ( i > 0 && detached_idx[ i - 1 ] && canon[ i - 1 ] != nullptr ) continue;
+            if ( i > 0 && detached_idx[ i - 1 ] && canon[ i - 1 ] != nullptr && !own_head[ i ] ) continue;
             void* t = canon[ i ];
             if ( t == nullptr || !readable_ptr( t ) || joint( t ) == nullptr ) continue;
 
@@ -198,6 +199,8 @@ namespace ts_extra_utilities
                     using teleport_fn_t = void __fastcall( void* /*trailer*/, void* /*transform*/ );
                     trailer_teleport_hook->get_original< teleport_fn_t >()( m, &parked_xform[ mi ] );
                     anchor_valid[ mi ] = false;
+                    if ( carry_hold[ mi ] ) carry_park[ mi ] = 20;
+                    carry_hold[ mi ] = false;
                 }
                 void* next = prism::offsets::field< void* >( m, prism::offsets::trailer_slave );
                 m = ( next != m && next != nullptr && joint( next ) != nullptr ) ? next : nullptr;
@@ -409,6 +412,35 @@ namespace ts_extra_utilities
             actor_teleport_hook->get_original< actor_teleport_fn >()( self, arg, a3, a4 );
             return;
         }
+        if ( arg != nullptr && readable_ptr( arg ) )
+        {
+            const auto* req = static_cast< const hook_xform_t* >( arg );
+            hook_xform_t cur{};
+            void* truck = nullptr;
+            if ( auto* game_actor = CCore::g_instance->get_game_actor() )
+                truck = prism::offsets::field< void* >( game_actor, prism::offsets::game_actor_truck );
+            if ( truck != nullptr && hook_world( truck, cur ) )
+            {
+                const float dx = req->pos.x - cur.pos.x;
+                const float dz = req->pos.z - cur.pos.z;
+                const float dist = std::sqrt( dx * dx + dz * dz );
+                const float dot = std::fabs( req->quat.w * cur.quat.w + req->quat.x * cur.quat.x +
+                                             req->quat.y * cur.quat.y + req->quat.z * cur.quat.z );
+                const float deg = 2.f * std::acos( dot > 1.f ? 1.f : dot ) * 57.29578f;
+                if ( dist < 3000.f ) cargo_seq_ms = steady_ms();
+                const bool block = settings::g_settings.cargo_restore && dist < 3000.f;
+                CCore::g_instance->info(
+                    "actor teleport request: {:.1f}m, {:.1f}deg turn, a3={} a4={} -> {}",
+                    dist, deg, a3, a4, block ? "BLOCKED" : "passed" );
+                dump_chain( "pre-actor-tp" );
+                if ( block )
+                {
+                    tp_block_watch = 120;
+                    carry_arm_tick = GetTickCount64();
+                    return;
+                }
+            }
+        }
         bool has_detached_slots = rig_armed;
         for ( bool detached : detached_idx ) has_detached_slots |= detached;
 
@@ -542,10 +574,79 @@ namespace ts_extra_utilities
         }
     }
 
+    // the manual detach lowers the landing gear through vfunc_set_brace before
+    // anything else — the park sequence alone never builds the support body
+    void carry_set_brace( void* t )
+    {
+        __try
+        {
+            vcall< prism::physics_trailer_u_set_trailer_brace_fn >( t, prism::offsets::vfunc_set_brace, true );
+        }
+        __except ( EXCEPTION_EXECUTE_HANDLER )
+        {
+            CCore::g_instance->warning( "set_brace faulted on {:p}", t );
+        }
+    }
+
     // Watches detached slots after the cargo cinematic and restores their
     // saved transforms once the game finishes reattaching the respawned rig.
     void coupling_parked_update()
     {
+        if ( tp_block_watch > 0 && ( --tp_block_watch == 60 || tp_block_watch == 0 ) )
+            dump_chain( tp_block_watch == 0 ? "post-actor-tp-blocked+120f" : "post-actor-tp-blocked+60f" );
+        for ( uint32_t i = 0; i < max_trailers; ++i )
+        {
+            if ( carry_park[ i ] <= 0 || --carry_park[ i ] != 0 ) continue;
+            void* t = canon[ i ];
+            if ( t != nullptr && readable_ptr( t ) && joint( t ) == nullptr )
+            {
+                carry_set_brace( t );
+                native_park_detached( t );
+                CCore::g_instance->info( "carried slot {} parked natively (landing gear + brake)", i );
+            }
+        }
+        // a trailer the truck does not reach is parked: hold the spring brake
+        // every frame (same fields the manual detach writes once) so a
+        // respawned or game-reattached piece never rolls off its spot. Section
+        // members jointed behind a loose head are not live either
+        if ( carry_brake_frames > 0 && canon_age >= 10 )
+        {
+            --carry_brake_frames;
+            for ( uint32_t i = 0; i < max_trailers && canon[ i ] != nullptr; ++i )
+            {
+                void* t = canon[ i ];
+                if ( !is_trailer_obj( t ) || trailer_is_live( t ) ) continue;
+                prism::offsets::field< float >( t, prism::offsets::trailer_brake ) = 1.f;
+                prism::offsets::field< float >( t, prism::offsets::trailer_service_brake ) = 0.f;
+                prism::offsets::field< uint8_t >( t, prism::offsets::trailer_brake_forced ) = 1;
+            }
+        }
+        bool any_hold = false;
+        for ( bool h : carry_hold ) any_hold |= h;
+        if ( any_hold && ++carry_frames > 900 )
+        {
+            for ( auto& h : carry_hold ) h = false;
+            any_hold = false;
+        }
+        if ( any_hold && canon_age >= 120 )
+        {
+            for ( uint32_t i = 0; i < max_trailers && canon[ i ] != nullptr; ++i )
+            {
+                void* t = canon[ i ];
+                if ( !carry_hold[ i ] || !readable_ptr( t ) || joint( t ) != nullptr ) continue;
+                if ( parked_xform_valid[ i ] && trailer_teleport_hook != nullptr )
+                {
+                    using teleport_fn_t = void __fastcall( void*, void* );
+                    trailer_teleport_hook->get_original< teleport_fn_t >()( t, &parked_xform[ i ] );
+                    anchor_valid[ i ] = false;
+                }
+                mark_detached( t );
+                mark_plugin_detached( t );
+                carry_hold[ i ] = false;
+                carry_park[ i ] = 20;
+                CCore::g_instance->info( "carried slot {} respawned jointless — put back at its parked pose", i );
+            }
+        }
         bool in_section = false;
         for ( uint32_t i = 0; i < max_trailers && canon[ i ] != nullptr; ++i )
         {
@@ -556,9 +657,10 @@ namespace ts_extra_utilities
                 if ( joint( t ) == nullptr )
                 {
                     in_section = true;
+                    own_head[ i ] = true;
                     rejoined_frames[ i ] = 0;
                     hook_xform_t xf{};
-                    if ( hook_world( t, xf ) ) { parked_xform[ i ] = xf; parked_xform_valid[ i ] = true; }
+                    if ( !carry_hold[ i ] && hook_world( t, xf ) ) { parked_xform[ i ] = xf; parked_xform_valid[ i ] = true; }
                 }
                 else
                 {
@@ -569,6 +671,7 @@ namespace ts_extra_utilities
                     }
                     else if ( ++rejoined_frames[ i ] >= 30 && pending.kind == pending_kind::none )
                     {
+                        rejoined_frames[ i ] = 0;
                         if ( sim_is_quiet() )
                         {
                             CCore::g_instance->info( "restoring parked section early (sim suspended)" );
@@ -584,7 +687,7 @@ namespace ts_extra_utilities
             else if ( in_section && joint( t ) != nullptr )
             {
                 hook_xform_t xf{};
-                if ( hook_world( t, xf ) ) { parked_xform[ i ] = xf; parked_xform_valid[ i ] = true; }
+                if ( !carry_hold[ i ] && hook_world( t, xf ) ) { parked_xform[ i ] = xf; parked_xform_valid[ i ] = true; }
             }
             else
             {
@@ -1375,12 +1478,18 @@ namespace ts_extra_utilities
                 // diagnóstico one-shot: se a âncora re-pina dezenas de vezes
                 // seguidas, algo está brigando pela pose (a carreta
                 // "balançando sozinha") — o drift médio diz quão forte
-                if ( ++anchor_fixes[ i ] == 60 )
+                if ( ++anchor_fixes[ i ] >= 30 )
                 {
-                    CCore::g_instance->warning(
-                        "anchor: c{} re-pinada {}x — drift atual {:.3f}m (briga pela pose?)",
+                    // 30 re-pins in a row: the stored pose and the physics
+                    // disagree (the pose sits a little inside the ground or
+                    // off the gear) — keep fighting and the trailer bobs.
+                    // Drop the pin and let the settle phase capture the pose
+                    // the physics actually holds
+                    CCore::g_instance->info(
+                        "anchor: c{} fought the pose {}x (drift {:.3f}m) — recapturing",
                         i, anchor_fixes[ i ],
                         std::sqrt( mx * mx + my * my + mz * mz ) );
+                    anchor_valid[ i ] = false;
                 }
             }
         }

@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <utility>
@@ -402,6 +403,47 @@ namespace ts_extra_utilities
     // frames the marked slot has spent jointed — the restore only fires after
     // the cargo cinematic's own writes settle (~half a second)
     inline uint32_t rejoined_frames[ max_trailers ] = {};
+    // a blocked cargo/delivery teleport arms this (GetTickCount64): the world
+    // respawn that follows wipes the tracker, so reset_trailer_state carries
+    // the detached slots + parked poses over to the fresh objects, and
+    // carry_hold keeps maintenance from treating the respawned (jointed)
+    // piece as a stale mark until restore_parked puts it back
+    inline uint64_t carry_arm_tick = 0;
+    inline bool carry_hold[ max_trailers ] = {};
+    // a marked slot that was jointless by itself (parked on its own) — two
+    // adjacent marked slots are separate parked pieces, not one section, and
+    // the restore must split them again when the respawn joins them
+    inline bool own_head[ max_trailers ] = {};
+    inline uint32_t carry_brake_frames = 0;
+    inline uint32_t carry_frames = 0;
+    // frames until a carried trailer gets the real park sequence (landing
+    // gear body + brake + registration) — a respawned piece comes back
+    // marked but never parked, so it sags on its own nose and the emulated
+    // anchor fights it every frame (the wobble)
+    inline int carry_park[ max_trailers ] = {};
+    // truck.brake.parking telemetry — manual connects need the handbrake on
+    inline std::atomic< bool > parking_brake_on{ false };
+    inline std::atomic< bool > parking_brake_known{ false };
+    inline uint64_t cargo_seq_ms = 0;
+    inline uint64_t steady_ms()
+    {
+        return static_cast< uint64_t >( std::chrono::duration_cast< std::chrono::milliseconds >(
+            std::chrono::steady_clock::now().time_since_epoch() ).count() );
+    }
+    // every attach/detach — plugin buttons and the game's own T key — only
+    // happens with the handbrake pulled, so a stray key press can never drop
+    // a trailer on the road. The game's own cargo/delivery sequence (an actor
+    // teleport within the last 20 s) is exempt: it detaches by itself
+    inline bool in_cargo_window()
+    {
+        return cargo_seq_ms != 0 && steady_ms() - cargo_seq_ms < 20000;
+    }
+    inline bool handbrake_ok( const bool cargo_exempt = true )
+    {
+        if ( !parking_brake_known.load( std::memory_order_relaxed ) ||
+             parking_brake_on.load( std::memory_order_relaxed ) ) return true;
+        return cargo_exempt && in_cargo_window();
+    }
 
     // chase camera (vehicle_behind_rotation_camera) — resolved once from the
     // camera manager. +0x3F0 is its anchor target; the native resolver stores
@@ -534,6 +576,7 @@ namespace ts_extra_utilities
     void air_register_channels();                // trailer_air.cpp — psi/rpm telemetry channels
     void update_air( float dt );                 // trailer_air.cpp — closed-loop fill boost
     bool coupling_install();                     // trailer_coupling.cpp — hooks + native fns; false = indisponível
+    void coupling_register_channels();           // trailer_coupling.cpp — handbrake telemetry for the attach/detach rule
     void coupling_parked_update();               // trailer_loadstate.cpp — cargo respawn watch + rig restore
     void render_cargo_restore_option();          // trailer_loadstate.cpp — checkbox + setting persistence
     extern void* attach_target;                  // trailer_coupling.cpp — trailer picked for the native T attach

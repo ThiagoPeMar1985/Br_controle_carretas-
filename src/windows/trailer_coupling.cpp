@@ -802,6 +802,13 @@ namespace ts_extra_utilities
             rebuild_lines_fn( parent, trailer );
             prism::offsets::field< void* >( trailer, prism::offsets::trailer_slave ) = slave;
         }
+        // the piece was torn down when it parked (line entities hidden with
+        // state=0) — a rebuilt edge stays invisible until the lists are raised
+        if ( set_lines_fn != nullptr )
+        {
+            set_lines_fn( trailer, 1, 1 );
+            if ( !parent_is_truck ) set_lines_fn( parent, 1, 1 );
+        }
         // same accessory event refresh the native attach runs on the trailer
         if ( refresh_accessories_fn != nullptr && parent != nullptr )
         {
@@ -857,6 +864,7 @@ namespace ts_extra_utilities
         // pieces that stayed jointed behind the reattached head kept their
         // parked half-state — re-assert them too
         unhide_detached();
+        dump_chain( "post-connect" );
     }
 
     // puts back what a cargo load/unload respawn destroyed: every marked
@@ -1131,9 +1139,6 @@ namespace ts_extra_utilities
                 if ( !is_trailer_obj( next ) && next != truck &&
                      !plausible_vfunc( next, 99 ) )
                 {
-                    CCore::g_instance->warning(
-                        "phys walk: severed dead link {:p} -> {:p}", cur, next );
-                    prism::offsets::field< void* >( cur, edge ) = nullptr;
                     break;
                 }
                 cur = next;
@@ -1379,6 +1384,22 @@ namespace ts_extra_utilities
     void __fastcall hk_detach_dispatch_raw( void* self, uint8_t dl, uint64_t r8 );
     void __fastcall hk_detach_dispatch( void* self, uint8_t dl, uint64_t r8 )
     {
+        // only the player's T key (caller exe+0x9F7DAE, seen in the logs) is
+        // bound by the handbrake rule — the game's own detach (delivery,
+        // world teardown on load/quit, caller exe+0x5DBED6) must always run
+        // or the old world is torn down half-way
+        const uint64_t caller = reinterpret_cast< uint64_t >( _ReturnAddress() ) -
+            reinterpret_cast< uint64_t >( GetModuleHandle( nullptr ) );
+        const bool allowed = caller != 0x9F7DAE || canon_age < 90 || handbrake_ok();
+        CCore::g_instance->info( "detach dispatch from exe+0x{:X}: handbrake {} -> {}",
+            caller,
+            parking_brake_on.load( std::memory_order_relaxed ) ? "on" : "off",
+            allowed ? "allowed" : "REFUSED" );
+        if ( !allowed )
+        {
+            CCore::g_instance->warning( "Puxe o freio de mão para desengatar" );
+            return;
+        }
         // a fault on a respawned-away trailer (workshop/garage rebuilds kill
         // canon pointers mid-frame) must never reach the game — reset and
         // let the next pass rebuild from live state
@@ -1428,6 +1449,11 @@ namespace ts_extra_utilities
         detach_dispatch_hook->get_original< native_detach_dispatch_fn >()( self, dl, r8 );
         native_chain_call_active.store( false, std::memory_order_release );
         dump_chain( "post-detach(T)" );
+        // the native detach cascade re-raises the line entities of pieces
+        // behind the released head — the once-per-mark teardown of the loose
+        // pieces must run again or their old hoses hang in the air (T3's
+        // cable still tied to T2 from 100 m away)
+        for ( auto& torn : lines_torn ) torn = false;
         if ( self == nullptr ) return;
         void* t = prism::offsets::field< void* >( self, prism::offsets::game_actor_trailer );
         if ( t != nullptr && joint( t ) == nullptr )
@@ -1491,6 +1517,24 @@ namespace ts_extra_utilities
     void __fastcall hk_attach_dispatch_raw( void* self, uint8_t dl, uint64_t r8, void* settle_override );
     void __fastcall hk_attach_dispatch( void* self, uint8_t dl, uint64_t r8, void* settle_override )
     {
+        // the delivery/dock sequence never needs an attach — a game-driven
+        // re-attach there is what yanks the parked pieces around
+        // the handbrake rule binds the player's T key only (caller
+        // exe+0x9F7DD6); the game's own attach (world assembly, caller
+        // exe+0x5DC731) is left alone — except inside the cargo window
+        const uint64_t caller = reinterpret_cast< uint64_t >( _ReturnAddress() ) -
+            reinterpret_cast< uint64_t >( GetModuleHandle( nullptr ) );
+        const bool allowed = !in_cargo_window() &&
+            ( caller != 0x9F7DD6 || canon_age < 90 || handbrake_ok( false ) );
+        CCore::g_instance->info( "attach dispatch from exe+0x{:X}: handbrake {} -> {}",
+            caller,
+            parking_brake_on.load( std::memory_order_relaxed ) ? "on" : "off",
+            allowed ? "allowed" : "REFUSED" );
+        if ( !allowed )
+        {
+            CCore::g_instance->warning( "Puxe o freio de mão para engatar" );
+            return;
+        }
         __try { hk_attach_dispatch_raw( self, dl, r8, settle_override ); }
         __except ( EXCEPTION_EXECUTE_HANDLER )
         {
@@ -1499,6 +1543,7 @@ namespace ts_extra_utilities
                                         canon_alive ? "kept" : "reset" );
             if ( !canon_alive ) reset_trailer_state();
         }
+        for ( auto& torn : lines_torn ) torn = false;
     }
 
     void __fastcall hk_attach_dispatch_raw( void* self, uint8_t dl, uint64_t r8, void* settle_override )
@@ -1934,6 +1979,23 @@ namespace ts_extra_utilities
     // check the game crashes on while a trailer is detached, and connect_slave,
     // which would otherwise re-attach the trailers behind the one being connected.
     // Returns false when attach/detach is unavailable on this build.
+    SCSAPI_VOID on_parking_brake( const scs_string_t, const scs_u32_t, const scs_value_t* const value, const scs_context_t )
+    {
+        parking_brake_on.store( value != nullptr && value->value_bool.value != 0, std::memory_order_relaxed );
+        parking_brake_known.store( value != nullptr, std::memory_order_relaxed );
+    }
+
+    void coupling_register_channels()
+    {
+        const auto* init_params = CCore::g_instance->get_init_params();
+        if ( init_params->register_for_channel( SCS_TELEMETRY_TRUCK_CHANNEL_parking_brake,
+                SCS_U32_NIL, SCS_VALUE_TYPE_bool, SCS_TELEMETRY_CHANNEL_FLAG_none,
+                &on_parking_brake, nullptr ) != SCS_RESULT_ok )
+        {
+            CCore::g_instance->warning( "Could not register 'truck.brake.parking'" );
+        }
+    }
+
     bool coupling_install()
     {
         const auto crash_address = memory::get_address_for_pattern( "48 85 d2 0f 84 ? ? ? ? 48 89 74 24 18 57 48 83 ec 40" );

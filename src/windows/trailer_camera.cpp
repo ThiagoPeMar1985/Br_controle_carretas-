@@ -209,6 +209,7 @@ namespace ts_extra_utilities
         static uint32_t last_det_recs = 0;    // detached records at last recompute
         static uint32_t last_jointless = 0;   // jointless trailers at last recompute
         static bool was_detached = false;     // detach edge tracker
+        static uint32_t solo_settle = 0;      // frames waited before pinning the solo zoom
         static void* last_forced_anchor = reinterpret_cast< void* >( ~0ull );
 
         bool any_detached = false;
@@ -319,6 +320,11 @@ namespace ts_extra_utilities
             {
                 if ( zoom_dist < 0.0f )
                 {
+                    // the recompute above re-measures the solo distance but the
+                    // smoothed distance (+0x4DC) still holds the full combination's
+                    // value for a moment — capturing it now pins the camera far
+                    // behind a truck that tows nothing. Let the native lerp settle
+                    if ( ++solo_settle < 90 ) return;
                     saved_zoom_min = prism::offsets::field< float >( chase, 0x480 );
                     zoom_dist = prism::offsets::field< float >( chase, 0x4DC );
                     if ( zoom_dist < 0.5f ) zoom_dist = prism::offsets::field< float >( chase, 0x4D8 );
@@ -329,7 +335,7 @@ namespace ts_extra_utilities
                 // keep the target strictly below our min so the clamp picks it
                 prism::offsets::field< float >( chase, 0x4D8 ) = zoom_dist - 0.01f;
             }
-            else if ( zoom_dist >= 0.0f )
+            else if ( solo_settle = 0, zoom_dist >= 0.0f )
             {
                 // went from detached-watch to towing while pieces stay
                 // parked: release the pin so the native update drives the
@@ -359,6 +365,7 @@ namespace ts_extra_utilities
             prism::offsets::field< float >( chase, 0x4D8 ) =
                 prism::offsets::field< float >( chase, 0x4DC );
             zoom_dist = -1.0f;
+            solo_settle = 0;
             last_det_recs = 0;
             last_jointless = 0;
             was_detached = false;

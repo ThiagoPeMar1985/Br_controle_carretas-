@@ -191,6 +191,9 @@ namespace ts_extra_utilities
                 rebuild_parked_edge( t, slave );
             }
         }
+        // the refresh raised the line lists of parked sections — loose pieces
+        // need their once-per-mark teardown again or old hoses reappear
+        for ( auto& torn : lines_torn ) torn = false;
         if ( apply_cables_fn != nullptr && cables_mode_cvar != nullptr &&
             get_cvar_int_fn != nullptr && truck != nullptr )
         {

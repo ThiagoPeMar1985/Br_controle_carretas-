@@ -123,7 +123,7 @@ namespace ts_extra_utilities
         }
     }
 
-    // dump permanente do estado — link/junção/record de cada carreta do canon
+    // dump permanente do estado — link/junção/record de cada carreta do canon (teste de edição)
     // em cada fronteira nativa. Fica no log pra sempre: os bugs de carreta
     // sumindo eram invisíveis justamente porque nada registrava como o mundo
     // estava antes/depois de um dispatch
@@ -211,6 +211,21 @@ namespace ts_extra_utilities
         // o mundo está indo embora (reload ou quit): corta os claims antes
         // de largar os ponteiros, senão o teardown nativo anda links mortos
         sever_all_claims();
+        const bool carry = carry_arm_tick != 0 && GetTickCount64() - carry_arm_tick < 15000;
+        bool carry_keep[ max_trailers ] = {};
+        bool was_head[ max_trailers ] = {};
+        hook_xform_t carry_xf[ max_trailers ] = {};
+        if ( carry )
+        {
+            for ( uint32_t i = 0; i < max_trailers; ++i )
+            {
+                was_head[ i ] = detached_idx[ i ] && parked_xform_valid[ i ];
+                carry_keep[ i ] = parked_xform_valid[ i ] &&
+                    ( detached_idx[ i ] || ( i > 0 && carry_keep[ i - 1 ] ) );
+                carry_xf[ i ] = parked_xform[ i ];
+            }
+        }
+        carry_arm_tick = 0;
         for ( auto& c : canon ) c = nullptr;
         for ( auto& j : canon_was_jointed ) j = false;
         for ( auto& j : canon_jointless_frames ) j = 0;
@@ -237,6 +252,21 @@ namespace ts_extra_utilities
         pending = {};
         canon_age = 0;
         for ( auto& v : lw_ctx_logged ) v = false;
+        carry_frames = 0;
+        carry_brake_frames = 0;
+        for ( uint32_t i = 0; i < max_trailers; ++i )
+        {
+            carry_hold[ i ] = carry_keep[ i ];
+            if ( !carry_keep[ i ] ) { own_head[ i ] = false; continue; }
+            carry_brake_frames = 900;
+            // only the section head keeps the slot mark — a member jointed
+            // behind it carries just the pose (a jointed marked slot would
+            // re-arm the restore every frame)
+            detached_idx[ i ] = was_head[ i ];
+            parked_xform[ i ] = carry_xf[ i ];
+            parked_xform_valid[ i ] = true;
+            CCore::g_instance->info( "carrying detached slot {} across the respawn", i );
+        }
         CCore::g_instance->info( "trailer state reset" );
     }
 
@@ -409,6 +439,8 @@ namespace ts_extra_utilities
 
         air_register_channels(); // trailer_air.cpp
 
+        coupling_register_channels(); // trailer_coupling.cpp
+
         return true;
     }
 
@@ -505,6 +537,11 @@ namespace ts_extra_utilities
         // mean the same physical piece
         void* trailer = i < max_trailers ? canon[ i ] : nullptr;
         if ( trailer == nullptr || !readable_ptr( trailer ) ) return;
+        if ( !handbrake_ok() )
+        {
+            CCore::g_instance->warning( "Puxe o freio de mão para desengatar a carreta {}", i + 1 );
+            return;
+        }
         void* truck = nullptr;
         if ( auto* game_actor = CCore::g_instance->get_game_actor() )
         {
@@ -571,6 +608,11 @@ namespace ts_extra_utilities
         if ( hook_far( trailer, parent, i == 0 ) )
         {
             CCore::g_instance->warning( "A carreta {} está muito longe — aproxime dando ré para engatar", i + 1 );
+            return;
+        }
+        if ( !handbrake_ok() )
+        {
+            CCore::g_instance->warning( "Puxe o freio de mão para engatar a carreta {}", i + 1 );
             return;
         }
         // back on its chain parent: the game may manage this trailer again
@@ -1240,7 +1282,7 @@ namespace ts_extra_utilities
                     // restore / sever_parked_claims on every actor teleport
                     // (the F9 floor dive: claims cut mid-reconcile made the
                     // game disconnect a member in mid-air)
-                    if ( live_to_truck &&
+                    if ( live_to_truck && !carry_hold[ i ] &&
                         ( is_detached( t ) || is_plugin_detached( t ) || detached_idx[ i ] ) )
                     {
                         unmark_detached( t );
