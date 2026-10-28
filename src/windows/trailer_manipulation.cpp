@@ -23,6 +23,8 @@
 
 namespace ts_extra_utilities
 {
+
+    void trigger_native_sleep();
     //========================================================================
     // Ordem canônica (canon) e rastreamento de estado das carretas
     //
@@ -881,6 +883,22 @@ namespace ts_extra_utilities
         }
         ImGui::TextWrapped( "Compressor por rotação" );
         ImGui::TextDisabled( "multiplica a produção de ar (que já sobe com o giro) — sem mexer no consumo" );
+        ImGui::SeparatorText( "Descanso" );
+        if ( ImGui::Button( "Dormir / descansar##sleep", ImVec2( -1.f, 0.f ) ) )
+        {
+            trigger_native_sleep();
+        }
+        ImGui::TextDisabled( "abre a tela de descanso nativa do jogo em qualquer ponto do mapa" );
+        this->render_keybind_row( static_cast< int >( settings::Action::SLEEP_PARK ) );
+        float air_leak = settings::g_settings.air_leak;
+        ImGui::SetNextItemWidth( -1.f );
+        if ( ImGui::SliderFloat( "##air_leak", &air_leak, 0.f, 2.f, "%.2f bar/h", ImGuiSliderFlags_AlwaysClamp ) )
+        {
+            settings::g_settings.air_leak = std::round( air_leak * 20.f ) / 20.f;
+            settings::save();
+        }
+        ImGui::TextWrapped( "Vazamento de ar com o motor desligado" );
+        ImGui::TextDisabled( "ao dormir ou descarregar com o motor off, o caminhão perde esta pressão por hora de jogo (0 = sem vazamento; ~1 bar/h esvazia o tanque em 10 h)" );
         ImGui::EndChild();
     }
 
@@ -1894,10 +1912,42 @@ namespace ts_extra_utilities
         }
     }
 
+    // native rest screen: the game's own sleep action is Shift+Num0. Instead
+    // of reverse-engineering the time-skip UI we inject that exact chord —
+    // the dialog, the hours picker and the rest itself stay 100% native
+    int sleep_release_countdown = 0;
+    void trigger_native_sleep()
+    {
+        INPUT keys[ 2 ] = {};
+        keys[ 0 ].type = INPUT_KEYBOARD;
+        keys[ 0 ].ki.wVk = VK_LSHIFT;
+        keys[ 1 ].type = INPUT_KEYBOARD;
+        keys[ 1 ].ki.wVk = VK_NUMPAD0;
+        SendInput( 2, keys, sizeof( INPUT ) );
+        // release on a later frame — key-up in the same batch can be missed
+        // by the game's edge detection
+        sleep_release_countdown = 4;
+        CCore::g_instance->info( "sleep: Shift+Num0 injected" );
+    }
+    void update_sleep_release()
+    {
+        if ( sleep_release_countdown <= 0 ) return;
+        if ( --sleep_release_countdown > 0 ) return;
+        INPUT keys[ 2 ] = {};
+        keys[ 0 ].type = INPUT_KEYBOARD;
+        keys[ 0 ].ki.wVk = VK_NUMPAD0;
+        keys[ 0 ].ki.dwFlags = KEYEVENTF_KEYUP;
+        keys[ 1 ].type = INPUT_KEYBOARD;
+        keys[ 1 ].ki.wVk = VK_LSHIFT;
+        keys[ 1 ].ki.dwFlags = KEYEVENTF_KEYUP;
+        SendInput( 2, keys, sizeof( INPUT ) );
+    }
+
     // attach/detach hotkeys, ignored while the game is in the background or a
     // key is being rebound
     void CTrailerManipulation::update_hotkeys()
     {
+        update_sleep_release();
         if ( !connect_valid_ || !game_has_focus() || settings::is_capturing() ) return;
 
         // one key toggles a trailer against its chain parent, the truck
@@ -1915,6 +1965,9 @@ namespace ts_extra_utilities
         // and a raw index would select the wrong piece
         if ( tk2 ) this->connect_to_truck( canon[ 1 ] );
         if ( tk3 ) this->connect_to_truck( canon[ 2 ] );
+        bool slp = false;
+        key_down( settings::Action::SLEEP_PARK, &slp );
+        if ( slp ) trigger_native_sleep();
     }
 
 }

@@ -16,6 +16,7 @@ namespace ts_extra_utilities::settings
         STEER_RIGHT,    // steerable-axle trailers: turn wheels right (hold)
         STEER_CENTER,   // steerable-axle trailers: ease wheels back to center
         TOGGLE_STEERING_LOCK, // take over / release automatic steering
+        SLEEP_PARK,     // press -> native rest screen (injects Shift+Num0)
         COUNT,
     };
 
@@ -52,6 +53,8 @@ namespace ts_extra_utilities::settings
         // air compressor output multiplier: 0 = native, each step adds 100%
         // of the native (rpm-dependent) production — N means N+1 times total
         int32_t air_boost = 0;
+        // air lost per game hour while the engine is off (bar/h, 0 = none)
+        float air_leak = 0.f;
     };
 
     extern Settings g_settings;

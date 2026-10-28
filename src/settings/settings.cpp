@@ -27,6 +27,8 @@ namespace ts_extra_utilities::settings
             0, // STEER_RIGHT
             0, // STEER_CENTER
             0, // TOGGLE_STEERING_LOCK
+            VK_F12, // SLEEP_PARK — the game's own rest key is Shift+Num0;
+                    // this just injects it
         };
 
         // ini keys, kept stable so saved files keep working if display names change
@@ -41,6 +43,7 @@ namespace ts_extra_utilities::settings
             L"steer_right",
             L"steer_center",
             L"toggle_steering_lock",
+            L"sleep_park",
         };
 
         constexpr const char* names[ action_count ] = {
@@ -54,6 +57,7 @@ namespace ts_extra_utilities::settings
             "Virar eixos à direita",
             "Centralizar eixos",
             "Travar/destravar direção",
+            "Dormir / descansar (estacionamento)",
         };
 
         int capturing = -1;
@@ -192,6 +196,7 @@ namespace ts_extra_utilities::settings
         g_settings.license_key[ 0 ] = 0;
         g_settings.trailer_brake_boost = 0.f;
         g_settings.air_boost = 0;
+        g_settings.air_leak = 0.f;
 
         auto path = settings_path();
         if ( path.empty() ) return;
@@ -269,6 +274,9 @@ namespace ts_extra_utilities::settings
 
         const int air = GetPrivateProfileIntW( L"air", L"boost", 0, path.c_str() );
         if ( air >= 0 && air <= 5 ) g_settings.air_boost = air;
+        GetPrivateProfileStringW( L"air", L"leak", L"", value, 32, path.c_str() );
+        const float leak = static_cast< float >( _wtof( value ) );
+        if ( leak >= 0.f && leak <= 3.f ) g_settings.air_leak = leak;
     }
 
     void save()
@@ -310,6 +318,8 @@ namespace ts_extra_utilities::settings
         WritePrivateProfileStringW( L"brake", L"trailer_boost", buf, path.c_str() );
         WritePrivateProfileStringW( L"air", L"boost",
             std::to_wstring( g_settings.air_boost ).c_str(), path.c_str() );
+        swprintf_s( buf, L"%.2f", static_cast< double >( g_settings.air_leak ) );
+        WritePrivateProfileStringW( L"air", L"leak", buf, path.c_str() );
     }
 
     UINT key( const Action action )

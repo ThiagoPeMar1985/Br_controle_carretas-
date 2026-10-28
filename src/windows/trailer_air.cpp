@@ -14,6 +14,7 @@
 
 #include "imgui.h"
 
+#include "common/scssdk_telemetry_common_channels.h"
 #include "common/scssdk_telemetry_truck_common_channels.h"
 
 #include "core.hpp"
@@ -32,10 +33,24 @@ namespace ts_extra_utilities
     //========================================================================
     std::atomic< float > air_psi{ 0.f };
     std::atomic< float > engine_rpm{ 0.f };
+    std::atomic< uint32_t > game_minutes{ 0 };
+    std::atomic< bool > engine_on{ true };
+    std::atomic< bool > engine_known{ false };
 
     SCSAPI_VOID on_air_pressure( const scs_string_t, const scs_u32_t, const scs_value_t* const value, const scs_context_t )
     {
         air_psi.store( value != nullptr ? value->value_float.value : 0.f, std::memory_order_relaxed );
+    }
+
+    SCSAPI_VOID on_game_time( const scs_string_t, const scs_u32_t, const scs_value_t* const value, const scs_context_t )
+    {
+        if ( value != nullptr ) game_minutes.store( value->value_u32.value, std::memory_order_relaxed );
+    }
+
+    SCSAPI_VOID on_engine_enabled( const scs_string_t, const scs_u32_t, const scs_value_t* const value, const scs_context_t )
+    {
+        engine_on.store( value != nullptr && value->value_bool.value != 0, std::memory_order_relaxed );
+        engine_known.store( value != nullptr, std::memory_order_relaxed );
     }
 
     SCSAPI_VOID on_engine_rpm( const scs_string_t, const scs_u32_t, const scs_value_t* const value, const scs_context_t )
@@ -135,8 +150,36 @@ namespace ts_extra_utilities
         return reinterpret_cast< void* >( sub );
     }
 
+    // engine off: the tank bleeds through the usual small leaks. Driven by GAME
+    // minutes (telemetry game.time), so a sleep or a time skip drains the whole
+    // span at once — wake up and the pressure is lower than when you parked
+    void update_air_leak()
+    {
+        static uint32_t last_min = 0;
+        static bool last_valid = false;
+        const uint32_t now = game_minutes.load( std::memory_order_relaxed );
+        const bool had = last_valid;
+        const uint32_t dm = now - last_min;
+        last_min = now;
+        last_valid = now != 0;
+        const float leak = settings::g_settings.air_leak;
+        if ( !had || dm == 0 || dm > 3 * 24 * 60 || leak <= 0.f ) return;
+        if ( !engine_known.load( std::memory_order_relaxed ) || engine_on.load( std::memory_order_relaxed ) ) return;
+        if ( !air_tanks_seen || air_truck == nullptr || air_field_base <= 0.f ) return;
+        float frac = 0.f;
+        if ( !air_safe_read_f( static_cast< uint8_t* >( air_truck ) + air_scale_off, frac ) ) return;
+        const float lost = leak * ( static_cast< float >( dm ) / 60.f ) / air_field_base;
+        const float next = ( std::max )( frac - lost, 0.f );
+        if ( air_safe_write_f( static_cast< uint8_t* >( air_truck ) + air_scale_off, next ) && dm >= 10 )
+        {
+            CCore::g_instance->info( "air: engine off, {} min -> leak {:.2f} bar ({:.1f} -> {:.1f} psi)",
+                dm, lost * air_field_base, frac * air_units, next * air_units );
+        }
+    }
+
     void update_air( const float dt )
     {
+        update_air_leak();
         const float psi = air_psi.load();
         const float rpm = engine_rpm.load();
         const int boost = settings::g_settings.air_boost;
@@ -270,6 +313,18 @@ namespace ts_extra_utilities
                 &on_air_pressure, nullptr ) != SCS_RESULT_ok )
         {
             CCore::g_instance->warning( "Could not register 'truck.brake.air.pressure'" );
+        }
+        if ( init_params->register_for_channel( SCS_TELEMETRY_CHANNEL_game_time,
+                SCS_U32_NIL, SCS_VALUE_TYPE_u32, SCS_TELEMETRY_CHANNEL_FLAG_none,
+                &on_game_time, nullptr ) != SCS_RESULT_ok )
+        {
+            CCore::g_instance->warning( "Could not register 'game.time'" );
+        }
+        if ( init_params->register_for_channel( SCS_TELEMETRY_TRUCK_CHANNEL_engine_enabled,
+                SCS_U32_NIL, SCS_VALUE_TYPE_bool, SCS_TELEMETRY_CHANNEL_FLAG_none,
+                &on_engine_enabled, nullptr ) != SCS_RESULT_ok )
+        {
+            CCore::g_instance->warning( "Could not register 'truck.engine.enabled'" );
         }
         if ( init_params->register_for_channel( SCS_TELEMETRY_TRUCK_CHANNEL_engine_rpm,
                 SCS_U32_NIL, SCS_VALUE_TYPE_float, SCS_TELEMETRY_CHANNEL_FLAG_none,
