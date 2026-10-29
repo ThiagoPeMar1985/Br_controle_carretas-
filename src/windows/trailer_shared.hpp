@@ -145,6 +145,7 @@ namespace ts_extra_utilities
     inline std::shared_ptr< CFunctionHook > joint_walk_hook = nullptr;
     inline std::shared_ptr< CFunctionHook > phys_link_hook = nullptr;
     inline std::shared_ptr< CFunctionHook > purecall_hook = nullptr;
+    inline std::shared_ptr< CFunctionHook > trigger_action_hook = nullptr;
     inline std::shared_ptr< CFunctionHook > trailer_disconnect_hook = nullptr;
     inline std::shared_ptr< CFunctionHook > trailer_connect_hook = nullptr;
     inline std::shared_ptr< CFunctionHook > trailer_connect_hook2 = nullptr;

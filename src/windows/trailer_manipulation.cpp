@@ -883,13 +883,6 @@ namespace ts_extra_utilities
         }
         ImGui::TextWrapped( "Compressor por rotação" );
         ImGui::TextDisabled( "multiplica a produção de ar (que já sobe com o giro) — sem mexer no consumo" );
-        ImGui::SeparatorText( "Descanso" );
-        if ( ImGui::Button( "Dormir / descansar##sleep", ImVec2( -1.f, 0.f ) ) )
-        {
-            trigger_native_sleep();
-        }
-        ImGui::TextDisabled( "abre a tela de descanso nativa do jogo em qualquer ponto do mapa" );
-        this->render_keybind_row( static_cast< int >( settings::Action::SLEEP_PARK ) );
         float air_leak = settings::g_settings.air_leak;
         ImGui::SetNextItemWidth( -1.f );
         if ( ImGui::SliderFloat( "##air_leak", &air_leak, 0.f, 2.f, "%.2f bar/h", ImGuiSliderFlags_AlwaysClamp ) )
@@ -1500,16 +1493,12 @@ namespace ts_extra_utilities
                 const int si = canon_index_of( sl );
                 if ( si < 0 || edge_done[ si ] ) continue;
                 edge_done[ si ] = true;
-                CCore::g_instance->info( "uncoupled edge c{} -> c{}: breaking its cables", canon_index_of( p ), si );
+                CCore::g_instance->info( "uncoupled edge c{} -> c{}: hiding its cables", canon_index_of( p ), si );
+                // only hide the loose piece's own lines — rebuilding/pairing
+                // on the live towed chain every second corrupted the physics
+                // (rig thrown into limbo: a legit visibility claim c1->c0
+                // got torn down 30x/s)
                 if ( set_lines_fn != nullptr ) set_lines_fn( sl, 0, 1 );
-                if ( pair_vehicles_fn != nullptr ) pair_vehicles_fn( p, sl );
-                if ( rebuild_lines_fn != nullptr )
-                {
-                    void* keep = prism::offsets::field< void* >( sl, prism::offsets::trailer_slave );
-                    prism::offsets::field< void* >( sl, prism::offsets::trailer_slave ) = nullptr;
-                    rebuild_lines_fn( p, nullptr );
-                    prism::offsets::field< void* >( sl, prism::offsets::trailer_slave ) = keep;
-                }
             }
             bool any_parked = false;
             for ( uint32_t i = 0; i < ln; ++i ) any_parked |= parkedish[ i ];

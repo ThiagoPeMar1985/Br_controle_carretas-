@@ -331,6 +331,30 @@ namespace ts_extra_utilities
             tp_log[ tp_n ].dst = do_fix ? corrected : tp_log[ tp_n ].orig;
             ++tp_n;
         }
+        // before re-seating, refuse a slot already occupied by another canon
+        // piece — teleporting inside a sibling is exactly what makes the rig
+        // bounce/fly (PhysX resolves the overlap violently). Fall back to the
+        // game's own destination and try again on a later reconcile call
+        if ( do_fix )
+        {
+            for ( uint32_t j = 0; j < max_trailers && canon[ j ] != nullptr; ++j )
+            {
+                void* other = canon[ j ];
+                if ( other == self || !readable_ptr( other ) ) continue;
+                hook_xform_t ox{};
+                if ( !hook_world( other, ox ) ) continue;
+                const float dx = ox.pos.x - corrected.x;
+                const float dz = ox.pos.z - corrected.z;
+                if ( dx * dx + dz * dz < 4.f * 4.f )
+                {
+                    CCore::g_instance->info( "trailer teleport {:p}: corrected slot occupied "
+                        "by c{} ({:.1f}m) — keeping the game's slot", self, j,
+                        std::sqrt( dx * dx + dz * dz ) );
+                    do_fix = false;
+                    break;
+                }
+            }
+        }
         // substitute OUR buffer for the game's transform — the trailer goes
         // straight to its real slot and never spends a frame overlapping
         // the parent at the anchor
@@ -1204,6 +1228,28 @@ namespace ts_extra_utilities
         }
         const auto rip = ep->ContextRecord != nullptr ? ep->ContextRecord->Rip : 0;
         const auto base = reinterpret_cast< uint64_t >( GetModuleHandle( nullptr ) );
+        // Interpolação da curva de nav (exe+0x1BEA1C5, movsd xmm5,[rdi+rax*8],
+        // 5 bytes): um índice de segmento corrompido — vindo de dado de mapa
+        // quebrado — lê fora da tabela na thread de nav caching e mata o
+        // processo. Emular a carga como 0.0 envenena só aquela amostra do
+        // cache; o resto do build de nav segue.
+        if ( code == EXCEPTION_ACCESS_VIOLATION && ep->ContextRecord != nullptr &&
+             rip == base + 0x1BEA1C5 &&
+             ep->ExceptionRecord->NumberParameters > 0 &&
+             ep->ExceptionRecord->ExceptionInformation[ 0 ] == 0 /* leitura */ )
+        {
+            static int nav_curve_emulated = 0;
+            if ( nav_curve_emulated < 4 )
+            {
+                ++nav_curve_emulated;
+                CCore::g_instance->warning(
+                    "nav curve read emulated (OOB index) at exe+0x1BEA1C5" );
+            }
+            ep->ContextRecord->Xmm5.Low = 0;
+            ep->ContextRecord->Xmm5.High = 0;
+            ep->ContextRecord->Rip += 5;
+            return EXCEPTION_CONTINUE_EXECUTION;
+        }
         CCore::g_instance->warning(
             "AV 0x{:X} at exe+0x{:X} rax={:p} rbx={:p} rcx={:p} rdx={:p} rsi={:p} rdi={:p} r8={:p} addr={:p}",
             code, rip >= base ? rip - base : rip,

@@ -88,22 +88,23 @@ namespace ts_extra_utilities
 #endif
         }
 
+        // logging disabled — the game's log callback was crashing the plugin
         template < class... T >
         void info( const char* fmt_s, T&&... args ) const
         {
-            scs_log_( 0, fmt::vformat( std::string( "[br_carretas] " ) + fmt_s, fmt::make_format_args( args... ) ).c_str() );
+            ( void ) fmt_s;
         }
 
         template < class... T >
         void warning( const char* fmt_s, T&&... args ) const
         {
-            scs_log_( 1, fmt::vformat( std::string( "[br_carretas] " ) + fmt_s, fmt::make_format_args( args... ) ).c_str() );
+            ( void ) fmt_s;
         }
 
         template < class... T >
         void error( const char* fmt_s, T&&... args ) const
         {
-            scs_log_( 2, fmt::vformat( std::string( "[br_carretas] " ) + fmt_s, fmt::make_format_args( args... ) ).c_str() );
+            ( void ) fmt_s;
         }
     };
 }
