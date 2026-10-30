@@ -717,11 +717,13 @@ namespace ts_extra_utilities
         for ( int i = 0; i < settings::action_count; ++i )
         {
             const auto action = static_cast< settings::Action >( i );
-            // steering binds live in the Oversize panel
+            // steering binds live in the Oversize panel; sleep não é
+            // implementada - a linha some da tela
             if ( action == settings::Action::STEER_LEFT ||
                  action == settings::Action::STEER_RIGHT ||
                  action == settings::Action::STEER_CENTER ||
-                 action == settings::Action::TOGGLE_STEERING_LOCK ) continue;
+                 action == settings::Action::TOGGLE_STEERING_LOCK ||
+                 action == settings::Action::SLEEP_PARK ) continue;
             this->render_keybind_row( i );
         }
     }
