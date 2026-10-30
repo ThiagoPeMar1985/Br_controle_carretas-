@@ -1525,12 +1525,12 @@ namespace ts_extra_utilities
         // the delivery/dock sequence never needs an attach - a game-driven
         // re-attach there is what yanks the parked pieces around
         // the handbrake rule binds the player's T key only (caller
-        // exe+0x9F7DD6); the game's own attach (world assembly, caller
-        // exe+0x5DC731) is left alone - except inside the cargo window
+        // exe+0x9F7DD6); the game's own attach (world assembly, cargo
+        // reassembly, caller exe+0x5DC731) always runs - refusing it left
+        // the head trailer uncoupled after every load/unload
         const uint64_t caller = reinterpret_cast< uint64_t >( _ReturnAddress() ) -
             reinterpret_cast< uint64_t >( GetModuleHandle( nullptr ) );
-        const bool allowed = !in_cargo_window() &&
-            ( caller != 0x9F7DD6 || canon_age < 90 || handbrake_ok( false ) );
+        const bool allowed = caller != 0x9F7DD6 || canon_age < 90 || handbrake_ok( false );
         CCore::g_instance->info( "attach dispatch from exe+0x{:X}: handbrake {} -> {}",
             caller,
             parking_brake_on.load( std::memory_order_relaxed ) ? "on" : "off",
