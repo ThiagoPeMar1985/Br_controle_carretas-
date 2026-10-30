@@ -20,16 +20,50 @@
 #include "prism/offsets.hpp"
 #include "settings/settings.hpp"
 
+#include <winver.h>
+#pragma comment( lib, "version.lib" )
+
 namespace ts_extra_utilities
 {
     constexpr uint32_t max_trailers = 20;
+
+    // Every get_address_from_offset / base+RVA constant in this plugin was
+    // derived for eurotrucks2.exe 1.61.1.9 - on any other build a wrong VA
+    // hooks random code, so the fixed-offset paths stay off unless the exe
+    // file version matches exactly.
+    inline bool expected_build()
+    {
+        static const int8_t verdict = []() -> int8_t {
+            wchar_t exe_path[ MAX_PATH ] = {};
+            if ( GetModuleFileNameW( nullptr, exe_path, MAX_PATH ) == 0 ) return -1;
+            DWORD unused = 0;
+            const DWORD size = GetFileVersionInfoSizeW( exe_path, &unused );
+            if ( size == 0 ) return -1;
+            std::vector< uint8_t > buf( size );
+            if ( !GetFileVersionInfoW( exe_path, 0, size, buf.data() ) ) return -1;
+            VS_FIXEDFILEINFO* info = nullptr;
+            UINT len = 0;
+            if ( !VerQueryValueW( buf.data(), L"\\",
+                    reinterpret_cast< LPVOID* >( &info ), &len ) || info == nullptr ) return -1;
+            const uint64_t v =
+                ( static_cast< uint64_t >( info->dwFileVersionMS ) << 32 ) | info->dwFileVersionLS;
+            constexpr uint64_t want =
+                ( uint64_t( 1 ) << 48 ) | ( uint64_t( 61 ) << 32 ) | ( uint64_t( 1 ) << 16 ) | 9;
+            if ( v != want && CCore::g_instance != nullptr )
+            {
+                CCore::g_instance->error( "Unsupported ETS2 build (expected 1.61.1.9) - fixed-offset features disabled" );
+            }
+            return v == want ? 1 : 0;
+        }();
+        return verdict == 1;
+    }
 
     //========================================================================
     // Memory safety probes
     //
     // Everything reached through a reverse-engineered offset is validated
     // before dereference: the pointer must be committed/readable, and an
-    // object's vtable — plus the target of any vfunc slot we call — must sit
+    // object's vtable - plus the target of any vfunc slot we call - must sit
     // inside the exe image. A wrong-typed object can carry a "vtable" pointer
     // into exe data, so slot targets are checked against the code range too.
     //========================================================================
@@ -42,7 +76,7 @@ namespace ts_extra_utilities
     }
 
     // how many bytes past p are continuously readable, capped at want. Field
-    // sweeps must be bounded by this — a plausible object sitting at the end
+    // sweeps must be bounded by this - a plausible object sitting at the end
     // of a committed region AVs the moment a scan reads past the page end
     inline uintptr_t readable_span( const void* p, const uintptr_t want )
     {
@@ -78,7 +112,7 @@ namespace ts_extra_utilities
     }
 
     // trailer-class check: every trailer vtable carries the same vfunc 99
-    // (disconnect) impl at exe+0x789C20 — a readable but foreign pointer
+    // (disconnect) impl at exe+0x789C20 - a readable but foreign pointer
     // (recycled trailer slot holding e.g. KERNELBASE data) passes
     // plausible_object yet never carries a trailer vtable
     inline bool is_trailer_obj( const void* p )
@@ -113,7 +147,7 @@ namespace ts_extra_utilities
     }
 
     //========================================================================
-    // Hooks installed across the feature files — reset together in the
+    // Hooks installed across the feature files - reset together in the
     // window destructor
     //========================================================================
     inline std::shared_ptr< CFunctionHook > brake_chain_setter_hook = nullptr;
@@ -172,7 +206,7 @@ namespace ts_extra_utilities
 
     // trailers intentionally detached through this plugin. The game's own
     // attach/detach flows call connect_slave on the parent, which would
-    // re-attach them right back — so the hook stays active and skips only
+    // re-attach them right back - so the hook stays active and skips only
     // those trailers
     inline void* detached_trailers[ max_trailers ] = {};
 
@@ -192,10 +226,10 @@ namespace ts_extra_utilities
         for ( void*& d : detached_trailers ) if ( d == trailer ) d = nullptr;
     }
 
-    // trailers detached through the PLUGIN's own controls — a stricter set
+    // trailers detached through the PLUGIN's own controls - a stricter set
     // than detached_trailers (which also holds natively detached heads so
     // connect_slave won't slam them back). These must survive cargo
-    // load/unload untouched: no teleporting to the dock, no re-joining —
+    // load/unload untouched: no teleporting to the dock, no re-joining -
     // wherever the player left them is where they stay
     inline void* plugin_detached[ max_trailers ] = {};
 
@@ -215,7 +249,7 @@ namespace ts_extra_utilities
         for ( void*& d : plugin_detached ) if ( d == trailer ) d = nullptr;
     }
 
-    // any trailer object this plugin is tracking — needed before touching
+    // any trailer object this plugin is tracking - needed before touching
     // trailer-specific fields like the physics joint on an unknown pointer
     inline bool is_tracked_trailer( const void* p )
     {
@@ -228,29 +262,29 @@ namespace ts_extra_utilities
     // truck"; used to refuse a second trailer on the fifth wheel
     inline void* truck_towed = nullptr;
     // a trailer whose native detach dispatcher ran but whose joint is still
-    // alive — the async gear-crank sequence drops it seconds later. The
+    // alive - the async gear-crank sequence drops it seconds later. The
     // lines refresh must not rebuild the truck edge on it meanwhile
     inline void* pending_native_detach = nullptr;
     inline uint32_t pending_native_age = 0;
-    // previous joint state per canon slot — the joint->null transition is
+    // previous joint state per canon slot - the joint->null transition is
     // the physical moment the hook broke; hose teardown runs there, not at
     // dispatch time (the async crank drops the joint seconds after)
     inline bool canon_was_jointed[ max_trailers ] = {};
     // teardown de mangueiras da peça estacionada já rodou neste slot do
-    // canon — set_lines(state=0) só ESCONDE entidades sem removê-las do
+    // canon - set_lines(state=0) só ESCONDE entidades sem removê-las do
     // vetor, então chamar por frame nunca termina; rearma quando a carreta
     // engata de novo
     inline bool lines_torn[ max_trailers ] = {};
 
     // a native call that walks trailer_slave / lamp ctx (disconnect/connect
-    // vfuncs, attach/detach dispatchers) is running on the sim thread — the
+    // vfuncs, attach/detach dispatchers) is running on the sim thread - the
     // render-thread maintenance must not write those fields mid-call or it
     // can hand the native walker a recycled pointer (the KERNELBASE src AV
     // at the disconnect teardown)
     inline std::atomic< bool > native_chain_call_active{ false };
 
     // frames each canon slot has been continuously jointless while not live
-    // to the truck — a settled parked trailer gets auto-marked past the
+    // to the truck - a settled parked trailer gets auto-marked past the
     // threshold so the record factory / parked pin / anchor lock keep it
     // alive, registered and attachable; a trailer mid-attach only reads
     // jointless for a few frames and never reaches it
@@ -260,12 +294,12 @@ namespace ts_extra_utilities
     // the whole trailer set is jointed again. < 0 means nothing saved
     inline float saved_traffic = -1.f;
     // trailers the set had when traffic suppression started. The chain shrinks
-    // when links leave it, so "all coupled" must compare against this — a
+    // when links leave it, so "all coupled" must compare against this - a
     // partially rebuilt set (e.g. just the dolly on the truck) must not count
     inline uint32_t expected_trailers = 0;
     // set only after disconnect_now actually dropped a joint. The detach waits
     // ~30 sim ticks after g_traffic 0, and during that window every trailer
-    // still reads as coupled — without this flag the restore fires mid-delay
+    // still reads as coupled - without this flag the restore fires mid-delay
     // and the joint lands with live traffic again
     inline std::atomic< bool > traffic_detach_done{ false };
 
@@ -273,7 +307,7 @@ namespace ts_extra_utilities
     // Sim-thread operation queue
     //
     // Connect/disconnect calls the game's own vfuncs and execute_line, which
-    // must run on the simulation thread — but update()/the UI run on the
+    // must run on the simulation thread - but update()/the UI run on the
     // render thread, where calling them races the physics update (purecall
     // crashes). The buttons/keys only queue the operation; it executes inside
     // the hooked per-frame trailer call, which the game itself runs on the
@@ -287,7 +321,7 @@ namespace ts_extra_utilities
         void* trailer = nullptr;
         void* parent = nullptr;
         bool parent_is_truck = false;
-        // sim ticks to wait before executing — used to let AI traffic despawn
+        // sim ticks to wait before executing - used to let AI traffic despawn
         // after g_traffic 0 before dropping the joint
         uint32_t delay = 0;
     };
@@ -318,7 +352,7 @@ namespace ts_extra_utilities
 
     // Sim heartbeat: hk_crashes_when_disconnected bumps this every trailer
     // tick it runs. During the cargo cinematic the sim side is suspended
-    // while update() keeps ticking — a stalled heartbeat is the signal that
+    // while update() keeps ticking - a stalled heartbeat is the signal that
     // queued work may safely run inline on the render thread instead of
     // waiting seconds for the sim to resume (hiding the respawned set's
     // brief re-assembly at the dock)
@@ -340,7 +374,7 @@ namespace ts_extra_utilities
         sim_heartbeat_seen = hb;
     }
 
-    // true when the sim side is demonstrably not running — either update()
+    // true when the sim side is demonstrably not running - either update()
     // itself is the thread that calls the trailer tick (single-threaded
     // engine), or it has been silent for a sustained stretch of frames
     inline bool sim_is_quiet()
@@ -349,10 +383,10 @@ namespace ts_extra_utilities
     }
 
     //========================================================================
-    // World-space helpers — hook transforms, attach geometry
+    // World-space helpers - hook transforms, attach geometry
     //========================================================================
 
-    // prism placement-ish { pos@0, pad, quat@0x10 } — what the 32-byte
+    // prism placement-ish { pos@0, pad, quat@0x10 } - what the 32-byte
     // transform getter (vfunc+0xF8) returns for a vehicle in world space
     struct hook_xform_t
     {
@@ -390,19 +424,19 @@ namespace ts_extra_utilities
     //========================================================================
     // Detached-by-index state (respawn-proof)
     //
-    // Cargo load/unload does not just move trailers — it DESTROYS the trailer
+    // Cargo load/unload does not just move trailers - it DESTROYS the trailer
     // objects and spawns a fresh, already-attached set at the dock slots
     // (verified: the towed trailer's pointer changes across a load). Every
     // pointer-based mark dies with the destroyed object. The chain slot does
     // not: trailers[i] is rebuilt in the same order, so a slot-level mark can
-    // detect the respawn — the fresh object shows up jointed without the
-    // player ever asking for a connect — and restore_parked() then detaches
+    // detect the respawn - the fresh object shows up jointed without the
+    // player ever asking for a connect - and restore_parked() then detaches
     // it again and teleports it back to the transform it was parked at.
     //========================================================================
     inline bool detached_idx[ max_trailers ] = {};
     inline hook_xform_t parked_xform[ max_trailers ] = {};
     inline bool parked_xform_valid[ max_trailers ] = {};
-    // frames the marked slot has spent jointed — the restore only fires after
+    // frames the marked slot has spent jointed - the restore only fires after
     // the cargo cinematic's own writes settle (~half a second)
     inline uint32_t rejoined_frames[ max_trailers ] = {};
     // a blocked cargo/delivery teleport arms this (GetTickCount64): the world
@@ -412,18 +446,18 @@ namespace ts_extra_utilities
     // piece as a stale mark until restore_parked puts it back
     inline uint64_t carry_arm_tick = 0;
     inline bool carry_hold[ max_trailers ] = {};
-    // a marked slot that was jointless by itself (parked on its own) — two
+    // a marked slot that was jointless by itself (parked on its own) - two
     // adjacent marked slots are separate parked pieces, not one section, and
     // the restore must split them again when the respawn joins them
     inline bool own_head[ max_trailers ] = {};
     inline uint32_t carry_brake_frames = 0;
     inline uint32_t carry_frames = 0;
     // frames until a carried trailer gets the real park sequence (landing
-    // gear body + brake + registration) — a respawned piece comes back
+    // gear body + brake + registration) - a respawned piece comes back
     // marked but never parked, so it sags on its own nose and the emulated
     // anchor fights it every frame (the wobble)
     inline int carry_park[ max_trailers ] = {};
-    // truck.brake.parking telemetry — manual connects need the handbrake on
+    // truck.brake.parking telemetry - manual connects need the handbrake on
     inline std::atomic< bool > parking_brake_on{ false };
     inline std::atomic< bool > parking_brake_known{ false };
     inline uint64_t cargo_seq_ms = 0;
@@ -432,7 +466,7 @@ namespace ts_extra_utilities
         return static_cast< uint64_t >( std::chrono::duration_cast< std::chrono::milliseconds >(
             std::chrono::steady_clock::now().time_since_epoch() ).count() );
     }
-    // every attach/detach — plugin buttons and the game's own T key — only
+    // every attach/detach - plugin buttons and the game's own T key - only
     // happens with the handbrake pulled, so a stray key press can never drop
     // a trailer on the road. The game's own cargo/delivery sequence (an actor
     // teleport within the last 20 s) is exempt: it detaches by itself
@@ -447,19 +481,19 @@ namespace ts_extra_utilities
         return cargo_exempt && in_cargo_window();
     }
 
-    // chase camera (vehicle_behind_rotation_camera) — resolved once from the
+    // chase camera (vehicle_behind_rotation_camera) - resolved once from the
     // camera manager. +0x3F0 is its anchor target; the native resolver stores
-    // to it directly every frame, so we never write it — only read for the
+    // to it directly every frame, so we never write it - only read for the
     // change log below
     inline void* chase_camera = nullptr;
 
-    // attach geometry (trailer_coupling.cpp) — the shell's "connect" actions
+    // attach geometry (trailer_coupling.cpp) - the shell's "connect" actions
     // gate on the real hook-to-hook distance like the native T
     float hook_gap( void* trailer, void* parent, bool parent_is_truck );
     bool hook_far( void* trailer, void* parent, bool parent_is_truck );
 
     //========================================================================
-    // Input helpers — keybind polling shared by the hotkey loops of every
+    // Input helpers - keybind polling shared by the hotkey loops of every
     // feature file
     //========================================================================
 
@@ -554,7 +588,7 @@ namespace ts_extra_utilities
         }
 
         // Disabled-colored paragraph that re-wraps to the window width every
-        // frame — ImGui::TextDisabled renders a single clipped line
+        // frame - ImGui::TextDisabled renders a single clipped line
         inline void text_disabled_wrapped( const char* text )
         {
             ImGui::PushStyleColor( ImGuiCol_Text,
@@ -565,27 +599,27 @@ namespace ts_extra_utilities
     }
 
     //========================================================================
-    // Feature entry points — defined in their own files, called by the
+    // Feature entry points - defined in their own files, called by the
     // window shell's init()/update()/dtor
     //========================================================================
-    void lift_register_channels();               // trailer_axles.cpp — reverse/gear telemetry
-    void lift_axles_update( void* game_actor );  // trailer_axles.cpp — reverse assist + mask loop
-    void release_all_axles();                    // trailer_axles.cpp — restores native flags (dtor)
-    void brake_register_hooks();                 // trailer_brake.cpp — setter + wheel-solver hooks
-    void brake_boost_update();                   // trailer_brake.cpp — +0x760 boost write + mask
-    void steering_install();                     // trailer_steering.cpp — pattern + hook
-    void steering_reset();                       // trailer_steering.cpp — clears lock state (dtor)
-    void air_register_channels();                // trailer_air.cpp — psi/rpm telemetry channels
-    void update_air( float dt );                 // trailer_air.cpp — closed-loop fill boost
-    bool coupling_install();                     // trailer_coupling.cpp — hooks + native fns; false = indisponível
-    void coupling_register_channels();           // trailer_coupling.cpp — handbrake telemetry for the attach/detach rule
-    void coupling_parked_update();               // trailer_loadstate.cpp — cargo respawn watch + rig restore
-    void render_cargo_restore_option();          // trailer_loadstate.cpp — checkbox + setting persistence
-    extern void* attach_target;                  // trailer_coupling.cpp — trailer picked for the native T attach
-    extern void* canon[ max_trailers ];          // trailer_coupling.cpp — stable canonical trailer order
-    int canon_index_of( const void* t );         // trailer_coupling.cpp — stable canon slot of a trailer (-1)
-    void release_detach_marks( void* t );        // trailer_coupling.cpp — clear detached/plugin-detached/idx marks
-    void* canon_coupled_predecessor( void* t);   // trailer_coupling.cpp — canonical predecessor if it is coupled
-    bool trailer_is_live( const void* t );       // trailer_coupling.cpp — joint chain bottoms out at the truck
-    void light_watch_tick();                     // trailer_lines.cpp — parked-trailer lamp mask/source pin
+    void lift_register_channels();               // trailer_axles.cpp - reverse/gear telemetry
+    void lift_axles_update( void* game_actor );  // trailer_axles.cpp - reverse assist + mask loop
+    void release_all_axles();                    // trailer_axles.cpp - restores native flags (dtor)
+    void brake_register_hooks();                 // trailer_brake.cpp - setter + wheel-solver hooks
+    void brake_boost_update();                   // trailer_brake.cpp - +0x760 boost write + mask
+    void steering_install();                     // trailer_steering.cpp - pattern + hook
+    void steering_reset();                       // trailer_steering.cpp - clears lock state (dtor)
+    void air_register_channels();                // trailer_air.cpp - psi/rpm telemetry channels
+    void update_air( float dt );                 // trailer_air.cpp - closed-loop fill boost
+    bool coupling_install();                     // trailer_coupling.cpp - hooks + native fns; false = indisponível
+    void coupling_register_channels();           // trailer_coupling.cpp - handbrake telemetry for the attach/detach rule
+    void coupling_parked_update();               // trailer_loadstate.cpp - cargo respawn watch + rig restore
+    void render_cargo_restore_option();          // trailer_loadstate.cpp - checkbox + setting persistence
+    extern void* attach_target;                  // trailer_coupling.cpp - trailer picked for the native T attach
+    extern void* canon[ max_trailers ];          // trailer_coupling.cpp - stable canonical trailer order
+    int canon_index_of( const void* t );         // trailer_coupling.cpp - stable canon slot of a trailer (-1)
+    void release_detach_marks( void* t );        // trailer_coupling.cpp - clear detached/plugin-detached/idx marks
+    void* canon_coupled_predecessor( void* t);   // trailer_coupling.cpp - canonical predecessor if it is coupled
+    bool trailer_is_live( const void* t );       // trailer_coupling.cpp - joint chain bottoms out at the truck
+    void light_watch_tick();                     // trailer_lines.cpp - parked-trailer lamp mask/source pin
 }

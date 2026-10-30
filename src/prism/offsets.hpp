@@ -48,9 +48,9 @@ namespace ts_extra_utilities::prism::offsets
 
     // Lamp feed + light source + hose state, read out of the native lamp
     // bodies: the mask setter (0x1409DB4B0) writes the lamp byte at +0x2A0
-    // (the propagator fans it down the attach tree — +0x2A1/+0x2A2 are
+    // (the propagator fans it down the attach tree - +0x2A1/+0x2A2 are
     // separate state, do not touch); +0x110 is the light-source context whose
-    // +0x18 owner the propagator repoints to the chain head — a detached
+    // +0x18 owner the propagator repoints to the chain head - a detached
     // trailer reads the SOURCE vehicle's mask through it, so pinning its
     // source at itself makes it read its own (zeroed) mask; +0xE8D is the
     // "lines connected" byte the cable builder checks.
@@ -104,7 +104,7 @@ namespace ts_extra_utilities::prism::offsets
     // may be selected: forcing a non-liftable axle crashes the wheel/suspension
     // update, so the selection is always masked to the original flag set, and
     // nothing is written while the controller state is not "down".
-    // Field is +0x6C8 in 1.61.1.9s (was +0x6A0 in 1.61) — verified via the
+    // Field is +0x6C8 in 1.61.1.9s (was +0x6A0 in 1.61) - verified via the
     // trailer init storing the controller and the set_state wrapper reading it.
     constexpr uint32_t trailer_lift_controller = 0x06C8; // axle lift controller
     constexpr uint32_t lift_controller_state = 0x003C; // byte: 0 down, 1 lowering, 2 raising, 3 up

@@ -88,7 +88,7 @@ namespace ts_extra_utilities
 #endif
         }
 
-        // logging disabled — the game's log callback was crashing the plugin
+        // logging disabled - the game's log callback was crashing the plugin
         template < class... T >
         void info( const char* fmt_s, T&&... args ) const
         {

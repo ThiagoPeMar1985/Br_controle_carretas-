@@ -27,7 +27,7 @@
 namespace ts_extra_utilities
 {
     //========================================================================
-    // Log de formação em teleporte — a correção de membro empilhado em
+    // Log de formação em teleporte - a correção de membro empilhado em
     // hk_trailer_teleport e o assentamento de formação em hk_actor_teleport
     //========================================================================
     tp_slot_t tp_log[ 16 ] = {};
@@ -37,13 +37,13 @@ namespace ts_extra_utilities
     quat_t tp_snap_q[ max_trailers ] = {};
     bool tp_snap_ok[ max_trailers ] = {};
     // frames que a emulação de âncora estacionada fica desligada depois de um
-    // teleport de ator — a sequência de re-joint da doca deixa as carretas
+    // teleport de ator - a sequência de re-joint da doca deixa as carretas
     // sem junta por alguns frames no meio do movimento e a âncora as
     // arrastaria de volta pro ponto pré-teleporte
     int tp_cooldown = 0;
     int tp_block_watch = 0;
-    // um teleport de ATOR (doca/carga/balsa/garagem — o que move o conjunto
-    // inteiro) está em voo agora — a recusa do hk_trailer_teleport só vale
+    // um teleport de ATOR (doca/carga/balsa/garagem - o que move o conjunto
+    // inteiro) está em voo agora - a recusa do hk_trailer_teleport só vale
     // dentro dele; teleports isolados (ex.: o snap de posicionamento do
     // load) precisam pousar ou a carreta fica na pose de staging
     bool in_actor_tp = false;
@@ -53,7 +53,7 @@ namespace ts_extra_utilities
     //
     // Uma carreta desatrelada só fica plantada enquanto o record de
     // parked-state (+0x1188) reafirma a pose todo frame. Carretas soltas no
-    // meio da cadeia nunca ganham record (a fábrica dá purecall nelas — NÃO
+    // meio da cadeia nunca ganham record (a fábrica dá purecall nelas - NÃO
     // chamar), então update_parked_locks emula: snapshot do transform quando
     // a junta cai e re-teleporte se derivar. Indexado pelo canon pra deslize
     // de slot nunca apontar a trava pro objeto errado.
@@ -72,7 +72,7 @@ namespace ts_extra_utilities
     bool record_mgr_logged[ max_trailers ] = {}; // diag "mgr inexistente" já logado
     // a fábrica nativa de parked-record (0x1407B69E0, assinatura verificada):
     // constrói o objeto de 0x198 bytes onde a trava de pose mora. O bloqueio
-    // dela em peças de meio de cadeia era uma purecall de componente —
+    // dela em peças de meio de cadeia era uma purecall de componente -
     // hk_purecall a engole. O global do manager sai do prólogo da própria
     // fábrica (mov rsi, [rip+...] -> 0x1436AF828); o array de slots dele é
     // +0x740 base + +0x748 count (verificado na tail call 0x140C377C0)
@@ -82,12 +82,12 @@ namespace ts_extra_utilities
     //========================================================================
     // Snapshot do transform do conjunto
     //
-    // O cinemático de carga rotaciona o conjunto inteiro — caminhão incluso
-    // — pros slots da doca através do teleport de ator (0x1405DE1E0). Esse
+    // O cinemático de carga rotaciona o conjunto inteiro - caminhão incluso
+    // - pros slots da doca através do teleport de ator (0x1405DE1E0). Esse
     // hook fotografa o caminhão e cada slot de carreta logo antes do
     // movimento; depois que a sequência assenta, restore_parked devolve o
     // conjunto do jeito que o jogador estacionou (de ré continua de ré).
-    // Só movimentos curtos armam a restauração — um teleport através do mapa
+    // Só movimentos curtos armam a restauração - um teleport através do mapa
     // é viagem, não alinhamento de doca
     //========================================================================
     bool rig_armed = false;
@@ -129,11 +129,11 @@ namespace ts_extra_utilities
     // chain slot whose fresh object came back jointed is disconnected again
     // and teleported to the transform it was parked at. Runs on the sim
     // thread (queued op), descending index order so a tail trailer parked
-    // on its own leaves before the section it was taken with — each marked
+    // on its own leaves before the section it was taken with - each marked
     // slot is the head of what the player actually detached
     void restore_parked()
     {
-        // put the rig itself back first — replay the game's own actor teleport
+        // put the rig itself back first - replay the game's own actor teleport
         // with the pre-load transform and the original flags. The truck goes
         // through its proper path (vfunc +0x2A8), attached trailers follow the
         // actor-relative formation, and plugin-detached trailers are skipped
@@ -143,7 +143,7 @@ namespace ts_extra_utilities
         {
             rig_armed = false;
             // replaying the rig teleport with the snapshot transform yanks a
-            // settled jointed combination across the map mid-solve — only do
+            // settled jointed combination across the map mid-solve - only do
             // it while a detached trailer still needs re-parking; if its
             // marks were cleared since the arm there is nothing to restore
             bool any_detached = false;
@@ -166,13 +166,13 @@ namespace ts_extra_utilities
         {
             if ( !detached_idx[ i ] ) continue;
             // a marked slot whose previous slot is also marked belongs to the
-            // same parked section — the section head's walk below covers it;
+            // same parked section - the section head's walk below covers it;
             // disconnecting it here would split the parked combination apart
             if ( i > 0 && detached_idx[ i - 1 ] && canon[ i - 1 ] != nullptr && !own_head[ i ] ) continue;
             void* t = canon[ i ];
             if ( t == nullptr || !readable_ptr( t ) || joint( t ) == nullptr ) continue;
 
-            // the parent it was respawned under — canon order is preserved
+            // the parent it was respawned under - canon order is preserved
             void* parent = nullptr;
             bool parent_is_truck = false;
             if ( auto* game_actor = CCore::g_instance->get_game_actor() )
@@ -189,7 +189,7 @@ namespace ts_extra_utilities
             }
 
             // teleport the head and every member still jointed to it back to
-            // its saved parked transform — straight through the original, so
+            // its saved parked transform - straight through the original, so
             // the pointer marks guarding the hook don't block the restore
             for ( void* m = t; m != nullptr; )
             {
@@ -209,7 +209,7 @@ namespace ts_extra_utilities
     }
     // the trailer-state record apply (0x1405E14D1 on game_actor+0x10): copies
     // a recorded transform/velocity into the head trailer's state record and
-    // reconciles its joint through the attach/detach dispatchers — the path
+    // reconciles its joint through the attach/detach dispatchers - the path
     // the cargo sequence uses to teleport the set into dock slots. A
     // plugin-detached trailer keeps its current record untouched: it stays
     // parked where the player left it
@@ -230,19 +230,19 @@ namespace ts_extra_utilities
     }
     // the per-trailer teleport (0x140786320): the actor-teleport walks the
     // trailer list and calls this on each one to move it into its dock slot.
-    // Trailer objects are NOT recreated — this is the call that actually
+    // Trailer objects are NOT recreated - this is the call that actually
     // drags a detached trailer to the dock during cargo load/unload, where
     // it lands under its parent's hook and gets re-jointed. A
     // plugin-detached trailer is a world object: it is never teleported,
-    // by any caller — dock alignment, garage, ferry, job start
+    // by any caller - dock alignment, garage, ferry, job start
     using trailer_teleport_fn = void __fastcall( void* /*trailer*/, void* /*transform*/ );
     void __fastcall hk_trailer_teleport( void* self, void* transform )
     {
         // the refusal only covers a JOINTLESS parked piece being dragged by
-        // an ACTOR teleport (dock/cargo/ferry — the moves that relocate the
+        // an ACTOR teleport (dock/cargo/ferry - the moves that relocate the
         // rig). Isolated teleports MUST land: the load-time placement snap
         // puts each parked trailer at its saved ground pose, and refusing
-        // that leaves it at the staging pose — it drops nose-first into the
+        // that leaves it at the staging pose - it drops nose-first into the
         // ground and the parked lock then freezes the sunken pose
         if ( settings::g_settings.cargo_restore && self != nullptr && is_plugin_detached( self ) &&
              joint( self ) == nullptr && in_actor_tp )
@@ -250,7 +250,7 @@ namespace ts_extra_utilities
             CCore::g_instance->info( "trailer teleport skipped: {:p} is plugin-detached", self );
             return;
         }
-        // um teleport isolado pousou numa peça nossa estacionada — a âncora
+        // um teleport isolado pousou numa peça nossa estacionada - a âncora
         // recaptura a pose nova em vez de brigar com ela
         if ( self != nullptr && is_plugin_detached( self ) &&
              joint( self ) == nullptr )
@@ -264,7 +264,7 @@ namespace ts_extra_utilities
             }
         }
         // a trailer riding along with the rig must not keep an armed parked
-        // record — the parked machine would yank it back to the stored pose
+        // record - the parked machine would yank it back to the stored pose
         // every frame while physics holds it at the new spot (that pose war
         // is what drags the truck through the ground on F9)
         if ( self != nullptr && joint( self ) != nullptr )
@@ -272,7 +272,7 @@ namespace ts_extra_utilities
             prism::offsets::field< uint8_t >( self, prism::offsets::trailer_parked ) = 0;
             prism::offsets::field< uint8_t >( self, prism::offsets::trailer_parked_registered ) = 0;
         }
-        // untouched during world assembly — the slot-correction math reads
+        // untouched during world assembly - the slot-correction math reads
         // snapshots taken at staging poses and would seat members in the
         // void
         if ( canon_age < 90 )
@@ -281,12 +281,12 @@ namespace ts_extra_utilities
             return;
         }
         const float* dst = static_cast< const float* >( transform );
-        // a jointed trailer can never occupy its parent's slot — same dst
+        // a jointed trailer can never occupy its parent's slot - same dst
         // means the game lost its member offset (missing state record).
-        // Never write the game's transform buffer — the reconcile reads it
+        // Never write the game's transform buffer - the reconcile reads it
         // back to compute the next member's slot. Run the original first,
         // then re-teleport through our OWN buffer at the parent's final
-        // slot plus the trailer's snapshot offset — the whole formation
+        // slot plus the trailer's snapshot offset - the whole formation
         // lands translated, exactly as it was assembled
         float3_t corrected{};
         bool do_fix = false;
@@ -296,7 +296,7 @@ namespace ts_extra_utilities
         {
             const int ti = canon_index_of( self );
             const int pi = canon_index_of( parent );
-            // latest recorded slot for the parent (search back — the
+            // latest recorded slot for the parent (search back - the
             // reconcile calls each member more than once)
             for ( int i = tp_n; i-- > 0; )
             {
@@ -304,7 +304,7 @@ namespace ts_extra_utilities
                 const float ddx = dst[ 0 ] - tp_log[ i ].orig.x;
                 const float ddz = dst[ 2 ] - tp_log[ i ].orig.z;
                 // a later reconcile pass can land the parent on its real
-                // slot while a member still arrives at the shared anchor —
+                // slot while a member still arrives at the shared anchor -
                 // matching the first logged destination catches that too
                 const float hdx = dst[ 0 ] - tp_log[ 0 ].orig.x;
                 const float hdz = dst[ 2 ] - tp_log[ 0 ].orig.z;
@@ -312,7 +312,7 @@ namespace ts_extra_utilities
                      ti >= 0 && pi >= 0 && tp_snap_ok[ ti ] && tp_snap_ok[ pi ] )
                 {
                     // Y comes from the game's own destination, never the
-                    // origin formation delta — preserving the old snapshot's
+                    // origin formation delta - preserving the old snapshot's
                     // height difference bakes the ORIGIN terrain slope into
                     // the landing
                     corrected = {
@@ -332,7 +332,7 @@ namespace ts_extra_utilities
             ++tp_n;
         }
         // before re-seating, refuse a slot already occupied by another canon
-        // piece — teleporting inside a sibling is exactly what makes the rig
+        // piece - teleporting inside a sibling is exactly what makes the rig
         // bounce/fly (PhysX resolves the overlap violently). Fall back to the
         // game's own destination and try again on a later reconcile call
         if ( do_fix )
@@ -348,14 +348,14 @@ namespace ts_extra_utilities
                 if ( dx * dx + dz * dz < 4.f * 4.f )
                 {
                     CCore::g_instance->info( "trailer teleport {:p}: corrected slot occupied "
-                        "by c{} ({:.1f}m) — keeping the game's slot", self, j,
+                        "by c{} ({:.1f}m) - keeping the game's slot", self, j,
                         std::sqrt( dx * dx + dz * dz ) );
                     do_fix = false;
                     break;
                 }
             }
         }
-        // substitute OUR buffer for the game's transform — the trailer goes
+        // substitute OUR buffer for the game's transform - the trailer goes
         // straight to its real slot and never spends a frame overlapping
         // the parent at the anchor
         if ( do_fix )
@@ -370,12 +370,12 @@ namespace ts_extra_utilities
         trailer_teleport_hook->get_original< trailer_teleport_fn >()( self, transform );
     }
     // the actor teleport (0x1405DE1E0): rotates/moves truck + attached set
-    // into the dock slots for the cargo cinematic — the same call travel
+    // into the dock slots for the cargo cinematic - the same call travel
     // teleports use. Snapshot the rig on the first call of a sequence, then
     // arm the restore only when the move was short (a dock shuffle, not a
     // ferry/garage/job hop across the map)
     using actor_teleport_fn = void __fastcall( void* /*actor*/, void* /*arg*/, uint8_t, uint8_t );
-    // final formation pass after an actor teleport — the reconcile seats
+    // final formation pass after an actor teleport - the reconcile seats
     // every member at the shared anchor and can move the head AGAIN
     // mid-sequence, stranding members at offsets measured from a slot the
     // head no longer occupies (the F9 floor dive: stacked members + live
@@ -387,11 +387,11 @@ namespace ts_extra_utilities
         for ( int i = 0; i < max_trailers && canon[ i ] != nullptr; ++i )
         {
             void* t = canon[ i ];
-            // only members that rode along with the rig — a trailer jointed
+            // only members that rode along with the rig - a trailer jointed
             // to a PARKED parent never got teleported and must keep its
             // parked flags
             if ( !readable_ptr( t ) || joint( t ) == nullptr || !trailer_is_live( t ) ) continue;
-            // a teleported member must not keep an armed parked record —
+            // a teleported member must not keep an armed parked record -
             // the re-assert would yank it back to the pre-teleport pose
             // every frame while physics holds it at the new spot
             prism::offsets::field< uint8_t >( t, prism::offsets::trailer_parked ) = 0;
@@ -428,7 +428,7 @@ namespace ts_extra_utilities
     }
     void __fastcall hk_actor_teleport( void* self, void* arg, uint8_t a3, uint8_t a4 )
     {
-        // pure passthrough while the world assembles — snapshot/settle math
+        // pure passthrough while the world assembles - snapshot/settle math
         // on half-built or staging-position trailers re-seats them in the
         // void (dolly under the map)
         if ( canon_age < 90 )
@@ -469,10 +469,10 @@ namespace ts_extra_utilities
         for ( bool detached : detached_idx ) has_detached_slots |= detached;
 
         // the reconcile seats every member at the shared anchor and can move
-        // the head AGAIN mid-sequence — members then sit stacked or stranded
+        // the head AGAIN mid-sequence - members then sit stacked or stranded
         // and the joint solver launches the rig (the F9 floor dive). The
         // formation pass below re-seats each member at the parent's FINAL
-        // slot + the pre-teleport offset — it must run on EVERY actor
+        // slot + the pre-teleport offset - it must run on EVERY actor
         // teleport, cargo_restore or not (the original did exactly that and
         // F9 worked)
         if ( !settings::g_settings.cargo_restore || !has_detached_slots )
@@ -503,14 +503,14 @@ namespace ts_extra_utilities
         // The final formation correction runs only after we confirm a cargo
         // respawn, not on a normal teleport.
         tp_active = false;
-        // the reconcile seats members by walking the slave chain — a parked
+        // the reconcile seats members by walking the slave chain - a parked
         // visibility claim makes it count a detached trailer as a member:
         // it either gets dragged to the shared anchor on top of a real
         // trailer, or shifts a real member into its slot. Hide the claims
-        // for the duration of the reconcile — the maintenance rebuilds
+        // for the duration of the reconcile - the maintenance rebuilds
         // them right after
         sever_parked_claims();
-        // snapshot every canon trailer's position — the stacked-member
+        // snapshot every canon trailer's position - the stacked-member
         // correction needs the pre-teleport formation, and members get
         // re-teleported mid-sequence so a live read drifts between
         // reconcile passes
@@ -551,7 +551,7 @@ namespace ts_extra_utilities
                 // the restore exists to re-park plugin-detached trailers the
                 // dock sequence respawned into the set. With nothing detached
                 // the arm would only replay the rig teleport ~60 frames
-                // later, yanking a settled jointed combination mid-solve —
+                // later, yanking a settled jointed combination mid-solve -
                 // camera-0/F9 launches were exactly this. No detached
                 // trailer → nothing to restore → never arm
                 bool any_detached = false;
@@ -561,7 +561,7 @@ namespace ts_extra_utilities
                     if ( !detached_idx[ i ] ) continue;
                     any_detached = true;
                     // the dock sequence is the only caller that needs the
-                    // replay — it respawns detached trailers INTO the set or
+                    // replay - it respawns detached trailers INTO the set or
                     // scatters them off their parked marks. A travel/F9 hop
                     // leaves them parked exactly where they were
                     void* d = canon[ i ];
@@ -590,7 +590,7 @@ namespace ts_extra_utilities
                         rig_restore_delay = 60;
                         rig_replay_a3 = a3;
                         rig_replay_a4 = a4;
-                        CCore::g_instance->info( "actor teleported ~{:.1f}m — rig restore armed",
+                        CCore::g_instance->info( "actor teleported ~{:.1f}m - rig restore armed",
                             std::sqrt( dx * dx + dz * dz ) );
                     }
                 }
@@ -599,7 +599,7 @@ namespace ts_extra_utilities
     }
 
     // the manual detach lowers the landing gear through vfunc_set_brace before
-    // anything else — the park sequence alone never builds the support body
+    // anything else - the park sequence alone never builds the support body
     void carry_set_brace( void* t )
     {
         __try
@@ -668,7 +668,7 @@ namespace ts_extra_utilities
                 mark_plugin_detached( t );
                 carry_hold[ i ] = false;
                 carry_park[ i ] = 20;
-                CCore::g_instance->info( "carried slot {} respawned jointless — put back at its parked pose", i );
+                CCore::g_instance->info( "carried slot {} respawned jointless - put back at its parked pose", i );
             }
         }
         bool in_section = false;
@@ -762,9 +762,9 @@ namespace ts_extra_utilities
     // game_actor+0x1D38 (entradas de 0x28, entry+0 = actor). O backpointer do
     // actor pra carreta fica num offset que essa build não documenta, então
     // em vez de chutar os campos do actor são escaneados por um ponteiro de
-    // volta pra carreta — auto-descoberta.
+    // volta pra carreta - auto-descoberta.
     // A âncora de obstáculo de tráfego da carreta estacionada é um componente
-    // dela mesma, não do slot array — a vtable do provider é amostrada do
+    // dela mesma, não do slot array - a vtable do provider é amostrada do
     // actor da carreta cabeça (o único slot que o nativo preenche) e casada
     // contra os campos da própria carreta na hora do detach.
     void* provider_vtbl = nullptr;
@@ -787,7 +787,7 @@ namespace ts_extra_utilities
             }
         }
         // sem backpointer em lugar nenhum: a posição da carreta na cadeia
-        // mapeia pro mesmo índice de slot — pega se o slot tiver actor real
+        // mapeia pro mesmo índice de slot - pega se o slot tiver actor real
         for ( uint32_t i = 0; i < trailer_count; ++i )
         {
             if ( trailers[ i ] != trailer ) continue;
@@ -800,7 +800,7 @@ namespace ts_extra_utilities
             break;
         }
         // fallback pelo cache: quando a carreta sai do convoy o actor dela
-        // some do slot array inteiro — uma carreta desatrelada só é achada
+        // some do slot array inteiro - uma carreta desatrelada só é achada
         // pelo ponteiro cacheado enquanto ela ainda estava engatada
         for ( uint32_t i = 0; i < max_trailers; ++i )
         {
@@ -811,8 +811,8 @@ namespace ts_extra_utilities
             }
         }
         // último recurso com a vtable amostrada: acha o objeto em forma de
-        // actor — qualquer coisa cujo campo +0x1F0 segura um provider do tipo
-        // certo — dentro da própria carreta e pelo game_actor. Carretas de
+        // actor - qualquer coisa cujo campo +0x1F0 segura um provider do tipo
+        // certo - dentro da própria carreta e pelo game_actor. Carretas de
         // meio de cadeia mantêm o actor fora do array de slots (só a cabeça)
         if ( provider_vtbl != nullptr )
         {
@@ -864,7 +864,7 @@ namespace ts_extra_utilities
     }
 
     // escaneia os campos da própria carreta (e do objeto de parked-state)
-    // procurando um componente cuja vtable case com o provider amostrado —
+    // procurando um componente cuja vtable case com o provider amostrado -
     // a carreta estacionada carrega a âncora de obstáculo dentro dela
     void* find_trailer_provider( void* trailer )
     {
@@ -908,7 +908,7 @@ namespace ts_extra_utilities
     //========================================================================
 
     // Filtro SEH que loga ONDE dentro da fábrica de records a falha aconteceu
-    // — o catch genérico não distingue deref de componente morto de frame de
+    // - o catch genérico não distingue deref de componente morto de frame de
     // chamador velho; o RIP nomeia o local exato.
     int factory_fault_filter( uint32_t i, EXCEPTION_POINTERS* ep )
     {
@@ -924,7 +924,7 @@ namespace ts_extra_utilities
     }
 
     // experimento "ator nativo": loga o que o jogo realmente registra por
-    // carreta — o manager de parked-records (existe? quantos records? de
+    // carreta - o manager de parked-records (existe? quantos records? de
     // quem?) e os slots de ator em game_actor+0x1D38. Só leitura
     void dump_native_registry()
     {
@@ -976,7 +976,7 @@ namespace ts_extra_utilities
     }
 
     // O record da carreta está realmente dentro da scan-list do manager?
-    // Um record linkado em +0x1188 mas ausente de mgr+0x740/+0x748 é INERTE —
+    // Um record linkado em +0x1188 mas ausente de mgr+0x740/+0x748 é INERTE -
     // o re-assert de pose só itera esse array, então uma carreta vinda de
     // save pode mostrar record + flag armada e mesmo assim cair fisicamente.
     bool parked_record_listed( void* t )
@@ -1003,7 +1003,7 @@ namespace ts_extra_utilities
         return false;
     }
 
-    // Tira todo record desta carreta da scan-list do manager — enquanto
+    // Tira todo record desta carreta da scan-list do manager - enquanto
     // continuar listada, a máquina de estacionamento re-asserta a pose
     // guardada do record contra a carreta viva a cada frame.
     void parked_record_unlist( void* t )
@@ -1032,19 +1032,19 @@ namespace ts_extra_utilities
         __except ( EXCEPTION_EXECUTE_HANDLER ) {}
     }
 
-    // Todo container visto pelo hook de insert fica cacheado aqui e é podado —
+    // Todo container visto pelo hook de insert fica cacheado aqui e é podado -
     // a região de position-find (exe+0x94E3CB) também é alcançada por chamadas
     // FORA do insert (erase de obstáculo no un-park) e dereferencia +0x88 sem
     // checar (AV em exe+0x94E45C, 48ms depois de um detach liberar o node).
     // Órfãos aparecem em EVENTOS (a queda da junta libera o owner-node do
     // obstáculo), então a poda densa só roda na janela pós-detach + uma
-    // cadência lenta — scan por frame custava 2 syscalls VirtualQuery por
+    // cadência lenta - scan por frame custava 2 syscalls VirtualQuery por
     // elemento e crescia com as listas do tráfego.
     void* lane_containers[ 128 ] = {};
     uint32_t lane_prune_frames = 0;
     uint32_t lane_prune_idle = 0;
 
-    // O elemento ainda tem owner-node vivo? SEH lê o campo direto —
+    // O elemento ainda tem owner-node vivo? SEH lê o campo direto -
     // VirtualQuery por elemento era o custo de syscall que escalava com as
     // listas de obstáculo do mundo.
     bool lane_element_dead( void* el )
@@ -1062,7 +1062,7 @@ namespace ts_extra_utilities
         return owner == nullptr;
     }
 
-    // Remove entradas órfãs de todos os containers de lane-obstacle vistos —
+    // Remove entradas órfãs de todos os containers de lane-obstacle vistos -
     // uma entrada cujo owner-node foi liberado sem o slot sair do array quebra
     // o scan inteiro na worker thread do tráfego.
     void prune_lane_containers()
@@ -1099,7 +1099,7 @@ namespace ts_extra_utilities
                 if ( n != *count )
                 {
                     // worker no meio do scan com count velho dereferencia
-                    // elements[n] — deixa a última entrada VIVA no lugar da
+                    // elements[n] - deixa a última entrada VIVA no lugar da
                     // morta que o memmove expôs
                     if ( n > 0 ) elements[ n ] = elements[ n - 1 ];
                     *count = n;
@@ -1107,15 +1107,15 @@ namespace ts_extra_utilities
             }
             __except ( EXCEPTION_EXECUTE_HANDLER )
             {
-                // container liberado ou realocado no meio da poda — descarta
+                // container liberado ou realocado no meio da poda - descarta
                 c = nullptr;
             }
         }
     }
 
     // Hook do insert ordenado de lane-obstacle (0x14094DFC0, roda nas worker
-    // threads do tráfego): o scan dereferencia o +0x88 de cada elemento — o
-    // owner-node dentro do link inline do obstáculo — então uma entrada morta
+    // threads do tráfego): o scan dereferencia o +0x88 de cada elemento - o
+    // owner-node dentro do link inline do obstáculo - então uma entrada morta
     // quebra o job inteiro. É exatamente o estado em que um obstáculo de
     // carreta estacionada órfão pode ficar. Sanitiza o container alvo antes
     // do original rodar: elementos com owner-node nulo (ou memória morta)
@@ -1128,7 +1128,7 @@ namespace ts_extra_utilities
             using type_fn = uint32_t __fastcall( void* );
             const auto get_type = reinterpret_cast< type_fn* >( ( *reinterpret_cast< void** const* >( link ) )[ 1 ] );
             // tipo de link 0xFFF = a lista de lane-elements ordenada por
-            // posição — o caminho cujo scan dereferencia +0x88 sem checar
+            // posição - o caminho cujo scan dereferencia +0x88 sem checar
             if ( get_type( link ) == 0xFFF && plausible_vfunc( node, 0xD0 / 8 ) )
             {
                 using container_fn = void* __fastcall( void* );
@@ -1136,7 +1136,7 @@ namespace ts_extra_utilities
                 void* container = get_container( node );
                 if ( readable_ptr( container ) && readable_ptr( static_cast< uint8_t* >( container ) + 0x18 ) )
                 {
-                    // lembra o container — a poda por frame mantém os caminhos
+                    // lembra o container - a poda por frame mantém os caminhos
                     // de erase/scan fora deste insert sem crash também
                     for ( auto& c : lane_containers )
                     {
@@ -1169,8 +1169,8 @@ namespace ts_extra_utilities
     // Estaciona uma carreta que já está sem junta (save carregado solta ou
     // auto-mark): brace nativo (desce o pé e arma a trava de pose), freio de
     // mão aplicado, animação da manivela que CONSTRÓI o apoio físico do pé
-    // (sem a anim o +0x126C marca baixado mas nenhum corpo de apoio existe —
-    // a frente atravessa o chão) e o registro de tráfego — a mesma cauda que
+    // (sem a anim o +0x126C marca baixado mas nenhum corpo de apoio existe -
+    // a frente atravessa o chão) e o registro de tráfego - a mesma cauda que
     // o dispatcher de T executa, sem precisar de um pai.
     void native_park_detached( void* t )
     {
@@ -1210,11 +1210,11 @@ namespace ts_extra_utilities
 
     // CRT __purecall (0x141D23610): nós de listener mortos em carretas
     // desatreladas ainda recebem vfunc por slots puros pela máquina de
-    // estacionamento — o handler original mata o processo. Retornar null é o
+    // estacionamento - o handler original mata o processo. Retornar null é o
     // que o caminho de implementação-faltante do chamador tolera; a fábrica
     // de parked-record completa com um membro nulo em vez de morrer.
     // Tracer permanente: qualquer AV não-tratado no processo loga o RIP da
-    // falha e os registradores — o abort silencioso do teardown e o crash da
+    // falha e os registradores - o abort silencioso do teardown e o crash da
     // fábrica eram invisíveis sem ele. First chance, pass-through
     // (CONTINUE_SEARCH) pra o crash handling do próprio jogo ainda rodar.
     LONG WINAPI crash_tracer( EXCEPTION_POINTERS* ep )
@@ -1229,8 +1229,8 @@ namespace ts_extra_utilities
         const auto rip = ep->ContextRecord != nullptr ? ep->ContextRecord->Rip : 0;
         const auto base = reinterpret_cast< uint64_t >( GetModuleHandle( nullptr ) );
         // Interpolação da curva de nav (exe+0x1BEA1C5, movsd xmm5,[rdi+rax*8],
-        // 5 bytes): um índice de segmento corrompido — vindo de dado de mapa
-        // quebrado — lê fora da tabela na thread de nav caching e mata o
+        // 5 bytes): um índice de segmento corrompido - vindo de dado de mapa
+        // quebrado - lê fora da tabela na thread de nav caching e mata o
         // processo. Emular a carga como 0.0 envenena só aquela amostra do
         // cache; o resto do build de nav segue.
         if ( code == EXCEPTION_ACCESS_VIOLATION && ep->ContextRecord != nullptr &&
@@ -1300,9 +1300,9 @@ namespace ts_extra_utilities
 
     // O iterador de componentes em exe+0x927C60 dereferencia o retorno do
     // purecall sem checar (call [rax+0x40] depois mov rdx,[rax] + call
-    // [rdx+8] — switch de tipo em 0x3000/0x7000/0xF000/0x17000). Retornar
+    // [rdx+8] - switch de tipo em 0x3000/0x7000/0xF000/0x17000). Retornar
     // null quebra ele; entrega um componente benigno cujas vfuncs retornam
-    // null — eax=0 não casa nenhum case do switch, então o iterador pula o
+    // null - eax=0 não casa nenhum case do switch, então o iterador pula o
     // componente morto e segue. Só o range dessa função ganha o fake: a
     // fábrica de record e o site de comparação 0x9277F4 dependem do null que
     // já tratam.
@@ -1344,7 +1344,7 @@ namespace ts_extra_utilities
     //========================================================================
 
     // A máquina de estacionamento esconde uma carreta que não alcança mais
-    // pela cadeia viva — regra de visibilidade do próprio parked-record.
+    // pela cadeia viva - regra de visibilidade do próprio parked-record.
     // Uma carreta desatrelada pelo plugin tem que continuar no mundo, então
     // uma vez por detach re-assertamos as flags de parked + brace; peças sem
     // record recebem o transform re-escrito no lugar atual (o mesmo nudge
@@ -1380,7 +1380,7 @@ namespace ts_extra_utilities
 
 
     // Carreta sem junta e sem parked-record (+0x1188) não tem âncora: o record
-    // é o que re-asserta a pose estacionada a cada frame — freio de roda
+    // é o que re-asserta a pose estacionada a cada frame - freio de roda
     // sozinho só desliza. A fábrica nativa roda uma vez por slot (a purecall
     // dela no meio da cadeia é engolida pelo hk_purecall); as peças pra quem
     // ela nunca produz record ganham a trava emulada: fotografa a pose uma
@@ -1401,7 +1401,7 @@ namespace ts_extra_utilities
                 continue;
             }
             void* t = canon[ i ];
-            // só as NOSSAS peças desatreladas ganham a trava emulada — uma
+            // só as NOSSAS peças desatreladas ganham a trava emulada - uma
             // carreta sem junta e sem marca (respawn do jogo, estacionada por
             // um T-detach simples, ainda assentando sozinha) é problema do
             // jogo; pinar uma pose de meio-assentamento a congela no ar
@@ -1413,12 +1413,12 @@ namespace ts_extra_utilities
                 anchor_delay[ i ] = 0;
                 continue;
             }
-            // roda a fábrica de record nativa uma vez — o bloqueador dela no
+            // roda a fábrica de record nativa uma vez - o bloqueador dela no
             // meio da cadeia era uma purecall de componente que o hk_purecall
-            // engole — e linka o record registrado de volta em trailer+0x1188
+            // engole - e linka o record registrado de volta em trailer+0x1188
             // com as flags que o dispatcher arma na mesma condição.
             // A fábrica dereferencia o singleton do MANAGER de records em
-            // +0x558 antes de tudo — ele só existe depois que alguma carreta
+            // +0x558 antes de tudo - ele só existe depois que alguma carreta
             // foi estacionada pelo fluxo NATIVO (fault: mov r8,[rsi+0x558],
             // rsi=null, AV em exe+0x7B6A03). Pula enquanto não existe e
             // TENTA de novo todo frame: quando qualquer park nativo o criar,
@@ -1433,7 +1433,7 @@ namespace ts_extra_utilities
             {
                 record_mgr_logged[ i ] = true;
                 CCore::g_instance->info(
-                    "parked record manager ainda não existe — c{} segue na âncora emulada", i );
+                    "parked record manager ainda não existe - c{} segue na âncora emulada", i );
             }
             if ( wants_record &&
                 record_retry[ i ] == 0 &&
@@ -1478,7 +1478,7 @@ namespace ts_extra_utilities
                 }
                 else
                 {
-                    // falhou — retenta em ~2s em vez de desistir pra sempre:
+                    // falhou - retenta em ~2s em vez de desistir pra sempre:
                     // o manager pode aparecer tarde ou a fábrica falhar uma
                     // vez e a peça ficar presa na âncora emulada sem record
                     record_retry[ i ] = 120;
@@ -1486,17 +1486,17 @@ namespace ts_extra_utilities
                     {
                         ++record_quiet[ i ];
                         CCore::g_instance->warning(
-                            "parked record factory produced no record for c{} — retrying", i );
+                            "parked record factory produced no record for c{} - retrying", i );
                     }
                 }
             }
             // um ponteiro de record sozinho não trava a carreta: o re-assert
             // nativo de pose só roda enquanto o record está na scan-list do
-            // manager E +0x1258 continua armado — uma carreta de save pode
+            // manager E +0x1258 continua armado - uma carreta de save pode
             // carregar record+flag sem estar na lista, o que deixa o record
             // INERTE e a carreta caindo enquanto a âncora fica pulada à toa.
             // O gate NÃO olha record_tried: um record criado pela nossa
-            // fábrica e registrado na lista é tão nativo quanto um de save —
+            // fábrica e registrado na lista é tão nativo quanto um de save -
             // com o !record_tried a âncora emulada brigava com o re-assert
             // nativo do record que nós mesmos criamos = a carreta balançando
             if ( prism::offsets::field< void* >( t, prism::offsets::trailer_parked_state ) != nullptr &&
@@ -1508,7 +1508,7 @@ namespace ts_extra_utilities
                 anchor_delay[ i ] = 0;
                 continue;
             }
-            // carência sem junta — a âncora não pode capturar nos primeiros
+            // carência sem junta - a âncora não pode capturar nos primeiros
             // frames depois da queda da junta: load/assembly segura as
             // carretas sem junta enquanto o jogo as reposiciona por poses de
             // preparo como (0,0,-512), e ancorar uma dessas teleporta a
@@ -1542,7 +1542,7 @@ namespace ts_extra_utilities
             if ( anchor_settle[ i ] < 30 && anchor_age[ i ] < 240 )
             {
                 // fase de assentamento: uma carreta recém-desatrelada ainda
-                // está tombando em cima do apoio — segue a pose em vez de
+                // está tombando em cima do apoio - segue a pose em vez de
                 // travar, senão a pose nivelada guardada briga com o
                 // assentamento a cada frame
                 anchor_settling[ i ] = true;
@@ -1550,7 +1550,7 @@ namespace ts_extra_utilities
                 const float hy = now.pos.y - anchor_home[ i ].pos.y;
                 const float hz = now.pos.z - anchor_home[ i ].pos.z;
                 // andou demais rolando livre OU afundou: assentar no pé é
-                // queda de centímetros — meio metro abaixo da casa é queda
+                // queda de centímetros - meio metro abaixo da casa é queda
                 // livre por falta de apoio, e seguir a descida capturaria a
                 // pose já afundada. Puxa de volta e deixa assentar de novo
                 if ( ( hx * hx + hz * hz > 1.5f * 1.5f || hy < -0.5f ) &&
@@ -1576,7 +1576,7 @@ namespace ts_extra_utilities
             anchor_settling[ i ] = false;
             // nunca trava uma pose caída: se a pose guardada está visivelmente
             // inclinada, o park nativo ainda deve apoio real pra essa carreta
-            // (o pé nunca foi acionado) — recaptura e continua seguindo em vez
+            // (o pé nunca foi acionado) - recaptura e continua seguindo em vez
             // de congelar ela com a frente afundada no chão
             {
                 const quat_t& q = anchor_xform[ i ].quat;
@@ -1590,7 +1590,7 @@ namespace ts_extra_utilities
             }
             if ( mx * mx + my * my + mz * mz > 0.01f * 0.01f || rotd > 0.0004f )
             {
-                // travado — emula o parked-record nativo: re-asserta a pose
+                // travado - emula o parked-record nativo: re-asserta a pose
                 // INTEIRA guardada (posição E rotação, incluindo Y) em
                 // qualquer deriva real. Um pin só de posição nunca enxerga
                 // uma carreta balançando: ela pivota no ponto de contato sem
@@ -1600,16 +1600,16 @@ namespace ts_extra_utilities
                 trailer_teleport_hook->get_original< teleport_fn_t >()( t, &anchor_xform[ i ] );
                 // diagnóstico one-shot: se a âncora re-pina dezenas de vezes
                 // seguidas, algo está brigando pela pose (a carreta
-                // "balançando sozinha") — o drift médio diz quão forte
+                // "balançando sozinha") - o drift médio diz quão forte
                 if ( ++anchor_fixes[ i ] >= 30 )
                 {
                     // 30 re-pins in a row: the stored pose and the physics
                     // disagree (the pose sits a little inside the ground or
-                    // off the gear) — keep fighting and the trailer bobs.
+                    // off the gear) - keep fighting and the trailer bobs.
                     // Drop the pin and let the settle phase capture the pose
                     // the physics actually holds
                     CCore::g_instance->info(
-                        "anchor: c{} fought the pose {}x (drift {:.3f}m) — recapturing",
+                        "anchor: c{} fought the pose {}x (drift {:.3f}m) - recapturing",
                         i, anchor_fixes[ i ],
                         std::sqrt( mx * mx + my * my + mz * mz ) );
                     anchor_valid[ i ] = false;
@@ -1619,11 +1619,11 @@ namespace ts_extra_utilities
     }
 
     // Uma carreta de volta ao convoy precisa estar totalmente desestacionada
-    // — mas o parked-record (+0x1188) TEM que ficar linkado: o registro de
+    // - mas o parked-record (+0x1188) TEM que ficar linkado: o registro de
     // obstáculo de tráfego o referencia, e órfaná-lo deixa uma entrada de
     // lane morta que a varredura do tráfego quebra. O que de fato re-asserta
     // a pose estacionada é o update por frame gated pelo flag de registro
-    // +0x1258 — então o byte de parked e esse flag caem, o record fica.
+    // +0x1258 - então o byte de parked e esse flag caem, o record fica.
     // Só carretas JOINTADAS: uma peça sem junta fica na cadeia de propósito,
     // e limpar as flags dela briga com a manutenção que as re-asserta.
     void unpark_jointed( const bool* in_convoy )
@@ -1635,17 +1635,17 @@ namespace ts_extra_utilities
             if ( joint( t ) == nullptr ) continue;
             const bool parked_flag = prism::offsets::field< uint8_t >( t, prism::offsets::trailer_parked ) != 0;
             const bool parked_rec = prism::offsets::field< void* >( t, prism::offsets::trailer_parked_state ) != nullptr;
-            // só um estado estacionado vivo precisa de limpeza — o record
+            // só um estado estacionado vivo precisa de limpeza - o record
             // (+0x1188) fica linkado de propósito pro registro de tráfego, e
             // a presença dele sozinha não pode re-disparar isso (dispararia
             // todo frame e zeraria os canais de freio da carreta engatada)
             const bool parked_reg = prism::offsets::field< uint8_t >( t, prism::offsets::trailer_parked_registered ) != 0;
             if ( !parked_flag && !parked_reg ) continue;
-            // os bytes de flag caem todo frame — duas escritas que fecham o
+            // os bytes de flag caem todo frame - duas escritas que fecham o
             // gate que o re-assert de pose lê, mesmo se a máquina de
             // estacionamento os re-armar entre passadas. O trabalho por junta
             // era carregado inteiro e chaveado pela posição em trailers[], que
-            // ROTACIONA durante o reboque — uma carreta re-jointada podia
+            // ROTACIONA durante o reboque - uma carreta re-jointada podia
             // herdar o selo de "feito" de outra peça e brigar com a máquina de
             // estacionamento pra sempre (o re-assert por frame contra a junta
             // viva é a guerra de física que derruba o sim pra 3-5 FPS)
@@ -1670,7 +1670,7 @@ namespace ts_extra_utilities
             unparked_j[ slot ] = joint( t );
             prism::offsets::field< float >( t, prism::offsets::trailer_brake ) = 0.f;
             prism::offsets::field< uint8_t >( t, prism::offsets::trailer_brake_forced ) = 0;
-            // tira o record da scan-list da máquina de estacionamento —
+            // tira o record da scan-list da máquina de estacionamento -
             // enquanto ficar listado, o manager re-arma as flags e re-asserta
             // a pose guardada contra a junta viva todo frame. O record em si
             // continua linkado na carreta (+0x1188) pro registro de tráfego

@@ -13,7 +13,7 @@ namespace ts_extra_utilities
         class vehicle_wheel_steering_data_t;
 
         // called by the game every steering advance with the angle computed
-        // from the joint — hooked to substitute the user's angle on trailers
+        // from the joint - hooked to substitute the user's angle on trailers
         // whose steering is taken over
         using set_individual_steering_fn = void __fastcall( vehicle_wheel_steering_data_t*, float );
 

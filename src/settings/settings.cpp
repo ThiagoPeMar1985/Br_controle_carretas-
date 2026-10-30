@@ -27,7 +27,7 @@ namespace ts_extra_utilities::settings
             0, // STEER_RIGHT
             0, // STEER_CENTER
             0, // TOGGLE_STEERING_LOCK
-            VK_F12, // SLEEP_PARK — the game's own rest key is Shift+Num0;
+            VK_F12, // SLEEP_PARK - the game's own rest key is Shift+Num0;
                     // this just injects it
         };
 
@@ -62,7 +62,7 @@ namespace ts_extra_utilities::settings
 
         int capturing = -1;
 
-        // friendly key names accepted in settings.ini — a plain number still
+        // friendly key names accepted in settings.ini - a plain number still
         // works and stays the authoritative write format. Combos parse as
         // "CTRL+DELETE", "SHIFT+F5", "ALT+J", joystick buttons as "JOY0:B3"
         UINT key_from_name( const wchar_t* text )
@@ -81,7 +81,7 @@ namespace ts_extra_utilities::settings
             for ( ; text[ i ] != 0 && i < 31; ++i ) name[ i ] = towupper( text[ i ] );
             while ( i > 0 && name[ i - 1 ] == L' ' ) name[ --i ] = 0;
 
-            // joystick button: JOY<n>:B<btn> — n = device index 0..15
+            // joystick button: JOY<n>:B<btn> - n = device index 0..15
             if ( name[ 0 ] == L'J' && name[ 1 ] == L'O' && name[ 2 ] == L'Y' )
             {
                 const wchar_t* colon = wcschr( name, L':' );
@@ -158,7 +158,7 @@ namespace ts_extra_utilities::settings
         }
 
         // a br-settings.ini shipped next to the dll lets a release preset
-        // binds out of the box — used only while the user has no own file yet.
+        // binds out of the box - used only while the user has no own file yet.
         // The br- prefix keeps it from colliding with other plugins' inis
         // sharing the same plugins folder
         std::filesystem::path plugin_dir_settings_path()
@@ -194,6 +194,7 @@ namespace ts_extra_utilities::settings
         g_settings.keys_width = 250.f;
         g_settings.ui_tab = 0;
         g_settings.license_key[ 0 ] = 0;
+        g_settings.license_seen = 0;
         g_settings.trailer_brake_boost = 0.f;
         g_settings.air_boost = 0;
         g_settings.air_leak = 0.f;
@@ -217,7 +218,7 @@ namespace ts_extra_utilities::settings
 
         // the window/cursor keys can only be changed through a file, so when a
         // br-settings.ini sits next to the dll it governs those two even when
-        // the user's own ini already exists — everything else still comes
+        // the user's own ini already exists - everything else still comes
         // from the user file
         if ( has_bundled && bundled != path )
         {
@@ -232,7 +233,7 @@ namespace ts_extra_utilities::settings
 
         // the two critical keys stay rebindable through the ini, but an
         // unbound/garbage value or a collision would leave the plugin
-        // unreachable — fall back to the defaults instead
+        // unreachable - fall back to the defaults instead
         const int ui = static_cast< int >( Action::TOGGLE_UI );
         const int cursor = static_cast< int >( Action::TOGGLE_CURSOR );
         if ( g_settings.keys[ ui ] == 0 || g_settings.keys[ cursor ] == 0 ||
@@ -258,6 +259,7 @@ namespace ts_extra_utilities::settings
         GetPrivateProfileStringW( L"license", L"key", L"", lic_in, 256, path.c_str() );
         WideCharToMultiByte( CP_UTF8, 0, lic_in, -1,
             g_settings.license_key, sizeof( g_settings.license_key ), nullptr, nullptr );
+        g_settings.license_seen = GetPrivateProfileIntW( L"license", L"seen", 0, path.c_str() );
 
         wchar_t value[ 32 ] = {};
         GetPrivateProfileStringW( L"steering", L"speed", L"", value, 32, path.c_str() );
@@ -309,6 +311,8 @@ namespace ts_extra_utilities::settings
         wchar_t lic_out[ 256 ] = {};
         MultiByteToWideChar( CP_UTF8, 0, g_settings.license_key, -1, lic_out, 256 );
         WritePrivateProfileStringW( L"license", L"key", lic_out, path.c_str() );
+        WritePrivateProfileStringW( L"license", L"seen",
+            std::to_wstring( g_settings.license_seen ).c_str(), path.c_str() );
         wchar_t buf[ 32 ] = {};
         swprintf_s( buf, L"%.2f", static_cast< double >( g_settings.steering_speed ) );
         WritePrivateProfileStringW( L"steering", L"speed", buf, path.c_str() );
@@ -399,7 +403,7 @@ namespace ts_extra_utilities::settings
         if ( GetAsyncKeyState( VK_MENU )    & 0x8000 ) packed |= KEY_MOD_ALT;
 
         // whatever currently opens the window / releases the cursor is
-        // reserved — stealing it here would leave the plugin unreachable
+        // reserved - stealing it here would leave the plugin unreachable
         if ( packed == key( Action::TOGGLE_UI ) || packed == key( Action::TOGGLE_CURSOR ) )
         {
             capturing = -1;

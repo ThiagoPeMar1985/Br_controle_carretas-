@@ -1,4 +1,4 @@
-// Chase camera — anchor enforcement, camera hooks, combination length.
+// Chase camera - anchor enforcement, camera hooks, combination length.
 // Split out of trailer_coupling.cpp.
 
 #include "trailer_manipulation.hpp"
@@ -29,7 +29,7 @@ namespace ts_extra_utilities
 {
     // Chase-camera target setter (base vfunc 31, 0x14063C2D0): whenever the
     // native resolver tries to anchor the camera on a tracked trailer whose
-    // physics joint is dead, swap the target for null — the same "no
+    // physics joint is dead, swap the target for null - the same "no
     // trailer" state the game uses when driving solo, so camera 2 follows
     // the truck with all of its native orbit/zoom handling intact
     void __fastcall hk_cam_set_target( void* cam, void* target )
@@ -41,13 +41,13 @@ namespace ts_extra_utilities
         cam_set_target_hook->get_original< cam_set_target_fn >()( cam, target );
     }
     // Chase-camera update (vfunc 32, 0x140AC75A0): the camera's own chain
-    // walk also follows trailer_slave without checking joints — the same
+    // walk also follows trailer_slave without checking joints - the same
     // shape as combo_length. Hide every live->dead link for the duration of
     // the call so the camera measures the live combination only (restored
-    // right after — the links still carry the parked pieces' visibility)
+    // right after - the links still carry the parked pieces' visibility)
     void __fastcall hk_cam_update( void* cam, float dt )
     {
-        // pass through untouched while trailers are still being assembled —
+        // pass through untouched while trailers are still being assembled -
         // hiding links from half-built objects corrupts the camera's view of
         // a chain the game itself is still building
         if ( canon_age < 90 )
@@ -98,7 +98,7 @@ namespace ts_extra_utilities
         };
         float acc = f( self, 0x2C ) - f( self, 0x20 );
         void* prev = self;
-        // the maintenance rewrites slave links every frame — a claim edge
+        // the maintenance rewrites slave links every frame - a claim edge
         // plus a native link can meet in a cycle for a few frames, and this
         // walk has no other exit: without a revisit check it spins here
         // until another thread happens to break the ring, eating the whole
@@ -110,7 +110,7 @@ namespace ts_extra_utilities
               prev = t, t = prism::offsets::field< void* >( t, prism::offsets::trailer_slave ) )
         {
             // the only deviation from the original: a slave whose joint is
-            // gone is detached — it and everything behind it is no longer
+            // gone is detached - it and everything behind it is no longer
             // part of this combination
             if ( !readable_ptr( t ) ||
                 !readable_ptr( static_cast< uint8_t* >( t ) + prism::offsets::trailer_physics_joint ) ||
@@ -135,6 +135,7 @@ namespace ts_extra_utilities
     // by its vehicle_behind_rotation_camera vtable (exe+0x23126F0)
     void* chase_camera_obj()
     {
+        if ( !expected_build() ) return nullptr;
         if ( chase_camera != nullptr ) return chase_camera;
         const auto base = reinterpret_cast< uint64_t >( GetModuleHandle( nullptr ) );
         auto* manager = *reinterpret_cast< void** >( base + 0x36AF830 );
@@ -192,11 +193,11 @@ namespace ts_extra_utilities
         return nullptr;
     }
     // per-frame: while a trailer is detached the chase camera anchors on the
-    // HEAD OF THE LIVE CHAIN — the trailer physically on the fifth wheel
+    // HEAD OF THE LIVE CHAIN - the trailer physically on the fifth wheel
     // (truck+0x15A8). Detaching a TAIL trailer does not change the head:
     // trailer 0 stays the anchor and the camera keeps measuring the live
     // combination through hk_combo_length (which stops at the first dead
-    // joint). Only when the truck tows NOTHING does the anchor go null —
+    // joint). Only when the truck tows NOTHING does the anchor go null -
     // the native solo state that follows the truck. The store is a raw
     // write with NO refcounting: the native resolver writes this field
     // directly too, and releasing the previous value is what underflowed
@@ -213,7 +214,7 @@ namespace ts_extra_utilities
         static void* last_forced_anchor = reinterpret_cast< void* >( ~0ull );
 
         // a loose trailer only matters to the camera while it is near the
-        // truck — one parked in another city (a job trailer waiting to be
+        // truck - one parked in another city (a job trailer waiting to be
         // picked up, a garage return) must not keep the override alive: it
         // pinned the solo zoom and re-measured the combination forever
         void* cam_truck = nullptr;
@@ -251,7 +252,7 @@ namespace ts_extra_utilities
         const int wheel = CCore::g_instance->consume_in_game_wheel();
         if ( !any_detached && !override_active ) return;   // pure native behaviour
         void* chase = chase_camera_obj();
-        // vfunc 14 (recompute) is called on transitions — a camera mid-
+        // vfunc 14 (recompute) is called on transitions - a camera mid-
         // rebuild (delivery cinematic) would carry a dead slot target
         if ( chase == nullptr || !plausible_vfunc( chase, 14 ) )
         {
@@ -260,7 +261,7 @@ namespace ts_extra_utilities
         }
 
         void*& anchor = prism::offsets::field< void* >( chase, 0x3F0 );
-        // desired anchor = the trailer JOINTED TO THE TRUCK — the head of
+        // desired anchor = the trailer JOINTED TO THE TRUCK - the head of
         // the live chain. A trailer still jointed to a PARKED parent must
         // not count: truck+0x15A8 is authoritative. The camera measures the
         // combination by walking trailer_slave FROM the anchor and
@@ -295,7 +296,7 @@ namespace ts_extra_utilities
         if ( any_detached )
         {
             // the anchor (chain head) does NOT change when only the TAIL of
-            // the set detaches — trailer 0 stays the head — so a pure
+            // the set detaches - trailer 0 stays the head - so a pure
             // anchor-change check never fires and the camera keeps the
             // distance it measured for the full combination. Any change in
             // the live set needs a recompute: vfunc 14 re-measures through
@@ -308,13 +309,13 @@ namespace ts_extra_utilities
             const bool set_changed = !was_detached || det_recs_now != last_det_recs ||
                 jointless_now != last_jointless;
             // the native resolver re-writes the anchor to a parked trailer
-            // every frame while anything sits detached — keep re-storing
+            // every frame while anything sits detached - keep re-storing
             // chain_head, but vfunc 14 (recompute) RESETS the orbit state:
             // per-frame calls snap the camera back behind the truck the
             // moment the user tries to orbit. Recompute only on transitions
             if ( anchor != chain_head )
             {
-                anchor = chain_head;   // raw store, no release — see comment above
+                anchor = chain_head;   // raw store, no release - see comment above
                 if ( last_forced_anchor != chain_head )
                 {
                     vcall< cam_recompute_fn >( chase, 14, uint8_t( 1 ) );
@@ -332,10 +333,10 @@ namespace ts_extra_utilities
 
             // zoom distance: the native update clamps the target (+0x4D8) to
             // [+0x480, base], so raising +0x480 above the base distance pins
-            // the camera at our value — pure field write, the native lerp at
+            // the camera at our value - pure field write, the native lerp at
             // +0x4DC still smooths every change. Only while the truck tows
             // NOTHING: with a live trailer on the fifth wheel the camera
-            // must keep measuring the live combination — pinning +0x4D8
+            // must keep measuring the live combination - pinning +0x4D8
             // would freeze it at the distance the full set was measured at
             if ( chain_head == nullptr )
             {
@@ -343,11 +344,11 @@ namespace ts_extra_utilities
                 {
                     // the recompute above re-measures the solo distance but the
                     // smoothed distance (+0x4DC) still holds the full combination's
-                    // value for a moment — capturing it now pins the camera far
+                    // value for a moment - capturing it now pins the camera far
                     // behind a truck that tows nothing. Let the native lerp settle
                     if ( ++solo_settle < 90 ) return;
                     // a distance under 3 m is a camera still in a transition
-                    // (garage exit, cinematic) — pinning it puts the camera
+                    // (garage exit, cinematic) - pinning it puts the camera
                     // inside the cab; keep the native behaviour until it settles
                     const float live_dist = prism::offsets::field< float >( chase, 0x4DC );
                     if ( live_dist < 3.f ) { solo_settle = 60; return; }
@@ -379,7 +380,7 @@ namespace ts_extra_utilities
             if ( anchor != chain_head && cam_set_target_hook != nullptr &&
                 plausible_vfunc( chase, 31 ) )
             {
-                // go through the real setter (vfunc 31) — refcounted
+                // go through the real setter (vfunc 31) - refcounted
                 // store, the same call the native resolver makes. The
                 // field currently holds our raw null, so there's no
                 // stale ref for the setter to release.
@@ -396,7 +397,7 @@ namespace ts_extra_utilities
             was_detached = false;
             // recompute (vfunc 14) re-reads the anchor's joint and switches
             // the camera back to the jointed distance set (full SCS range)
-            // — skipped while detached because it resets the orbit state
+            // - skipped while detached because it resets the orbit state
             if ( last_forced_anchor != reinterpret_cast< void* >( ~0ull ) )
             {
                 vcall< cam_recompute_fn >( chase, 14, uint8_t( 1 ) );

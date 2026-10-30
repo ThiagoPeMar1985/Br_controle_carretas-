@@ -1,6 +1,7 @@
 ﻿#include "core.hpp"
 
 #include <MinHook.h>
+#include <eurotrucks2/scssdk_eut2.h>
 
 #include "consts.hpp"
 
@@ -37,6 +38,17 @@ namespace ts_extra_utilities
     {
         MH_Initialize();
         this->info( "Initializing {}", VERSION );
+
+        // this build targets ETS2 - its fixed image offsets were derived from
+        // eurotrucks2.exe only; warn loudly if the dll gets loaded by ATS
+        if ( init_params_->common.game_id == nullptr ||
+            strcmp( init_params_->common.game_id, SCS_GAME_ID_EUT2 ) != 0 )
+        {
+            this->error( "This plugin is for Euro Truck Simulator 2 (game_id={})",
+                init_params_->common.game_id != nullptr ? init_params_->common.game_id : "?" );
+            return false;
+        }
+
         truckersmp_ = GetModuleHandle( L"core_ets2mp.dll" ) != nullptr || GetModuleHandle( L"core_atsmp.dll" ) != nullptr;
 
         this->dx11_hook = new CDirectX11Hook();
@@ -59,7 +71,7 @@ namespace ts_extra_utilities
             g_instance->error( "Could not initialize the trailer control module" );
         }
 
-        // hooks status stays registered for support, hidden by default — the
+        // hooks status stays registered for support, hidden by default - the
         // main window carries everything the user needs
         const auto hooks_window = this->window_manager_->register_window( std::make_shared< CHooksWindow >() );
         hooks_window->init();

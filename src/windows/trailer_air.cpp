@@ -1,4 +1,4 @@
-// Air compressor boost (o slider "Compressor") — split out of
+// Air compressor boost (o slider "Compressor") - split out of
 // trailer_manipulation.cpp.
 
 #include "trailer_manipulation.hpp"
@@ -28,7 +28,7 @@
 namespace ts_extra_utilities
 {
     //========================================================================
-    // Air compressor diagnostics (temporary — collecting the native refill
+    // Air compressor diagnostics (temporary - collecting the native refill
     // rate and the truck-object field holding the tank pressure)
     //========================================================================
     std::atomic< float > air_psi{ 0.f };
@@ -64,12 +64,12 @@ namespace ts_extra_utilities
     // Reverse-engineered from the telemetry channel registration (1.61):
     // the truck.brake.air.pressure getter callback at 0x14064B850 reads
     //   psi = [[truck+0x200] + 0x458] * [truck+0x1148] * 14.5
-    // +0x458 on the air sub-object is the tank MAX pressure (~10 bar — a
+    // +0x458 on the air sub-object is the tank MAX pressure (~10 bar - a
     // constant, do NOT write); the live fill is the fraction at
     // truck+0x1148 (0..~0.93 cutout). The boost adds
     // `native_rate * air_boost` psi/s to that fraction.
     // (The +0xA8/+0xD0 float arrays with cached means belong to a different
-    // subsystem — per-axle brake air, always 0 when unbraked — and the
+    // subsystem - per-axle brake air, always 0 when unbraked - and the
     // singleton chain [[[exe+0x3046780]+0x18]+0xA0]+0x10 resolves a dead
     // template instance; neither is the player telemetry source.)
     //========================================================================
@@ -94,7 +94,7 @@ namespace ts_extra_utilities
     float air_recheck_t = 0.f;             // 0.5 s verify throttle
 
 
-    // guarded reads/writes — the arrays live on the truck object; kept apart
+    // guarded reads/writes - the arrays live on the truck object; kept apart
     // because __try cannot live in a function with C++ objects that need
     // unwinding
     bool air_safe_read_f( const void* addr, float& out )
@@ -152,7 +152,7 @@ namespace ts_extra_utilities
 
     // engine off: the tank bleeds through the usual small leaks. Driven by GAME
     // minutes (telemetry game.time), so a sleep or a time skip drains the whole
-    // span at once — wake up and the pressure is lower than when you parked
+    // span at once - wake up and the pressure is lower than when you parked
     void update_air_leak()
     {
         static uint32_t last_min = 0;
@@ -184,7 +184,7 @@ namespace ts_extra_utilities
         const float rpm = engine_rpm.load();
         const int boost = settings::g_settings.air_boost;
 
-        // achieved fill rate over a 0.25 s window — the telemetry channel
+        // achieved fill rate over a 0.25 s window - the telemetry channel
         // is quantized so per-frame dpsi/dt is meaningless; native rate =
         // measured total minus what we injected ourselves
         if ( dt > 0.f )
@@ -204,11 +204,11 @@ namespace ts_extra_utilities
                     air_rate_est = air_rate_est == 0.f ? native_obs
                         : air_rate_est * 0.8f + native_obs * 0.2f;
                 }
-                // integral: nudge the injected rate toward the target — a
+                // integral: nudge the injected rate toward the target - a
                 // pure proportional push converges to only half the goal.
                 // Same gates as production or the term winds up at the cap
                 // while the tank is full and bursts on the next drain. The
-                // frac check also covers the compressor cutout — past
+                // frac check also covers the compressor cutout - past
                 // ~0.93 the displayed psi saturates so the controller would
                 // keep pumping a fraction the sim no longer uses
                 float frac_now = 0.f;
@@ -260,7 +260,7 @@ namespace ts_extra_utilities
                             CCore::g_instance->info( "air: pressure locked max={:.3f} frac={:.4f} -> {:.1f} vs psi {:.1f}",
                                 field, frac, predicted, psi );
                         }
-                        // heal +0x458 — earlier builds wrote into it; it is
+                        // heal +0x458 - earlier builds wrote into it; it is
                         // the tank's MAX pressure, not the live value
                         if ( field < air_field_base * 0.9f || field > air_field_base * 1.1f )
                         {
@@ -284,7 +284,7 @@ namespace ts_extra_utilities
             }
         }
 
-        // production: inject air_inject psi/s into the fill fraction — the
+        // production: inject air_inject psi/s into the fill fraction - the
         // integral term has already sized it so the achieved rate lands on
         // native*(boost+1)
         if ( boost > 0 && air_tanks_seen && air_truck != nullptr && rpm > 0.f &&
@@ -295,7 +295,7 @@ namespace ts_extra_utilities
                  frac < 0.95f )
             {
                 const float add_psi = air_inject * dt;
-                // hard cap at the physical fill range — the sim saturates
+                // hard cap at the physical fill range - the sim saturates
                 // the effective pressure at the cutout, anything above just
                 // accumulates an invisible overshoot in the fraction
                 air_safe_write_f( static_cast< uint8_t* >( air_truck ) + air_scale_off,

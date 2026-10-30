@@ -71,7 +71,7 @@ namespace ts_extra_utilities
         else
         {
             // the game can recreate its device/swapchain on resolution change,
-            // alt+tab out of exclusive fullscreen, etc. — drawing with the stale
+            // alt+tab out of exclusive fullscreen, etc. - drawing with the stale
             // device shows up as the overlay flickering, so re-init on change
             ID3D11Device* current_device = nullptr;
             if ( SUCCEEDED( swap_chain->GetDevice(__uuidof(ID3D11Device), reinterpret_cast<void**>(&current_device)) )
@@ -96,7 +96,7 @@ namespace ts_extra_utilities
                 ImGui_ImplDX11_CreateDeviceObjects();
 
                 // re-hook the window proc only if the window is new or our hook
-                // was lost — storing WndProcD3D itself as "original" would recurse
+                // was lost - storing WndProcD3D itself as "original" would recurse
                 if ( new_hwnd != prism_hwnd
                     || GetWindowLongPtr( new_hwnd, GWLP_WNDPROC ) != reinterpret_cast< LONG_PTR >( WndProcD3D ) )
                 {

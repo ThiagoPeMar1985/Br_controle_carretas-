@@ -6,7 +6,7 @@
 
 namespace ts_extra_utilities
 {
-    // Individually detachable trailers for 1.61 — connect/disconnect go through
+    // Individually detachable trailers for 1.61 - connect/disconnect go through
     // vfunc slots verified against the native attach path.
     class CTrailerManipulation : public CWindow
     {

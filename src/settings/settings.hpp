@@ -44,14 +44,17 @@ namespace ts_extra_utilities::settings
         float keys_width = 250.f;
         // active UI tab (0 Teclas, 1 Oversize, 2 Carretas, 3 Licença); -1 = collapsed
         int32_t ui_tab = 0;
-        // license key issued by the site (screen only, not validated yet)
+        // license key issued by the site for this machine's hardware id
         char license_key[ 256 ] = {};
+        // furthest calendar date (yyyymmdd) a genuine check has run - a clock
+        // set backwards past it counts as an expired license
+        int32_t license_seen = 0;
         // extra brake factor forwarded to coupled trailers, in percent of the
         // truck's value (0 = native balance): the trailers brake proportionally
         // harder so they take the load first on slippery surfaces
         float trailer_brake_boost = 0.f;
         // air compressor output multiplier: 0 = native, each step adds 100%
-        // of the native (rpm-dependent) production — N means N+1 times total
+        // of the native (rpm-dependent) production - N means N+1 times total
         int32_t air_boost = 0;
         // air lost per game hour while the engine is off (bar/h, 0 = none)
         float air_leak = 0.f;
@@ -76,7 +79,7 @@ namespace ts_extra_utilities::settings
     const char* action_name( Action action );
     std::string key_name( UINT vk );
 
-    // joystick helpers (winmm — covers wheels/button boxes, up to 32 buttons)
+    // joystick helpers (winmm - covers wheels/button boxes, up to 32 buttons)
     bool joystick_button_down( UINT packed );
     // call every frame: binds a joystick button pressed while capturing
     void poll_joystick_capture();

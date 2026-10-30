@@ -44,7 +44,7 @@ namespace ts_extra_utilities
     prism::vehicle_distribute_towed_mass_fn* distribute_towed_mass_fn = nullptr;
     prism::game_actor_refresh_axle_lift_fn* refresh_axle_lift_fn = nullptr;
 
-    // console execution (sim thread only — see pending_cmd)
+    // console execution (sim thread only - see pending_cmd)
     prism::console_execute_line_fn* execute_line_fn = nullptr;
 
     // traffic-obstacle machinery read out of the native detach body:
@@ -70,7 +70,7 @@ namespace ts_extra_utilities
     // - 0x1409FB700 settles the trailer on the hook before the connect vfunc,
     //   taking a cvar float (the one read at attach time, 0x142D48200)
     // - 0x1408771A0 pairs/unpairs the two vehicles' connector lists (the
-    //   pneumatic/electric links — a trailer attached without it keeps its
+    //   pneumatic/electric links - a trailer attached without it keeps its
     //   standalone spring brake, i.e. stays braked with a live joint)
     // - 0x1408762E0 applies the trailer-cables cvar; attach passes the trailer
     //   in rdx, detach passes null
@@ -105,13 +105,13 @@ namespace ts_extra_utilities
 
     // the landing-gear animation player the native attach/detach run on the
     // trailer (0x140636F50): builds/plays trailer+0x1260 whose soundref is the
-    // trailer_brace_down/up_sound — i.e. the gear-crank noise. dl=1 lowers
+    // trailer_brace_down/up_sound - i.e. the gear-crank noise. dl=1 lowers
     // (detach), dl=0 raises (attach), xmm2 is the anim speed (native: 1/3)
     using trailer_brace_anim_fn = void __fastcall( void* /*trailer*/, uint8_t /*down*/, float /*speed*/ );
     trailer_brace_anim_fn* brace_anim_fn = nullptr;
 
     // the native attach dispatcher itself (0x1405DCC20, a game_actor method):
-    // the same function the T key calls — it runs the complete native attach
+    // the same function the T key calls - it runs the complete native attach
     // sequence (hook settle, connect vfunc, towed registration, connector
     // pairing, cables, anchors) which our manual replica could never fully
     // reproduce. It takes the trailer to attach from game_actor+0xC8
@@ -121,7 +121,7 @@ namespace ts_extra_utilities
 
     // line/hose teardown + lamp-mask setter + the camera update vfunc,
     // resolved alongside the other native helpers (all signature-verified
-    // for this build — same functions the ATS build hooked at the shared
+    // for this build - same functions the ATS build hooked at the shared
     // build hash)
     using line_state_fn = void __fastcall( void* /*vehicle*/, uint8_t /*state*/, uint8_t /*force*/ );
     line_state_fn* set_lines_fn = nullptr;
@@ -129,17 +129,17 @@ namespace ts_extra_utilities
     using cam_update_fn = void( void* /*camera*/, float /*dt*/ );   // vfunc 32, 0x140AC75A0
 
     //========================================================================
-    // Estado de engate mantido aqui — estado de estacionamento foi para
+    // Estado de engate mantido aqui - estado de estacionamento foi para
     // trailer_loadstate.cpp, rastreamento de canon para
     // trailer_manipulation.cpp
     //========================================================================
     // the trailer the "connect to truck" action wants the native attach
-    // dispatcher to take — forced into game_actor+0xC8 inside
+    // dispatcher to take - forced into game_actor+0xC8 inside
     // hk_attach_dispatch only while it is the closest jointless piece
     void* attach_target = nullptr;
 
     // a free canon slot only auto-claims within this distance of the
-    // mother's rear hook — farther means parked scenery, not a coupling
+    // mother's rear hook - farther means parked scenery, not a coupling
     // candidate (the spontaneous re-join fix)
     const float attach_gap_limit = 12.f;
 
@@ -155,7 +155,7 @@ namespace ts_extra_utilities
             v.z + q.w * tz + q.x * ty - q.y * tx };
     }
 
-    // attach offset in the parent's frame — the same vec passed to the
+    // attach offset in the parent's frame - the same vec passed to the
     // connect vfunc: rear hook point minus the parent's own hook locator
     float3_t attach_offset( void* parent, const bool parent_is_truck )
     {
@@ -177,12 +177,12 @@ namespace ts_extra_utilities
     }
 
     // the native T only connects when the hooks nearly touch; our connect
-    // vfunc teleports a far trailer onto the hook in one step — an instant
+    // vfunc teleports a far trailer onto the hook in one step - an instant
     // jump that, over a live traffic lane, leaves a component half-initialized
     // (purecall). Gate on real hook-to-hook distance: trailer front hook vs
     // parent rear hook in world space. The locator frame's sign convention
     // isn't fully nailed down, so both signed offsets are measured and the
-    // nearer wins — attached-or-not, one of them is the true rear hook.
+    // nearer wins - attached-or-not, one of them is the true rear hook.
     // Returns < 0 when it cannot be measured.
     float hook_gap( void* trailer, void* parent, const bool parent_is_truck )
     {
@@ -209,7 +209,7 @@ namespace ts_extra_utilities
     }
 
     // refuse the connect when the hooks are farther apart than the native T
-    // would allow — no teleporting the trailer across the map onto the hook
+    // would allow - no teleporting the trailer across the map onto the hook
     bool hook_far( void* trailer, void* parent, const bool parent_is_truck )
     {
         const float gap = hook_gap( trailer, parent, parent_is_truck );
@@ -217,20 +217,20 @@ namespace ts_extra_utilities
         CCore::g_instance->info( "Hook gap trailer {:p} to {:p}: {:.2f}m", trailer, parent, gap );
         // bitrem chains measure ~6.9 m at touching distance (log: 6.85-7.03 m
         // with the trailers backed right up to each other) and a hair more
-        // when the player stops a little short — 7.0 m refused a correct
+        // when the player stops a little short - 7.0 m refused a correct
         // coupling. One limit for every layout, with room up to 8.0 m
         return gap > 8.f;
     }
 
     //========================================================================
-    // Native flow replicas — sim thread only
+    // Native flow replicas - sim thread only
     //========================================================================
 
     // drive the game's own detach dispatcher (the T path) at a chosen trailer
-    // by pointing the actor's trailer-of-interest slot at it — identical to
+    // by pointing the actor's trailer-of-interest slot at it - identical to
     // what pressing T on the head does. Only used while the trailer sits on
     // the truck (or straight on the fifth wheel): it is the head-detach
-    // path — run on a mid-chain trailer it tears down the whole towed set's
+    // path - run on a mid-chain trailer it tears down the whole towed set's
     // registration, so chain detaches stay on the manual replica below
     bool native_detach_via_slot( void* trailer )
     {
@@ -244,11 +244,11 @@ namespace ts_extra_utilities
         // dl=1 matches the T-key call: full component/accessory detach notify
         using detach_fn_t = void __fastcall( void*, uint8_t, uint64_t );
         repair_lamp_ctx_all();
-        // the dispatcher's internal disconnect walks the chain directly —
+        // the dispatcher's internal disconnect walks the chain directly -
         // every link must be a live trailer or the teardown faults on it
         sanitize_slave_walk( trailer );
         sanitize_slave_walk( prev );
-        // o dispatcher interno anda a cadeia bypassando o hook de vfunc —
+        // o dispatcher interno anda a cadeia bypassando o hook de vfunc -
         // saneia o grafo físico também, senão uma aresta pra slot morto mata
         // o detach no meio e deixa a carreta meio-desatrelada em limbo
         sanitize_phys_walk( trailer );
@@ -259,7 +259,7 @@ namespace ts_extra_utilities
         native_chain_call_active.store( false, std::memory_order_release );
         dump_chain( "post-detach(slot)" );
         // the dispatcher unconditionally clears the truck's towed bookkeeping
-        // — put it back when the trailer we dropped was mid-chain and
+        // - put it back when the trailer we dropped was mid-chain and
         // something is still on the wheel
         void* truck = prism::offsets::field< void* >( game_actor, prism::offsets::game_actor_truck );
         void* prev_towed = truck != nullptr && readable_ptr( truck )
@@ -298,7 +298,7 @@ namespace ts_extra_utilities
         {
             prism::offsets::field< void* >( trailer, prism::offsets::trailer_slave ) = nullptr;
         }
-        // o dispatcher registra a cadeia slave INTEIRA atrás do trailer —
+        // o dispatcher registra a cadeia slave INTEIRA atrás do trailer -
         // corta todas as claims estacionadas, não só a dele, senão uma peça
         // estacionada mais fundo vira membro fantasma e afunda sem trava
         sever_parked_claims();
@@ -316,7 +316,7 @@ namespace ts_extra_utilities
 
     // parked-trailer lamp pin: the lamp update reads the SOURCE vehicle's
     // +0x2A0 mask through [[veh+0x110]+0x18], and the propagator keeps
-    // repointing a parked trailer's ctx at the chain head — so it mirrors
+    // repointing a parked trailer's ctx at the chain head - so it mirrors
     // the truck's brake lights forever. Pin its own mask byte at 0 AND
     // repoint its source at itself: it reads its own (zeroed) mask and goes
     // natively dark, while the live set keeps the real feed. The native
@@ -324,7 +324,7 @@ namespace ts_extra_utilities
     // (not joint==null): a trailer bolted to a parked parent is parked too
     // the lamp update reads the SOURCE vehicle's +0x2A0 through [ctx+0x18]
     // for the mask channels, but most channels (reverse, blinkers, aux)
-    // read scalar fields straight off the light ctx itself — every offset
+    // read scalar fields straight off the light ctx itself - every offset
     // below was verified against the channel bodies in the exe lamp update
     // (bytes/words/floats only, no pointers)
 
@@ -333,7 +333,7 @@ namespace ts_extra_utilities
     // vehicle's ctx buckets. The comps carry no reliable trailer
     // back-pointer, so ownership is proven the other way: a comp is a parked
     // trailer's if the trailer's own fields reference it. Matched entries
-    // are pushed lamp-off through their own +0xD8 vfunc and unlinked — the
+    // are pushed lamp-off through their own +0xD8 vfunc and unlinked - the
     // native attach re-registers them on recouple
 
 
@@ -341,8 +341,8 @@ namespace ts_extra_utilities
     {
         // a trailer sitting on the truck (or straight on the fifth wheel)
         // gets the NATIVE T-detach: the dispatcher drives the whole proper
-        // sequence — joint release, parked-state record, traffic obstacle,
-        // electrical cut — producing a REAL parked trailer instead of a
+        // sequence - joint release, parked-state record, traffic obstacle,
+        // electrical cut - producing a REAL parked trailer instead of a
         // replica's approximation
         if ( parent_is_truck && joint( trailer ) != nullptr && detach_dispatch_hook != nullptr )
         {
@@ -359,7 +359,7 @@ namespace ts_extra_utilities
                 const int di = canon_index_of( trailer );
                 if ( di >= 0 ) detached_idx[ di ] = true;
                 if ( trailer == truck_towed ) truck_towed = nullptr;
-                // the parked machine hid it the moment the joint died — the
+                // the parked machine hid it the moment the joint died - the
                 // plugin wants it to stay a world object
                 unhide_detached();
                 if ( trailer_teleport_hook != nullptr )
@@ -374,14 +374,14 @@ namespace ts_extra_utilities
                 // the gear-crank noise the native path skips while the brace
                 // model is missing
                 play_brace_sound( trailer, false );
-                // reescreve as claims já na topologia pós-detach — senão a
+                // reescreve as claims já na topologia pós-detach - senão a
                 // seção solta fica inalcançável até o próximo frame e a
                 // máquina de visibilidade pisca ela
                 rebuild_parked_claim_links();
                 traffic_detach_done.store( true, std::memory_order_release );
                 return;
             }
-            CCore::g_instance->info( "disconnect {:p}: native detach declined — manual fallback", trailer );
+            CCore::g_instance->info( "disconnect {:p}: native detach declined - manual fallback", trailer );
         }
         // native T detach order: while the truck's coupling state is nonzero it
         // releases the joint and fifth-wheel lock first, then drops the joint
@@ -392,7 +392,7 @@ namespace ts_extra_utilities
         }
         // the gear-crank noise: play the trailer's registered brace sound
         // event directly (the brace-anim path can't build on models without
-        // the brace_model_anim node — proven silent in testing)
+        // the brace_model_anim node - proven silent in testing)
         play_brace_sound( trailer, false );
         vcall< prism::physics_trailer_u_set_trailer_brace_fn >( trailer, prism::offsets::vfunc_set_brace, true );
 
@@ -400,8 +400,8 @@ namespace ts_extra_utilities
         // traffic-obstacle anchor BEFORE the joint drops: actor slot at
         // game_actor+0x1D38 -> provider +0x1F0 -> anchor update. Skipping it
         // leaves the lane modifier owner stale and the traffic sweep hits it
-        // whenever the trailer sits on a road. Unlike the head trailer — which
-        // parks right under the truck — a mid-chain detach can sit anywhere,
+        // whenever the trailer sits on a road. Unlike the head trailer - which
+        // parks right under the truck - a mid-chain detach can sit anywhere,
         // so the trailer's own transform is the one that goes to the anchor
         // the actor->provider->anchor path is head-trailer-only in the native
         // code; the parked vfunc +0x328 below already registers the detached
@@ -410,7 +410,7 @@ namespace ts_extra_utilities
         // plugin). Intentionally left out.
         // hide the slave chain for the call: the disconnect walker tears
         // down every member it reaches and faults on a stale interior link
-        // at exe+0x788CB7 — every fault resets canon, which disables every
+        // at exe+0x788CB7 - every fault resets canon, which disables every
         // canon-gated protection for 90 frames (that is why the detached
         // section's lamps stayed lit). A member still bolted behind the
         // head is the parked section that STAYS, not part of the departing
@@ -431,14 +431,14 @@ namespace ts_extra_utilities
         }
 
 
-        // tell every component on both vehicles the coupling is gone — the
+        // tell every component on both vehicles the coupling is gone - the
         // native detach notifies the vehicle component list (+0xE98) on both
         // sides; a loaded trailer's cargo constraints corrupt the physics
         // sweep if they are never told. A section head only broke its FRONT
-        // edge though — its rear connector to the slave is still a live
+        // edge though - its rear connector to the slave is still a live
         // coupling, so the trailer-level "you are decoupled" notifications
         // (component notify, decoupled flag, connector unpair) would tear
-        // the T1->T2 pair down too — exactly the missing hoses the user
+        // the T1->T2 pair down too - exactly the missing hoses the user
         // reports. The pair hoses on the broken edge die through the
         // front's outgoing-lines clear instead
         if ( notify_decoupled_fn != nullptr )
@@ -453,7 +453,7 @@ namespace ts_extra_utilities
         }
 
         // registered as intentionally detached: native flows must not re-attach
-        // it. The whole detached section is marked, not just the head — a slave
+        // it. The whole detached section is marked, not just the head - a slave
         // that stays jointed behind it (dolly + rear trailer) moves as a rigid
         // unit, and an unmarked member would be teleported to a dock slot and
         // drag the section back through its live joint
@@ -461,20 +461,20 @@ namespace ts_extra_utilities
         {
             mark_detached( t );
             mark_plugin_detached( t );
-            // keep walking only while the slave is still jointed — i.e. part of
+            // keep walking only while the slave is still jointed - i.e. part of
             // this rigid section. A slave link to an already-parked trailer is
             // not followed, or its own mark would be lifted on re-attach
             void* next = prism::offsets::field< void* >( t, prism::offsets::trailer_slave );
             t = ( next != t && next != nullptr && joint( next ) != nullptr ) ? next : nullptr;
         }
         // slot-level mark too: pointer marks die when a cargo op destroys the
-        // object — the canon index is what lets the restore spot the fresh
+        // object - the canon index is what lets the restore spot the fresh
         // jointed replacement and put it back
         const int di = canon_index_of( trailer );
         if ( di >= 0 ) detached_idx[ di ] = true;
 
         // the trailer's own line entities die with the joint: set_lines is the
-        // native teardown the detach body calls on the now-free piece —
+        // native teardown the detach body calls on the now-free piece -
         // without it the hoses on the detached trailer stay frozen visible,
         // drawn between the trailer and nothing
         if ( set_lines_fn != nullptr )
@@ -489,7 +489,7 @@ namespace ts_extra_utilities
         {
             prism::offsets::field< uint8_t >( trailer, prism::offsets::trailer_parked ) = 1;
         }
-        // native detach calls trailer vfunc +0x328(trailer, true) — the real
+        // native detach calls trailer vfunc +0x328(trailer, true) - the real
         // "set parked" that registers the detached trailer as a traffic
         // obstacle with a live owner. Setting the flag alone leaves the
         // obstacle unregistered and the traffic sweep hits a dead entry
@@ -497,7 +497,7 @@ namespace ts_extra_utilities
         {
             vcall< prism::physics_trailer_u_set_trailer_brace_fn >( trailer, 0x328 / 8, true );
         }
-        // the game applies spring brakes the same way on a jointless trailer —
+        // the game applies spring brakes the same way on a jointless trailer -
         // the forced byte is the other half of the native spring-brake state
         prism::offsets::field< float >( trailer, prism::offsets::trailer_brake ) = 1.f;
         prism::offsets::field< float >( trailer, prism::offsets::trailer_service_brake ) = 0.f;
@@ -532,7 +532,7 @@ namespace ts_extra_utilities
                 prism::offsets::field< void* >( trailer, prism::offsets::trailer_slave ) = slave;
             }
             // native detach fires coupling events at every accessory on the
-            // trailer (cargo, traffic-obstacle anchor) — without it the parked
+            // trailer (cargo, traffic-obstacle anchor) - without it the parked
             // trailer registers a lane modifier with a null owner and the
             // traffic sweep crashes on it near roads/docks
             if ( refresh_accessories_fn != nullptr )
@@ -548,7 +548,7 @@ namespace ts_extra_utilities
         // native detach also unpairs the two vehicles' connectors and
         // re-applies the cables cvar with a null trailer (cables drop to the
         // remaining set). The truck clears its coupling progress scalar too.
-        // unpairs the connector LISTS of the pair — on a section head that
+        // unpairs the connector LISTS of the pair - on a section head that
         // reaches the still-paired rear connector too, so skip it when a
         // live section is behind: the broken edge's hoses are already gone
         // with the front's outgoing-lines clear
@@ -563,7 +563,7 @@ namespace ts_extra_utilities
             {
                 prism::offsets::field< float >( truck, 0x4C4 ) = 0.f;
                 // native detach resets the coupling state machine and drops
-                // the towed registration — leave them pinned and the game
+                // the towed registration - leave them pinned and the game
                 // believes a trailer is still coupled, refusing every new
                 // attach (ours and the T key's alike)
                 prism::offsets::field< uint32_t >( truck, prism::offsets::truck_coupling_state ) = 0;
@@ -581,7 +581,7 @@ namespace ts_extra_utilities
             }
         }
         if ( trailer == truck_towed ) truck_towed = nullptr;
-        // the native detach lowers the landing gear with its crank anim —
+        // the native detach lowers the landing gear with its crank anim -
         // the replica plays the sound already; the anim drives the physical
         // gear state on models that have the brace_model_anim node. Rewind
         // the progress field first (+0x1270) so the anim player actually runs
@@ -591,7 +591,7 @@ namespace ts_extra_utilities
             prism::offsets::field< float >( trailer, 0x1270 ) = 1.f;
             brace_anim_fn( trailer, 1, 1.f / 3.f );
         }
-        // give the freshly detached trailer the NATIVE parked registration —
+        // give the freshly detached trailer the NATIVE parked registration -
         // the dispatcher gives it a real parked-state record like the head
         // gets on a T-detach, so the trailer is never left in limbo (limbo
         // pieces vanish when the head's dispatcher sweeps)
@@ -600,13 +600,13 @@ namespace ts_extra_utilities
             native_detach_via_slot( trailer );
         }
         // the parked machine hides a trailer it can no longer reach through
-        // the live chain — re-assert it before the frame ends
+        // the live chain - re-assert it before the frame ends
         unhide_detached();
-        // reescreve as claims já na topologia pós-detach — senão a seção
+        // reescreve as claims já na topologia pós-detach - senão a seção
         // solta fica inalcançável até o próximo frame e a máquina de
         // visibilidade pisca ela
         rebuild_parked_claim_links();
-        // joint is dead now — a detach genuinely completed, so a later "whole
+        // joint is dead now - a detach genuinely completed, so a later "whole
         // set coupled" state means the user re-assembled it and traffic may
         // be restored
         traffic_detach_done.store( true, std::memory_order_release );
@@ -616,15 +616,15 @@ namespace ts_extra_utilities
     {
 
         // re-check hook proximity at execution time: the trailer may have been
-        // nudged between queueing and this sim tick — never teleport it
+        // nudged between queueing and this sim tick - never teleport it
         if ( hook_far( trailer, parent, parent_is_truck ) )
         {
-            CCore::g_instance->warning( "Carreta muito longe — aproxime dando ré para engatar" );
+            CCore::g_instance->warning( "Carreta muito longe - aproxime dando ré para engatar" );
             return;
         }
 
         // a trailer still bolted to a parked parent would take a second live
-        // joint — two constraints pull it different ways and the solver
+        // joint - two constraints pull it different ways and the solver
         // launches it (the 2m hop on attach). Release the old coupling first;
         // its slave link stays hidden during the walk so members behind it
         // keep their section state
@@ -644,8 +644,8 @@ namespace ts_extra_utilities
 
         // a trailer going on the truck (or straight on the fifth wheel) gets
         // the NATIVE T-attach first: the dispatcher drives the whole proper
-        // sequence through the trailer-of-interest slot — settle, joint,
-        // towed registration, connector pairing, cables, anchors — native
+        // sequence through the trailer-of-interest slot - settle, joint,
+        // towed registration, connector pairing, cables, anchors - native
         // cables/brakes/lights the manual replica only approximates. It only
         // runs while the piece is under the hook (the proximity check above
         // already gated it); a decline falls through to the replica
@@ -693,7 +693,7 @@ namespace ts_extra_utilities
         const bool slave_hook = parent_chassis != nullptr &&
             prism::offsets::field< uint32_t >( parent_chassis, prism::offsets::chassis_slave_hook_type ) == 2;
 
-        // the trailer is coming back under a live joint by explicit request —
+        // the trailer is coming back under a live joint by explicit request -
         // drop the detached marks BEFORE the settle: the settle snaps the
         // trailer onto the hook through the per-trailer teleport, which the
         // teleport hook refuses while the mark is still up. The whole slave
@@ -719,7 +719,7 @@ namespace ts_extra_utilities
 
         CCore::g_instance->info( "Connecting trailer {:p} to {:p}", trailer, parent );
         // mesma proteção do run_native_connect: o join anda trailer_slave
-        // por recursão e jointa o que encontrar — uma claim estacionada
+        // por recursão e jointa o que encontrar - uma claim estacionada
         // viva vira membro fantasma: perde a trava de estacionada, a âncora
         // desarma (joint != nullptr) e ela afunda sem proteção
         sever_parked_claims();
@@ -733,7 +733,7 @@ namespace ts_extra_utilities
         // links: the native chain writes the claim during its own connect,
         // the replica must do it too or a trailer-parent attach leaves the
         // piece unreachable and the parked machine hides it. Never clobber a
-        // jointed slave — hk_connect_slave refuses double-joining anyway
+        // jointed slave - hk_connect_slave refuses double-joining anyway
         if ( !parent_is_truck && parent != nullptr )
         {
             void** pslave = &prism::offsets::field< void* >( parent, prism::offsets::trailer_slave );
@@ -749,7 +749,7 @@ namespace ts_extra_utilities
         // rest of the native attach sequence (T-key flow): register the trailer on
         // the truck, clear the detached flag on both vehicles, unpark it, raise the
         // brace and rebuild the air/electric lines between the pair.
-        // The truck-side bookkeeping (towed pointer, wheel load) is truck-only — the
+        // The truck-side bookkeeping (towed pointer, wheel load) is truck-only - the
         // fields it writes belong to the truck's own layout, running them on a
         // trailer parent corrupts whatever lives at those offsets.
         if ( parent_is_truck )
@@ -767,7 +767,7 @@ namespace ts_extra_utilities
             prism::offsets::field< float >( parent, 0x4C4 ) = 1.f;
         }
         // coupled-state component notify (0x140874010): flips vehicle+0xE8D
-        // to "coupled" and forces the connector virtuals — the air-hose
+        // to "coupled" and forces the connector virtuals - the air-hose
         // connect sound the native progression plays. r8=1 forces the notify
         // even when the state byte already matches, so the sound always fires
         if ( clear_detached_flag_fn != nullptr )
@@ -776,14 +776,14 @@ namespace ts_extra_utilities
             clear_detached_flag_fn( trailer, 1, 1 );
         }
         // un-park: native attach only clears the flag byte (when a parked-state
-        // record exists) and never nulls the backpointer — the traffic obstacle
+        // record exists) and never nulls the backpointer - the traffic obstacle
         // registration may still reference it, and orphaning it leaves a dead
         // entry the traffic sweep crashes on even after the trailer re-couples
         if ( prism::offsets::field< void* >( trailer, prism::offsets::trailer_parked_state ) != nullptr )
         {
             prism::offsets::field< uint8_t >( trailer, prism::offsets::trailer_parked ) = 0;
         }
-        // native attach calls trailer vfunc +0x328(trailer, false) — un-registers
+        // native attach calls trailer vfunc +0x328(trailer, false) - un-registers
         // the parked traffic obstacle so the trailer rejoins the convoy clean
         if ( plausible_vfunc( trailer, 0x328 / 8 ) )
         {
@@ -805,7 +805,7 @@ namespace ts_extra_utilities
             prism::offsets::field< void* >( trailer, prism::offsets::trailer_slave ) = slave;
         }
         // the piece was torn down when it parked (line entities hidden with
-        // state=0) — a rebuilt edge stays invisible until the lists are raised
+        // state=0) - a rebuilt edge stays invisible until the lists are raised
         if ( set_lines_fn != nullptr )
         {
             set_lines_fn( trailer, 1, 1 );
@@ -828,11 +828,11 @@ namespace ts_extra_utilities
             }
         }
         // the native attach tail (0x1405DCC20): pair the two vehicles'
-        // pneumatic/electric connectors — without it the trailer keeps its
-        // standalone spring brake and stays braked with a live joint — then
+        // pneumatic/electric connectors - without it the trailer keeps its
+        // standalone spring brake and stays braked with a live joint - then
         // re-apply the cables cvar and refresh the actor's trailer flags.
         // The native calls pair(tower, towed), which for a chain attach is
-        // the parent trailer — the connector pairing is between neighbours
+        // the parent trailer - the connector pairing is between neighbours
         if ( pair_vehicles_fn != nullptr )
         {
             pair_vehicles_fn( parent, trailer );
@@ -849,14 +849,14 @@ namespace ts_extra_utilities
         }
         // the native attach pushes the trailer's new position into its
         // traffic-obstacle anchor through the trailer actor's +0x1F8 provider.
-        // The second anchor the native updates sits under [game_actor+0xC8] —
+        // The second anchor the native updates sits under [game_actor+0xC8] -
         // replicating it kept resolving wrong-typed objects whose vfuncs jumped
         // into space, so it stays out: the truck-side anchor gets refreshed by
         // the game's own per-tick updates anyway
         // no anchor push here either: the only actor slot is the head
-        // trailer's, and +0x328 already un-registers the parked obstacle —
+        // trailer's, and +0x328 already un-registers the parked obstacle -
         // writing through a foreign anchor corrupts it
-        // the T attach raises the landing gear with its crank sound —
+        // the T attach raises the landing gear with its crank sound -
         // play the registered brace-up sound event on the trailer
         play_brace_sound( trailer, true );
         if ( brace_anim_fn != nullptr )
@@ -864,7 +864,7 @@ namespace ts_extra_utilities
             brace_anim_fn( trailer, 0, 1.f / 3.f );
         }
         // pieces that stayed jointed behind the reattached head kept their
-        // parked half-state — re-assert them too
+        // parked half-state - re-assert them too
         unhide_detached();
         dump_chain( "post-connect" );
     }
@@ -873,7 +873,7 @@ namespace ts_extra_utilities
     // chain slot whose fresh object came back jointed is disconnected again
     // and teleported to the transform it was parked at. Runs on the sim
     // thread (queued op), descending index order so a tail trailer parked
-    // on its own leaves before the section it was taken with — each marked
+    // on its own leaves before the section it was taken with - each marked
     // slot is the head of what the player actually detached
 
     //========================================================================
@@ -904,7 +904,7 @@ namespace ts_extra_utilities
             {
                 const pending_op op = pending;
                 pending = {};
-                // the op bodies run native flows start to finish — a fault
+                // the op bodies run native flows start to finish - a fault
                 // anywhere inside (record factory, settle, join) must not
                 // reach the game. Canon only resets when its pointers are
                 // actually dead, or a fault would relabel the UI buttons
@@ -926,7 +926,7 @@ namespace ts_extra_utilities
                 __except ( EXCEPTION_EXECUTE_HANDLER )
                 {
                     const bool canon_alive = !canon_dead();
-                    CCore::g_instance->warning( "pending op faulted — canon {}",
+                    CCore::g_instance->warning( "pending op faulted - canon {}",
                                                 canon_alive ? "kept" : "reset" );
                     if ( !canon_alive ) reset_trailer_state();
                 }
@@ -969,7 +969,7 @@ namespace ts_extra_utilities
     // whose mother has no physics joint (a parked trailer must never pull
     // its neighbours through the parked machine), an already-jointed slave
     // (stale claim), a backward canon claim (leaf links point forward only),
-    // or a jointless piece farther than the attach gap — a real coupling
+    // or a jointless piece farther than the attach gap - a real coupling
     // candidate sits inside gap range, the visibility leaf does not
     void hk_connect_slave( prism::physics_trailer_u* self )
     {
@@ -1000,7 +1000,7 @@ namespace ts_extra_utilities
             }
             // a jointless canon slave the machine wants to join while it
             // sits beyond real hook distance is the visibility leaf, not a
-            // coupling — refuse it or the head's attach teleports the
+            // coupling - refuse it or the head's attach teleports the
             // separated piece onto its rear hook
             if ( ti >= 0 && joint( slave ) == nullptr &&
                  hook_gap( slave, self, false ) > attach_gap_limit )
@@ -1013,9 +1013,9 @@ namespace ts_extra_utilities
 
     // physics joint-tree accumulator (0x1409555F0, signature-verified for
     // this build): every node calls the SAME vfunc (+0x18) on the child
-    // linked at node+0x68, so a cyclic body graph — the visibility leaf plus
+    // linked at node+0x68, so a cyclic body graph - the visibility leaf plus
     // the parked machine's canonical back-claim landing between maintenance
-    // passes — recurses until the stack overflows (0xC00000FD). Track the
+    // passes - recurses until the stack overflows (0xC00000FD). Track the
     // nodes already on this thread's path: a revisit returns a zero
     // contribution instead of diving again
     using joint_walk_fn = float __fastcall( void* /*node*/, float /*arg*/ );
@@ -1031,7 +1031,7 @@ namespace ts_extra_utilities
                 if ( jw_logged++ < 8 )
                 {
                     CCore::g_instance->warning(
-                        "joint walk: cyclic node {:p} — skipped subtree", self );
+                        "joint walk: cyclic node {:p} - skipped subtree", self );
                 }
                 return 0.f;
             }
@@ -1048,10 +1048,10 @@ namespace ts_extra_utilities
 
     // physical joint link (0x140919680): writes child+0x60 = parent and
     // parent+0x68 = child, then vfunc-walks the graph. The root finder
-    // iterates node+0x60 with NO cycle guard — a cyclic pair hangs it
+    // iterates node+0x60 with NO cycle guard - a cyclic pair hangs it
     // forever (the detach freeze: the visibility leaf and the canonical
     // back-claim both physicalized, two nodes each other's parent). A link
-    // that would close a cycle can never be legitimate — refuse just that
+    // that would close a cycle can never be legitimate - refuse just that
     // edge and let every real link through
     using phys_link_fn = void __fastcall( void* /*parent*/, void* /*child*/ );
     void __fastcall hk_phys_link( void* parent, void* child )
@@ -1081,19 +1081,19 @@ namespace ts_extra_utilities
         phys_link_hook->get_original< phys_link_fn >()( parent, child );
     }
 
-    // vfunc_disconnect implementation (vfunc 99, exe+0x789C20 — shared by
+    // vfunc_disconnect implementation (vfunc 99, exe+0x789C20 - shared by
     // every trailer-class vtable): releases the joint, feeds the brake
     // channel, then walks trailer_slave writing the +0x2A0 lamp mask per
-    // member. Every caller lands here — the T dispatcher, the queued
-    // section teardown on the sim thread, our own vcall — so this is the
+    // member. Every caller lands here - the T dispatcher, the queued
+    // section teardown on the sim thread, our own vcall - so this is the
     // one point that can sever a link that is not a real departing member:
     // a jointless trailer behind the section is a parked claim we keep for
-    // visibility, and a recycled trailer slot reads as a bogus pointer —
+    // visibility, and a recycled trailer slot reads as a bogus pointer -
     // walk the slave chain a native dispatcher is about to traverse: repair
-    // every member's lamp-cut src (not only canon — parked claims chain
+    // every member's lamp-cut src (not only canon - parked claims chain
     // non-canon pieces too) and sever the first link that is not a trailer
     // object. The dispatcher's internal disconnect bypasses the vtable hook
-    // and walks whatever the links point at — a recycled slot (observed as a
+    // and walks whatever the links point at - a recycled slot (observed as a
     // KERNELBASE page) faults the teardown at exe+0x789CB7 and the reset
     // wipes canon ordering, which is what relabels the UI buttons mid-game
     void sanitize_slave_walk( void* head )
@@ -1116,7 +1116,7 @@ namespace ts_extra_utilities
     }
     // o teardown também pode andar o grafo físico (+0x60 sobe pro pai,
     // +0x68 desce pro filho): um membro alcançado por aí com o lamp-src
-    // reciclado — ou uma aresta apontando pra slot morto — mata o walk em
+    // reciclado - ou uma aresta apontando pra slot morto - mata o walk em
     // exe+0x789CB7 ANTES de limpar +0x1080, e a carreta fica meio-desatrelada
     // em limbo (piscada + balanço). Saneia os dois sentidos: conserta o ctx
     // das carretas e corta arestas pra objetos que não são veículo nenhum
@@ -1151,18 +1151,18 @@ namespace ts_extra_utilities
     {
         if ( trailer == nullptr || !is_trailer_obj( trailer ) ) return;
         // the walker's lamp cut writes [src+0x2A0] where src comes out of each
-        // member's light ctx ([m+0x110]+0x18) — a src pointing at a recycled
+        // member's light ctx ([m+0x110]+0x18) - a src pointing at a recycled
         // vehicle slot kills the teardown mid-write on a foreign page
         // (exe+0x788CB7, rcx = a system-DLL address). Repoint a dead src at
-        // the member itself — the same self-source the lamp pin uses on
-        // parked pieces — so the write lands on a live object
+        // the member itself - the same self-source the lamp pin uses on
+        // parked pieces - so the write lands on a live object
         const auto repair_ctx = []( void* m ) { repair_lamp_ctx( m ); };
         repair_ctx( trailer );
         // during an actor-teleport reconcile the game may try to disconnect a
-        // member mid-remount — the native member walk is what faults and its
+        // member mid-remount - the native member walk is what faults and its
         // failure resets canon, leaving every gate dead for 90 frames (the
         // F9 dive: truck through the floor, trailers launched). Minimal
-        // release instead: joint + parent cleared, members left untouched —
+        // release instead: joint + parent cleared, members left untouched -
         // the reconcile owns the remount
         if ( tp_cooldown > 0 )
         {
@@ -1170,22 +1170,22 @@ namespace ts_extra_utilities
             prism::offsets::field< void* >( trailer, prism::offsets::trailer_parent ) = nullptr;
             return;
         }
-        // snapshot the validated members — the fault repair below uses it to
+        // snapshot the validated members - the fault repair below uses it to
         // keep the pieces behind the head reachable instead of orphaning them
         void* chain_members[ max_trailers * 2 ] = {};
         uint32_t chain_n = 0;
         // a cyclic chain (leaf claim + real link both physicalized) would
-        // walk forever — a real section is never deeper than the canon count
+        // walk forever - a real section is never deeper than the canon count
         uint32_t depth = 0;
         for ( void* t = trailer; t != nullptr && readable_ptr( t ); )
         {
             void* slave = prism::offsets::field< void* >( t, prism::offsets::trailer_slave );
             if ( slave == nullptr ) break;
-            // sever EVERY jointless slave edge — a live section member always
+            // sever EVERY jointless slave edge - a live section member always
             // carries a live joint, so a jointless target is a visibility
             // claim (ours OR the parked machine's canonical back-claim).
             // Gating on claim_edge_ours let the native walker step into a
-            // game-written claim and die at exe+0x789CB7 — the recurring
+            // game-written claim and die at exe+0x789CB7 - the recurring
             // "disconnect walk faulted" -> canon reset cascade
             const bool bad = slave == t || !is_trailer_obj( slave ) ||
                 joint( slave ) == nullptr;
@@ -1207,19 +1207,19 @@ namespace ts_extra_utilities
         }
         __except ( EXCEPTION_EXECUTE_HANDLER )
         {
-            // the fault is a teardown-internal write on one member — the
+            // the fault is a teardown-internal write on one member - the
             // trailer objects themselves stay alive. Resetting canon here
             // re-enumerates it in walk order: a piece the sweep already hid
             // never comes back (the vanishing T0) and the UI buttons get
             // relabelled onto different physical trailers. Only a dead canon
             // (world unload) justifies wiping it
             const bool canon_alive = !canon_dead();
-            CCore::g_instance->warning( "disconnect walk faulted on {:p} — canon {}", trailer,
+            CCore::g_instance->warning( "disconnect walk faulted on {:p} - canon {}", trailer,
                                         canon_alive ? "kept" : "reset" );
             if ( !canon_alive ) reset_trailer_state();
             if ( readable_ptr( trailer ) )
             {
-                // keep the members behind the head reachable — the parked
+                // keep the members behind the head reachable - the parked
                 // machine hides whatever the +0xC8 walk can no longer reach,
                 // and nulling the root link here is what made trailer 2
                 // vanish when the head's teardown faulted
@@ -1244,7 +1244,7 @@ namespace ts_extra_utilities
         native_chain_call_active.store( false, std::memory_order_release );
     }
 
-    // claims estacionadas cortadas por sever_parked_claims — restauradas no
+    // claims estacionadas cortadas por sever_parked_claims - restauradas no
     // fim da MESMA chamada nativa. Antes a manutenção só religava no frame
     // seguinte, deixando a peça inalcançável um frame inteiro: a máquina de
     // visibilidade a escondia e re-registrava (a piscada no engate) e o
@@ -1253,12 +1253,12 @@ namespace ts_extra_utilities
     severed_edge_t severed_edges[ max_trailers ];
     int severed_edge_count = 0;
 
-    // vfunc_connect impls (vfunc 98 — exe+0x639090 / exe+0x7890A0, shared by
+    // vfunc_connect impls (vfunc 98 - exe+0x639090 / exe+0x7890A0, shared by
     // the trailer-class vtables): the native join processes the slave chain
     // through SELF-RECURSIVE walkers (exe+0x6390C0 / exe+0x639220 call
-    // themselves on trailer_slave) — a parked visibility claim pointing at
+    // themselves on trailer_slave) - a parked visibility claim pointing at
     // a limbo trailer (no record/actor) aborts it mid-join, and a cyclic
-    // chain overflows the stack — both die with no crash dump. Hide every
+    // chain overflows the stack - both die with no crash dump. Hide every
     // slave edge whose target is jointless for the duration of the call:
     // claims are our fiction, the maintenance rebuilds them next frame,
     // and the original then sees only real section members
@@ -1266,7 +1266,7 @@ namespace ts_extra_utilities
     {
         severed_edge_count = 0;
         // not while the world assembles: trailers spawn before their joints
-        // form, so every staged link reads jointless — cutting them mid-
+        // form, so every staged link reads jointless - cutting them mid-
         // reassembly strands the not-yet-connected members (Failed to init
         // update, trailer never spawns)
         if ( !trailer_maintenance_ready() ) return;
@@ -1282,11 +1282,11 @@ namespace ts_extra_utilities
                 clear_claim_edge( t );
                 continue;
             }
-            // a jointless slave link is ALWAYS a visibility claim — ours or
+            // a jointless slave link is ALWAYS a visibility claim - ours or
             // the game's own parked-machine back-claim (which our registry
             // never tagged, so claim_edge_ours misses it). A real member of
             // a departing section is always jointed, so cutting every
-            // jointless edge for the duration of a native walk is safe — and
+            // jointless edge for the duration of a native walk is safe - and
             // missing the game's back-claims is what let the dispatcher
             // wander into the parked set and destroy trailers 1/2 on the
             // head detach
@@ -1300,7 +1300,7 @@ namespace ts_extra_utilities
         }
     }
 
-    // religa as claims cortadas — roda no fim de cada chamada nativa. Só
+    // religa as claims cortadas - roda no fim de cada chamada nativa. Só
     // religa se o join não escreveu nada no lugar (uma aresta real criada
     // pelo attach vence) e a peça continua sem junta
     void restore_parked_claims()
@@ -1318,7 +1318,7 @@ namespace ts_extra_utilities
         }
         severed_edge_count = 0;
     }
-    // Corpo comum dos dois hooks de connect — duas vtables de classes
+    // Corpo comum dos dois hooks de connect - duas vtables de classes
     // diferentes de carreta chegam aqui, e cada uma precisa chamar o original
     // do seu próprio hook. A cadeia parked é cortada antes da chamada porque
     // o join nativo anda trailer_slave por recursão e aborta (ou entra em
@@ -1337,10 +1337,10 @@ namespace ts_extra_utilities
         __except ( EXCEPTION_EXECUTE_HANDLER )
         {
             // mesma regra do fault de disconnect: os objetos da carreta
-            // sobrevivem a uma falha do walk — só canon morto justifica
+            // sobrevivem a uma falha do walk - só canon morto justifica
             // zerar o estado (senão os botões trocam de carreta)
             const bool canon_alive = !canon_dead();
-            CCore::g_instance->warning( "connect walk faulted on {:p} — canon {}", trailer,
+            CCore::g_instance->warning( "connect walk faulted on {:p} - canon {}", trailer,
                                         canon_alive ? "kept" : "reset" );
             if ( readable_ptr( trailer ) )
                 prism::offsets::field< void* >( trailer, prism::offsets::trailer_slave ) = nullptr;
@@ -1365,7 +1365,7 @@ namespace ts_extra_utilities
 
     // the trailer-side joint release the native detach runs. The game's own
     // teardown also calls it on trailers whose physics joint is already gone
-    // — it dereferences trailer+0xFE0->vtable without a check and dies on a
+    // - it dereferences trailer+0xFE0->vtable without a check and dies on a
     // detached trailer left sitting at quit
     void __fastcall hk_pre_detach( void* self, void* trailer )
     {
@@ -1379,7 +1379,7 @@ namespace ts_extra_utilities
 
     // the native detach dispatcher (the T key's detach path). It releases the
     // joint, but the parent's per-frame connect_slave would re-couple the
-    // trailer the very next frame because it still sits under the hook — the
+    // trailer the very next frame because it still sits under the hook - the
     // same problem plugin detaches needed the detached registry for. Mark the
     // head trailer after every native detach that actually killed its joint
     using native_detach_dispatch_fn = void __fastcall( void* /*game_actor*/, uint8_t /*dl*/, uint64_t /*r8*/ );
@@ -1388,7 +1388,7 @@ namespace ts_extra_utilities
     void __fastcall hk_detach_dispatch( void* self, uint8_t dl, uint64_t r8 )
     {
         // only the player's T key (caller exe+0x9F7DAE, seen in the logs) is
-        // bound by the handbrake rule — the game's own detach (delivery,
+        // bound by the handbrake rule - the game's own detach (delivery,
         // world teardown on load/quit, caller exe+0x5DBED6) must always run
         // or the old world is torn down half-way
         const uint64_t caller = reinterpret_cast< uint64_t >( _ReturnAddress() ) -
@@ -1404,13 +1404,13 @@ namespace ts_extra_utilities
             return;
         }
         // a fault on a respawned-away trailer (workshop/garage rebuilds kill
-        // canon pointers mid-frame) must never reach the game — reset and
+        // canon pointers mid-frame) must never reach the game - reset and
         // let the next pass rebuild from live state
         __try { hk_detach_dispatch_raw( self, dl, r8 ); }
         __except ( EXCEPTION_EXECUTE_HANDLER )
         {
             const bool canon_alive = !canon_dead();
-            CCore::g_instance->warning( "detach dispatch faulted — canon {}",
+            CCore::g_instance->warning( "detach dispatch faulted - canon {}",
                                         canon_alive ? "kept" : "reset" );
             if ( !canon_alive ) reset_trailer_state();
         }
@@ -1418,12 +1418,12 @@ namespace ts_extra_utilities
 
     void __fastcall hk_detach_dispatch_raw( void* self, uint8_t dl, uint64_t r8 )
     {
-        // a save load frees every trailer we cached — wipe before any mark
+        // a save load frees every trailer we cached - wipe before any mark
         // touches a dead pointer
         if ( canon_dead() ) reset_trailer_state();
         // the trailer-of-interest slot may have drifted onto a nearby parked
         // trailer (proximity resolver, our own re-root). While the truck tows
-        // something the ONLY sane detach candidate is the towed trailer —
+        // something the ONLY sane detach candidate is the towed trailer -
         // force it so T always releases what's on the wheel
         void* truck = self != nullptr
             ? prism::offsets::field< void* >( self, prism::offsets::game_actor_truck ) : nullptr;
@@ -1434,16 +1434,16 @@ namespace ts_extra_utilities
             prism::offsets::field< void* >( self, prism::offsets::game_actor_trailer ) = towed;
         }
         // NO severing: the reference calls the dispatcher with the full
-        // canonical claim chain visible — parked pieces sit at the tail of
+        // canonical claim chain visible - parked pieces sit at the tail of
         // the departing head's slave chain and the dispatcher's parked-
         // section registration keeps them. Cutting the link makes them
         // unreachable exactly when the sweep runs (vanishing 1/2)
         repair_lamp_ctx_all();
-        // the dispatcher's internal disconnect walks the chain directly —
+        // the dispatcher's internal disconnect walks the chain directly -
         // every link must be a live trailer or the teardown faults on it
         sanitize_slave_walk( prism::offsets::field< void* >( self, prism::offsets::game_actor_trailer ) );
         if ( towed != nullptr ) sanitize_slave_walk( towed );
-        // idem pro grafo físico — o dispatcher anda ele internamente e uma
+        // idem pro grafo físico - o dispatcher anda ele internamente e uma
         // aresta pra slot morto mata o teardown em exe+0x789CB7
         sanitize_phys_walk( prism::offsets::field< void* >( self, prism::offsets::game_actor_trailer ) );
         if ( towed != nullptr ) sanitize_phys_walk( towed );
@@ -1453,7 +1453,7 @@ namespace ts_extra_utilities
         native_chain_call_active.store( false, std::memory_order_release );
         dump_chain( "post-detach(T)" );
         // the native detach cascade re-raises the line entities of pieces
-        // behind the released head — the once-per-mark teardown of the loose
+        // behind the released head - the once-per-mark teardown of the loose
         // pieces must run again or their old hoses hang in the air (T3's
         // cable still tied to T2 from 100 m away)
         for ( auto& torn : lines_torn ) torn = false;
@@ -1464,7 +1464,7 @@ namespace ts_extra_utilities
             pending_native_detach = nullptr;
             mark_detached( t );
             // cut the truck<->head hose pair the dispatcher can leave half-
-            // registered when the tow slot was re-pinned by maintenance —
+            // registered when the tow slot was re-pinned by maintenance -
             // same teardown the manual detach tail runs on a parent detach:
             // lines clear, connector unpair (the +0x798..+0x7A0 record is
             // what keeps drawing hoses on the detached trailer), cvar reset
@@ -1483,7 +1483,7 @@ namespace ts_extra_utilities
                 // makes the applier redraw the truck hoses we just cut
                 apply_cables_fn( truck, nullptr, 0, 0, 0 );
             }
-            // NO slave re-link: parked trailers are independent pieces — each
+            // NO slave re-link: parked trailers are independent pieces - each
             // stays visible and OFF through its own parked record. The slave
             // link between parked pieces only draws phantom hoses and makes
             // the parked machine treat them as one departing-prone section
@@ -1491,7 +1491,7 @@ namespace ts_extra_utilities
         else if ( t != nullptr )
         {
             // joint still alive after dispatch = the async crank animation
-            // runs before the drop — the lines refresh must not re-draw the
+            // runs before the drop - the lines refresh must not re-draw the
             // truck hoses the native sequence is cutting right now
             pending_native_detach = t;
             pending_native_age = 0;
@@ -1505,16 +1505,16 @@ namespace ts_extra_utilities
         {
             prism::offsets::field< void* >( self, prism::offsets::game_actor_trailer ) = canon[ 0 ];
         }
-        // reescreve as claims já na topologia pós-detach — senão a seção
+        // reescreve as claims já na topologia pós-detach - senão a seção
         // solta fica inalcançável até o próximo frame e a máquina de
         // visibilidade pisca ela
         rebuild_parked_claim_links();
     }
 
-    // the native attach dispatcher (0x1405DCC20) — every native re-attach
+    // the native attach dispatcher (0x1405DCC20) - every native re-attach
     // funnels through it: the T key, the cargo load/unload set reassembly,
     // garage transfers, save-load restores. A trailer the plugin detached
-    // is refused: wherever the player left it, it stays — the load/unload
+    // is refused: wherever the player left it, it stays - the load/unload
     // sequence may not pull it back onto the fifth wheel or the chain.
     // Natively detached trailers are unaffected: T re-attach still works
     // set by the wrapper: the game itself (not the player's T key) called the attach
@@ -1522,11 +1522,11 @@ namespace ts_extra_utilities
     void __fastcall hk_attach_dispatch_raw( void* self, uint8_t dl, uint64_t r8, void* settle_override );
     void __fastcall hk_attach_dispatch( void* self, uint8_t dl, uint64_t r8, void* settle_override )
     {
-        // the delivery/dock sequence never needs an attach — a game-driven
+        // the delivery/dock sequence never needs an attach - a game-driven
         // re-attach there is what yanks the parked pieces around
         // the handbrake rule binds the player's T key only (caller
         // exe+0x9F7DD6); the game's own attach (world assembly, caller
-        // exe+0x5DC731) is left alone — except inside the cargo window
+        // exe+0x5DC731) is left alone - except inside the cargo window
         const uint64_t caller = reinterpret_cast< uint64_t >( _ReturnAddress() ) -
             reinterpret_cast< uint64_t >( GetModuleHandle( nullptr ) );
         const bool allowed = !in_cargo_window() &&
@@ -1545,7 +1545,7 @@ namespace ts_extra_utilities
         __except ( EXCEPTION_EXECUTE_HANDLER )
         {
             const bool canon_alive = !canon_dead();
-            CCore::g_instance->warning( "attach dispatch faulted — canon {}",
+            CCore::g_instance->warning( "attach dispatch faulted - canon {}",
                                         canon_alive ? "kept" : "reset" );
             if ( !canon_alive ) reset_trailer_state();
         }
@@ -1555,7 +1555,7 @@ namespace ts_extra_utilities
     void __fastcall hk_attach_dispatch_raw( void* self, uint8_t dl, uint64_t r8, void* settle_override )
     {
         if ( canon_dead() ) reset_trailer_state();
-        // the user's chosen attach target beats the game's proximity pick —
+        // the user's chosen attach target beats the game's proximity pick -
         // but ONLY while its own front hook is the jointless hook closest
         // to the fifth wheel: comparing body centers refuses the pick
         // whenever another parked piece sits closer to the truck body
@@ -1596,7 +1596,7 @@ namespace ts_extra_utilities
         void* head = self != nullptr
             ? prism::offsets::field< void* >( self, prism::offsets::game_actor_trailer ) : nullptr;
         // a selected target keeps its detach marks until the dispatcher is
-        // actually aiming at it — released here, right before the native
+        // actually aiming at it - released here, right before the native
         // call, so a picked-but-still-parked piece stays refused by the
         // game's own slave auto-attach
         bool released_marks = false;
@@ -1611,7 +1611,7 @@ namespace ts_extra_utilities
             // slave auto-attach never have the trailer-of-interest aimed at
             // a parked piece). A real T-press does: the resolver put the
             // marked trailer in the slot because the player backed up to it
-            // — the intent is explicit, release the marks and attach
+            // - the intent is explicit, release the marks and attach
             void* truck = readable_ptr( self )
                 ? prism::offsets::field< void* >( self, prism::offsets::game_actor_truck ) : nullptr;
             hook_xform_t hxf{};
@@ -1631,7 +1631,7 @@ namespace ts_extra_utilities
         }
         // last-resort guard: a limbo trailer (no parked record AND no actor
         // in the game_actor slots) kills the game silently inside the native
-        // attach — refuse the call instead
+        // attach - refuse the call instead
         if ( attach_target != nullptr && head == attach_target &&
             readable_ptr( attach_target ) &&
             prism::offsets::field< void* >( attach_target, prism::offsets::trailer_parked_state ) == nullptr &&
@@ -1642,7 +1642,7 @@ namespace ts_extra_utilities
         }
         // sever a parked-piece claim on the trailer being attached: the
         // dispatcher registers the trailer's whole slave chain, and a limbo
-        // parked piece behind it (mid-chain trailers never get a record —
+        // parked piece behind it (mid-chain trailers never get a record -
         // the factory aborts on them) kills the game silently inside the
         // attach. A jointed slave is a real section member and stays
         void* severed_slave = nullptr;
@@ -1655,11 +1655,11 @@ namespace ts_extra_utilities
                 prism::offsets::field< void* >( head, prism::offsets::trailer_slave ) = nullptr;
             }
         }
-        // o dispatcher registra a cadeia slave INTEIRA — corta todas as
+        // o dispatcher registra a cadeia slave INTEIRA - corta todas as
         // claims estacionadas além da do head, senão uma peça mais fundo é
         // jointada pela metade e afunda sem trava
         sever_parked_claims();
-        // the dispatcher walks the chain for registration — every link must
+        // the dispatcher walks the chain for registration - every link must
         // be a live trailer object or the internal teardown faults on it
         sanitize_slave_walk( head );
         native_chain_call_active.store( true, std::memory_order_release );
@@ -1672,7 +1672,7 @@ namespace ts_extra_utilities
         restore_parked_claims();
         if ( released_marks && joint( head ) == nullptr )
         {
-            // the dispatcher ran but nothing coupled — re-protect the
+            // the dispatcher ran but nothing coupled - re-protect the
             // still-parked piece or the slave auto-attach may pull it in
             mark_detached( head );
             mark_plugin_detached( head );
@@ -1685,7 +1685,7 @@ namespace ts_extra_utilities
             attach_target = nullptr;
         }
         // the game attached a parked trailer through its own path (T, cargo
-        // restore): clear its marks — the chain links are rebuilt every
+        // restore): clear its marks - the chain links are rebuilt every
         // frame by the refresh maintenance
         if ( head != nullptr && joint( head ) != nullptr )
         {
@@ -1699,7 +1699,7 @@ namespace ts_extra_utilities
 
     // the trailer-state record apply (0x1405E14D1 on game_actor+0x10): copies
     // a recorded transform/velocity into the head trailer's state record and
-    // reconciles its joint through the attach/detach dispatchers — the path
+    // reconciles its joint through the attach/detach dispatchers - the path
     // the cargo sequence uses to teleport the set into dock slots. A
     // plugin-detached trailer keeps its current record untouched: it stays
     // parked where the player left it
@@ -1707,15 +1707,15 @@ namespace ts_extra_utilities
 
     // the per-trailer teleport (0x140786320): the actor-teleport walks the
     // trailer list and calls this on each one to move it into its dock slot.
-    // Trailer objects are NOT recreated — this is the call that actually
+    // Trailer objects are NOT recreated - this is the call that actually
     // drags a detached trailer to the dock during cargo load/unload, where
     // it lands under its parent's hook and gets re-jointed. A
     // plugin-detached trailer is a world object: it is never teleported,
-    // by any caller — dock alignment, garage, ferry, job start
+    // by any caller - dock alignment, garage, ferry, job start
     using trailer_teleport_fn = void __fastcall( void* /*trailer*/, void* /*transform*/ );
 
     // the actor teleport (0x1405DE1E0): rotates/moves truck + attached set
-    // into the dock slots for the cargo cinematic — the same call travel
+    // into the dock slots for the cargo cinematic - the same call travel
     // teleports use. Snapshot the rig on the first call of a sequence, then
     // arm the restore only when the move was short (a dock shuffle, not a
     // ferry/garage/job hop across the map)
@@ -1725,6 +1725,7 @@ namespace ts_extra_utilities
     // coupling flow replicas; returns false when a hard requirement is missing
     bool resolve_native_fns()
     {
+        if ( !expected_build() ) return false;
         const auto set_towed_address = memory::get_address_for_pattern( "48 89 5c 24 08 48 89 6c 24 10 48 89 74 24 18 57 48 81 ec 80 00 00 00 48 8b f1 49 8b d8 48 8b 89 a8 15" );
         const auto clear_detached_address = memory::get_address_for_pattern( "40 57 41 56 48 83 ec 58 44 0f b6 f2 48 8b f9 3a 91 8d 0e 00 00 75" );
         const auto rebuild_lines_address = memory::get_address_for_pattern( "48 89 5c 24 08 48 89 74 24 10 57 48 83 ec 40 48 8b fa 48 8b f1 e8 ? ? ? ? 48 8b ce e8 ? ? ? ? 48 8d 8e c0 0e 00 00 e8" );
@@ -1779,7 +1780,7 @@ namespace ts_extra_utilities
         {
             apply_cables_hook->hook();
         }
-        // the line-state setter — refuse a hide aimed at a trailer whose
+        // the line-state setter - refuse a hide aimed at a trailer whose
         // front joint is still bolted (the detach cascade)
         set_lines_hook = CCore::g_instance->get_hooks_manager()->register_function_hook(
             "set_lines", memory::get_address_from_offset( 0x140874010 ),
@@ -1798,7 +1799,7 @@ namespace ts_extra_utilities
             detach_dispatch_hook->hook();
         }
         // the attach dispatcher + the trailer-state apply: the two funnels
-        // every native re-join/reposition of a trailer goes through — hooked
+        // every native re-join/reposition of a trailer goes through - hooked
         // so a plugin-detached trailer survives cargo load/unload untouched
         attach_dispatch_hook = CCore::g_instance->get_hooks_manager()->register_function_hook(
             "native_attach_dispatch", memory::get_address_from_offset( 0x1405DCC20 ),
@@ -1829,7 +1830,7 @@ namespace ts_extra_utilities
             actor_teleport_hook->hook();
         }
         // chase-camera anchor setter (base vfunc 31): the resolver picks the
-        // chain-end trailer, jointless ones included — redirect inside the
+        // chain-end trailer, jointless ones included - redirect inside the
         // setter so the native flow anchors the last JOINTED trailer
         cam_set_target_hook = CCore::g_instance->get_hooks_manager()->register_function_hook(
             "cam_set_target", memory::get_address_from_offset( 0x14063C2D0 ),
@@ -1839,7 +1840,7 @@ namespace ts_extra_utilities
             cam_set_target_hook->hook();
         }
         // lane-obstacle insert: dead array entries (owner-node cleared without
-        // removal) crash the traffic worker — sanitize before the original
+        // removal) crash the traffic worker - sanitize before the original
         lane_obstacle_insert_hook = CCore::g_instance->get_hooks_manager()->register_function_hook(
             "lane_obstacle_insert", memory::get_address_from_offset( 0x14094DFC0 ),
             reinterpret_cast< uint64_t >( &hk_lane_obstacle_insert ) );
@@ -1848,8 +1849,8 @@ namespace ts_extra_utilities
             lane_obstacle_insert_hook->hook();
         }
         // chain-length accumulator: the reimplementation stops the walk at
-        // the first jointless (detached) trailer so every consumer — camera 2
-        // included — measures only the live combination. The per-link hook
+        // the first jointless (detached) trailer so every consumer - camera 2
+        // included - measures only the live combination. The per-link hook
         // query it calls is resolved separately; if it fails to resolve the
         // hook falls back to the untouched original.
         combo_hook_pos_fn_ptr = reinterpret_cast< combo_hook_pos_fn* >(
@@ -1862,7 +1863,7 @@ namespace ts_extra_utilities
             combo_length_hook->hook();
         }
         // purecall handler: dead listener nodes on detached trailers call
-        // through pure vfunc slots — swallow every one of them, process-wide
+        // through pure vfunc slots - swallow every one of them, process-wide
         init_purecall_fake();
         purecall_hook = CCore::g_instance->get_hooks_manager()->register_function_hook(
             "purecall", memory::get_address_from_offset( 0x141D23610 ),
@@ -1872,7 +1873,7 @@ namespace ts_extra_utilities
             purecall_hook->hook();
             install_crash_tracer();
         }
-        // trailer vfunc_disconnect impl — the single funnel every teardown
+        // trailer vfunc_disconnect impl - the single funnel every teardown
         // (T dispatcher, sim-thread section teardown, our vcall) passes
         // through; the detour sanitizes the slave chain it is about to walk
         trailer_disconnect_hook = CCore::g_instance->get_hooks_manager()->register_function_hook(
@@ -1882,7 +1883,7 @@ namespace ts_extra_utilities
         {
             trailer_disconnect_hook->hook();
         }
-        // vfunc_connect has TWO impls across the trailer-class vtables —
+        // vfunc_connect has TWO impls across the trailer-class vtables -
         // the dolly uses a different class than the box trailers, so both
         // get the same claim-severing detour
         trailer_connect_hook = CCore::g_instance->get_hooks_manager()->register_function_hook(
@@ -1915,7 +1916,7 @@ namespace ts_extra_utilities
         {
             trailer_dtor_hook->hook();
         }
-        // the propagator's raw +0x2A0 stores bypass the mask setter — the
+        // the propagator's raw +0x2A0 stores bypass the mask setter - the
         // detached-trailer cut has to live here too or the pin loses the
         // per-tick race
         lamp_propagate_hook = CCore::g_instance->get_hooks_manager()->register_function_hook(
@@ -1926,7 +1927,7 @@ namespace ts_extra_utilities
             lamp_propagate_hook->hook();
         }
         // joint-tree recursion guard: the accumulator walks node+0x68 chains
-        // via a self-recursive vfunc — a cyclic graph overflows the stack
+        // via a self-recursive vfunc - a cyclic graph overflows the stack
         // instantly (0xC00000FD). The detour returns early on a revisit
         joint_walk_hook = CCore::g_instance->get_hooks_manager()->register_function_hook(
             "joint_walk", memory::get_address_from_offset( 0x1409555F0 ),
@@ -1935,7 +1936,7 @@ namespace ts_extra_utilities
         {
             joint_walk_hook->hook();
         }
-        // bidirectional joint link — refuses only the edge that would
+        // bidirectional joint link - refuses only the edge that would
         // close a +0x60/+0x68 cycle (find_root has no guard and hangs)
         phys_link_hook = CCore::g_instance->get_hooks_manager()->register_function_hook(
             "phys_link", memory::get_address_from_offset( 0x140919680 ),
@@ -1945,7 +1946,7 @@ namespace ts_extra_utilities
             phys_link_hook->hook();
         }
         // chase-camera update (vfunc 32): the camera's own chain walk follows
-        // trailer_slave without checking joints — hide live->dead links for
+        // trailer_slave without checking joints - hide live->dead links for
         // the call so it measures the live combination only
         cam_update_hook = CCore::g_instance->get_hooks_manager()->register_function_hook(
             "cam_update", memory::get_address_from_offset( 0x140AC75A0 ),
@@ -1998,7 +1999,7 @@ namespace ts_extra_utilities
     // trailer deleting destructor (0x1406359E0, vtable slot 0): the game
     // destroys the job trailer when the job is dismissed/finished. Its base
     // destructor follows trailer_slave and treats whatever it finds as a real
-    // coupled member — our visibility claims (jointless slave links between
+    // coupled member - our visibility claims (jointless slave links between
     // parked pieces) make it run teardown on pieces that were never coupled
     // and it jumps through a bad vtable (log: AV with RIP in the heap, stack
     // exe+0x6359F4 -> exe+0x7845E5). Cut every claim that touches the dying
@@ -2027,7 +2028,7 @@ namespace ts_extra_utilities
                 prism::offsets::field< void* >( self, prism::offsets::trailer_slave ) = nullptr;
                 ++cut;
             }
-            // the per-frame sim update calls a vfunc on game_actor+0xC8 — if the
+            // the per-frame sim update calls a vfunc on game_actor+0xC8 - if the
             // chain head still points at the trailer being freed it reads a
             // dead object (log: AV at exe+0x4CFBF8 right after the destructors)
             if ( auto* game_actor = CCore::g_instance->get_game_actor() )

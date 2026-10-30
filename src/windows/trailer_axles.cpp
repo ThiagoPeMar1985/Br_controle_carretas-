@@ -1,4 +1,4 @@
-// Eixos eleváveis de carreta + assistente de ré — separado de
+// Eixos eleváveis de carreta + assistente de ré - separado de
 // trailer_manipulation.cpp (mesmo layout do usa_trailer_controls).
 
 #include "trailer_manipulation.hpp"
@@ -29,7 +29,7 @@ namespace ts_extra_utilities
     //========================================================================
     // Liftable trailer axles (ported from ts-liftable-axles)
     //
-    // The native trailer lift key raises every axle whose flag byte is set —
+    // The native trailer lift key raises every axle whose flag byte is set -
     // the controller mask at +0x38 gates which of those actually animate.
     // Rewriting both every frame lets the UI pick which natively liftable
     // axles respond, per trailer. No plugin key is needed: the game's own
@@ -39,7 +39,7 @@ namespace ts_extra_utilities
     //  - only natively liftable axles may be selected: forcing a flag on an
     //    axle the chassis never marked crashes the wheel/suspension update
     //  - nothing is written while the controller state is not "down" and a
-    //    real mask is applied — flipping flags mid-air leaves a mixed
+    //    real mask is applied - flipping flags mid-air leaves a mixed
     //    progress state the game cannot resolve
     //  - a nonzero state with an empty applied mask is a desync (mask 0 can
     //    never animate): write state 0 to recover
@@ -72,7 +72,7 @@ namespace ts_extra_utilities
     // While true the effective selection is the steerable axles only; the
     // saved axle_masks are never touched.
     bool reverse_override = false;
-    // True when the plugin commanded the raise itself — only then is lowering
+    // True when the plugin commanded the raise itself - only then is lowering
     // on reverse exit ours to undo.
     bool reverse_auto_lift = false;
     bool was_reversing = false;
@@ -133,7 +133,7 @@ namespace ts_extra_utilities
             : 0;
         ImGui::Text( "Eixos: %s", state != 0 ? "levantados" : "no chão" );
 
-        // axles moving or up with a real mask physically occupy the air — the
+        // axles moving or up with a real mask physically occupy the air - the
         // selection must stay put until they are back on the ground; a state
         // desynced from an empty mask (nothing lifted) stays editable so the
         // trailer is never soft-locked
@@ -211,14 +211,14 @@ namespace ts_extra_utilities
         }
     }
 
-    // Reverse-gear lift assist + per-trailer lift mask rewrite — the mask
+    // Reverse-gear lift assist + per-trailer lift mask rewrite - the mask
     // (+0x38) and per-axle liftable flags pick which natively liftable axles
     // the game's own lift key raises. Runs from update() every frame.
     void lift_axles_update( void* game_actor )
     {
         // Reverse-gear lift assist: on the engage edge, with every trailer
         // axle on the ground, all STEERABLE axles of each trailer stay
-        // selected and the controllers are commanded to raise — as if the
+        // selected and the controllers are commanded to raise - as if the
         // lift key was pressed. Steerable trailer axles fight a reverse
         // maneuver, so this lifts them out of the way like the real auto-lift
         // of a self-steering axle. On the disengage edge whatever we raised
@@ -255,7 +255,7 @@ namespace ts_extra_utilities
                 reverse_auto_lift = false;
                 for ( uint32_t i = 0; i < trailer_count; ++i )
                 {
-                    // fresh read — lift_axles[] may still point at a detached trailer
+                    // fresh read - lift_axles[] may still point at a detached trailer
                     auto* controller = prism::offsets::field< void* >( trailers[ i ], prism::offsets::trailer_lift_controller );
                     if ( controller != nullptr
                         && prism::offsets::field< uint8_t >( controller, prism::offsets::lift_controller_state ) != 0 )
@@ -344,13 +344,13 @@ namespace ts_extra_utilities
             if ( state != 0 && lift.applied_mask == 0 )
             {
                 // nothing can be up with an empty mask, but the native toggle
-                // still flipped the state — a mask of 0 never animates, so the
+                // still flipped the state - a mask of 0 never animates, so the
                 // controller would stay "raising" forever; bring it back to down
                 prism::offsets::field< uint8_t >( controller, prism::offsets::lift_controller_state ) = 0;
             }
             else if ( state != 0 )
             {
-                // raised or moving: leave the mask and flags untouched —
+                // raised or moving: leave the mask and flags untouched -
                 // flipping them mid-air leaves a mixed progress state the
                 // game cannot resolve
                 continue;
@@ -359,7 +359,7 @@ namespace ts_extra_utilities
             // steerable axles: the wheel->steering index map lives in the
             // steering data at +0xA8 (count +0xB0); a wheel with map[w] != -1
             // steers. Axle a owns wheels 2a/2a+1, same as the native steering
-            // advance. Recomputed every frame — the data object is rebuilt
+            // advance. Recomputed every frame - the data object is rebuilt
             // on trailer swaps
             lift.steer_axles = 0;
             auto* sdata = steering_data( trailers[ i ] );

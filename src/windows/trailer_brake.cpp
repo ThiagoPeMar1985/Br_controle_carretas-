@@ -1,5 +1,5 @@
 // Trailer brake bias (o slider "carreta freia mais"): setter hooks,
-// wheel-solver mask, per-frame boost — split out of trailer_manipulation.cpp.
+// wheel-solver mask, per-frame boost - split out of trailer_manipulation.cpp.
 
 #include "trailer_manipulation.hpp"
 #include "trailer_shared.hpp"
@@ -23,11 +23,12 @@
 #include "prism/common.hpp"
 #include "prism/offsets.hpp"
 #include "prism/functions.hpp"
+#include "license/license.hpp"
 #include "settings/settings.hpp"
 
 namespace ts_extra_utilities
 {
-    // each wheelset's native brake mask, captured before our first rewrite —
+    // each wheelset's native brake mask, captured before our first rewrite -
     // needed to fall back to the game's own braked-axle set while axles are up
     void* native_mask_ws[ 32 ] = {};
     uint32_t native_mask_val[ 32 ] = {};
@@ -45,7 +46,7 @@ namespace ts_extra_utilities
     // rewrites the wheelset brake mask (+0x2BC): all axles down -> every wheel
     // takes the factor; any axle lifted (progress > 0.5) -> back to the native
     // mask minus the airborne wheels, so only grounded axles keep braking.
-    // Wheels map to axles evenly — wheel i belongs to axle i*axles/n
+    // Wheels map to axles evenly - wheel i belongs to axle i*axles/n
     void update_wheel_brake_mask( void* trailer )
     {
         void* const ws = prism::offsets::field< void* >( trailer, 0x150 );
@@ -88,7 +89,7 @@ namespace ts_extra_utilities
     //
     // A trailer that leaves a parked set stays linked under it, so the set's
     // per-frame spring-brake push keeps reaching it through the stale slave
-    // link and re-locks the wheels — no matter what the truck broadcasts.
+    // link and re-locks the wheels - no matter what the truck broadcasts.
     // Ret sites of the +0x180/+0x188 vfunc calls inside the truck's per-frame
     // update are the only legitimate source of positive brake writes on a
     // coupled trailer: at coupling_state 5 the truck copies its own brake
@@ -103,9 +104,9 @@ namespace ts_extra_utilities
     uint64_t truck_forced_broadcast_ret = 0;
 
     // the only legitimate source of positive brake writes on a jointed trailer
-    // is the truck's own broadcast. Anything else — a stale parked set pushing
+    // is the truck's own broadcast. Anything else - a stale parked set pushing
     // through the shared trailer_slave link, or the per-frame spring-brake
-    // loop while the coupling state is mid-change — is swallowed: a trailer
+    // loop while the coupling state is mid-change - is swallowed: a trailer
     // with a live joint takes its brakes from the truck, period.
     bool foreign_brake_write( void* self, const void* ret )
     {
@@ -114,10 +115,10 @@ namespace ts_extra_utilities
         {
             return false;
         }
-        // only jointed trailers are candidates — a free (jointless) trailer must
+        // only jointed trailers are candidates - a free (jointless) trailer must
         // keep receiving its spring brake or it rolls away
         if ( self == nullptr || joint( self ) == nullptr ) return false;
-        // trailer_physics_joint is a trailer field — on the truck object that
+        // trailer_physics_joint is a trailer field - on the truck object that
         // offset holds live unrelated data, so a nonzero read would misclassify
         // the truck as a jointed trailer and eat its own parking-brake writes
         if ( auto* game_actor = CCore::g_instance->get_game_actor() )
@@ -147,15 +148,16 @@ namespace ts_extra_utilities
     // brake bias: legitimate truck broadcasts aimed at a coupled trailer are
     // amplified by trailer_brake_boost percent so the trailers take the
     // braking load first (they lock and drag straight instead of the truck
-    // folding into a jackknife). The tractor's own channel is never touched —
+    // folding into a jackknife). The tractor's own channel is never touched -
     // the truck check must run BEFORE joint(): +0xFE0 is a trailer field and
     // holds unrelated live data on the truck object.
     // The wheel solver (0x14090C570) applies the factor as
     // max(trailer_brake, per-wheel floor) * grip/load with NO upper clamp,
-    // so the amplified value is allowed to exceed 1.0 — that is what makes
+    // so the amplified value is allowed to exceed 1.0 - that is what makes
     // loaded axles actually lock once their wheels unload under braking.
     float biased_brake( void* self, const float v )
     {
+        if ( !license::active() ) return v; // locked: native braking only
         const float boost = settings::g_settings.trailer_brake_boost;
         if ( v <= 0.f || boost <= 0.f || self == nullptr ) return v;
         if ( auto* game_actor = CCore::g_instance->get_game_actor() )
@@ -212,7 +214,7 @@ namespace ts_extra_utilities
     // vehicle, +0x178 the wheel count, +0x2BC the brake-factor mask and
     // +0x260/+0x268 the per-wheel output array. Natively lifted wheels keep
     // their floor brake, so an airborne wheel dead-stops the moment the pedal
-    // is touched — after the original runs we zero the outputs of every wheel
+    // is touched - after the original runs we zero the outputs of every wheel
     // whose axle is raised (lift controller progress > 0.5). Runs on the sim
     // thread, which is why this can't be done per-frame in update()
     using wheel_brake_fn = void __fastcall( void* /*wheelset*/ );
@@ -237,7 +239,7 @@ namespace ts_extra_utilities
     }
 
     // service-brake note: the pedal broadcasts through +0x730 (vfunc 0x178),
-    // but that field is a demand mirror — writing 10x to it produced zero
+    // but that field is a demand mirror - writing 10x to it produced zero
     // physical effect. The wheel solver only turns +0x760 into torque, so the
     // bias is applied there per-frame in update() instead
 
@@ -247,6 +249,7 @@ namespace ts_extra_utilities
     // chain cannot re-brake it through the shared trailer_slave link
     void brake_register_hooks()
     {
+        if ( !expected_build() ) return;
         truck_brake_broadcast_ret = memory::get_address_from_offset( 0x14064B7EF );
         truck_forced_broadcast_ret = memory::get_address_from_offset( 0x14064B806 );
         const auto brake_chain_setter_address = memory::get_address_for_pattern(
@@ -285,7 +288,7 @@ namespace ts_extra_utilities
                 reinterpret_cast< uint64_t >( &hk_forced_setter ) );
             forced_setter_hook->hook();
         }
-        // per-wheel brake solver — zeroing lifted-axle outputs must happen on
+        // per-wheel brake solver - zeroing lifted-axle outputs must happen on
         // the sim thread right after each solve, not per-frame
         const auto wheel_brake_address = memory::get_address_for_pattern(
             "48 89 5c 24 18 48 89 74 24 20 57 48 83 ec 50 48 8b 81 78 01 00 00 33 ff 48 8b d9 0f 29 74 24 40" );
@@ -298,13 +301,13 @@ namespace ts_extra_utilities
         }
     }
 
-    // trailer brake bias: +0x730 is only a demand mirror — the wheel
+    // trailer brake bias: +0x730 is only a demand mirror - the wheel
     // solver (0x14090C570) turns +0x760 into real torque via
     // max(factor, per-wheel min) * grip, no upper clamp, and ONLY for
     // wheels whose bit is set in the wheelset mask (+0x2BC). The native
     // mask marks just the braked def axles (e.g. 0xC = middle axle of a
     // vanderleia); we rewrite it to cover every wheel of every GROUNDED
-    // axle — lifted axles lose their bits, which matches both the user's
+    // axle - lifted axles lose their bits, which matches both the user's
     // request and reality (a wheel in the air brakes nothing)
     void brake_boost_update()
     {
@@ -330,7 +333,7 @@ namespace ts_extra_utilities
     // Espelha os canais de freio do caminhão direto em cada carreta do convoy:
     // o caminho nativo de service-brake precisa das flags de conector
     // pneumático que o pair_vehicles_fn arma, que a nossa réplica não
-    // reconstrói por completo — então uma carreta engatada pelo plugin rola
+    // reconstrói por completo - então uma carreta engatada pelo plugin rola
     // sem freio e empurra o caminhão. A física consome +0x730 direto (o loop
     // de spring-brake também escreve lá), então jogar os valores do caminhão
     // lá freia a carreta. Broadcasts nativos trazem os mesmos números quando
@@ -338,14 +341,14 @@ namespace ts_extra_utilities
     // E a carreta desatrelada TEM que continuar com spring-brake: o detach
     // escreve trailer_brake (+0x760) = 1 uma vez, mas o loop nativo por frame
     // que mantém carretas sem junta freadas é gated pelo coupling-state do
-    // caminhão — enquanto outra carreta continua engatada (state 5) nada
+    // caminhão - enquanto outra carreta continua engatada (state 5) nada
     // reaplica. Pina o fator de spring + demanda zerada a cada frame. O teste
     // é live-reachability, NÃO "joint == nullptr": uma carreta ainda jointada
     // a um pai ESTACIONADO faz parte de uma seção estacionada e tem que ficar
-    // freada também. Enquanto a peça está assentando (anchor_settling —
+    // freada também. Enquanto a peça está assentando (anchor_settling -
     // tombando em cima do apoio, rolando até o equilíbrio) as rodas NÃO podem
     // travar: um dolly de eixo único com CG atrás do eixo precisa rolar uns
-    // centímetros pra achar a pose de repouso — rodas travadas o deixam
+    // centímetros pra achar a pose de repouso - rodas travadas o deixam
     // balançando num ponto de contato só.
     void update_convoy_brakes( void* truck, const bool* in_convoy )
     {

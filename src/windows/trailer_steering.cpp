@@ -1,4 +1,4 @@
-// Eixos direcionais de carretas oversize — split out of
+// Eixos direcionais de carretas oversize - split out of
 // trailer_manipulation.cpp.
 
 #include "trailer_manipulation.hpp"
@@ -146,7 +146,7 @@ namespace ts_extra_utilities
     }
 
     // steerable-axle controls for one oversize trailer: lock toggle, angle
-    // slider, arrows and center — the angle is applied by the game's next
+    // slider, arrows and center - the angle is applied by the game's next
     // steering advance on its own thread
     void CTrailerManipulation::render_trailer_steering( const uint32_t i ) const
     {
@@ -227,7 +227,7 @@ namespace ts_extra_utilities
     }
 
     // steerable axles (oversize trailers): the hook only swaps the angle,
-    // so a miss just means no steering control — never fatal
+    // so a miss just means no steering control - never fatal
     void steering_install()
     {
         const auto steering_address = memory::get_address_for_pattern(

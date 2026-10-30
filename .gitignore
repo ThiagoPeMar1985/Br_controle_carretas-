@@ -5,3 +5,4 @@ nul
 *.log
 *.pkl
 .gradle/
+license_keys
