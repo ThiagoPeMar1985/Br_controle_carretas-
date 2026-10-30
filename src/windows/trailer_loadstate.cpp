@@ -451,7 +451,10 @@ namespace ts_extra_utilities
                 const float dot = std::fabs( req->quat.w * cur.quat.w + req->quat.x * cur.quat.x +
                                              req->quat.y * cur.quat.y + req->quat.z * cur.quat.z );
                 const float deg = 2.f * std::acos( dot > 1.f ? 1.f : dot ) * 57.29578f;
-                if ( dist < 3000.f && settings::g_settings.cargo_restore ) cargo_seq_ms = steady_ms();
+                // NÃO armar cargo_seq_ms aqui: a janela de carga faz o attach
+                // dispatcher recusar TODO engate por 20 s - inclusive o
+                // re-engate do trailer 0 que o próprio jogo dispara ao devolver
+                // a carreta na carga/descarga, deixando o conjunto desatrelado
                 const bool block = settings::g_settings.cargo_restore && dist < 3000.f;
                 CCore::g_instance->info(
                     "actor teleport request: {:.1f}m, {:.1f}deg turn, a3={} a4={} -> {}",
