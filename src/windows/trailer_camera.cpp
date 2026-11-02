@@ -88,6 +88,11 @@ namespace ts_extra_utilities
     }
     float __fastcall hk_combo_length( void* self )
     {
+        // checkbox off = entire coupling system bypassed: pure native call
+        if ( !settings::g_settings.cargo_restore )
+        {
+            return combo_length_hook->get_original< combo_length_fn >()( self );
+        }
         if ( self == nullptr || !readable_ptr( self ) || combo_hook_pos_fn_ptr == nullptr )
         {
             return combo_length_hook->get_original< combo_length_fn >()( self );

@@ -478,6 +478,11 @@ namespace ts_extra_utilities
     // suppressed at the funnel)
     uint8_t __fastcall hk_lamp_mask( void* self, uint8_t mask )
     {
+        // checkbox off = entire coupling system bypassed: pure native call
+        if ( !settings::g_settings.cargo_restore )
+        {
+            return lamp_mask_hook->get_original< lamp_mask_setter_fn >()( self, mask );
+        }
         const int ci = canon_age >= 90 ? canon_index_of( self ) : -1;
         if ( mask != 0 && ci >= 0 && !trailer_is_live( self ) )
         {
@@ -496,6 +501,12 @@ namespace ts_extra_utilities
     using lamp_propagate_fn = void __fastcall( void* /*slave*/, uint32_t /*mask*/ );
     void __fastcall hk_lamp_propagate( void* self, uint32_t mask )
     {
+        // checkbox off = entire coupling system bypassed: pure native call
+        if ( !settings::g_settings.cargo_restore )
+        {
+            lamp_propagate_hook->get_original< lamp_propagate_fn >()( self, mask );
+            return;
+        }
         // a real convoy is never deeper than the canon set - bound the walk
         // so a transient slave cycle (claim edge meeting a native link
         // mid-maintenance) costs a few wasted writes instead of spinning
@@ -522,6 +533,12 @@ namespace ts_extra_utilities
     // actually on the wheel
     void __fastcall hk_apply_cables( void* truck, void* trailer, int unused, int mode, int zero )
     {
+        // checkbox off = entire coupling system bypassed: pure native call
+        if ( !settings::g_settings.cargo_restore )
+        {
+            apply_cables_hook->get_original< vehicle_cables_fn >()( truck, trailer, unused, mode, zero );
+            return;
+        }
         // untouched passthrough during world assembly - redirects and
         // refusals based on half-built joint state corrupt the cable set
         // the game is still building
@@ -554,9 +571,10 @@ namespace ts_extra_utilities
             }
             if ( !live )
             {
-                const bool front_coupled =
-                    ( readable_ptr( static_cast< uint8_t* >( truck ) + prism::offsets::trailer_physics_joint ) &&
-                      joint( truck ) != nullptr );
+                // only the OUTGOING edge protects this front: being bolted
+                // to a parent says nothing about the hoses behind it - a
+                // clear on a front whose slave claim is dead must pass and
+                // remove the dangling hose instead of leaving it drawn
                 void* fslave =
                     readable_ptr( static_cast< uint8_t* >( truck ) + prism::offsets::trailer_slave )
                         ? prism::offsets::field< void* >( truck, prism::offsets::trailer_slave ) : nullptr;
@@ -566,7 +584,7 @@ namespace ts_extra_utilities
                 const bool arg_live_edge = trailer != nullptr && readable_ptr( trailer ) &&
                     readable_ptr( static_cast< uint8_t* >( trailer ) + prism::offsets::trailer_physics_joint ) &&
                     joint( trailer ) != nullptr;
-                if ( ( front_coupled || slave_intact ) && ( trailer == nullptr || arg_live_edge ) )
+                if ( slave_intact && ( trailer == nullptr || arg_live_edge ) )
                 {
                     return;
                 }
@@ -600,9 +618,10 @@ namespace ts_extra_utilities
             if ( trailer == nullptr ) mode = 0;
         }
         // the applier walks trailer_slave links without checking joints -
-        // hide every live->dead link for the duration of the call so it can
-        // only raise hoses across real couplings (restored right after;
-        // parked->parked links stay, a parked section keeps its own lines)
+        // hide every link to a jointless slave for the duration of the
+        // call so it can only raise hoses across real couplings (restored
+        // right after; parked->parked links stay, a parked section keeps
+        // its own lines)
         void* hidden_from[ max_trailers ] = {};
         void* hidden_link[ max_trailers ] = {};
         uint32_t hidden = 0;
@@ -610,8 +629,7 @@ namespace ts_extra_utilities
         {
             void* t = canon[ i ];
             if ( !readable_ptr( t ) ||
-                 !readable_ptr( static_cast< uint8_t* >( t ) + prism::offsets::trailer_physics_joint ) ||
-                 joint( t ) == nullptr )
+                 !readable_ptr( static_cast< uint8_t* >( t ) + prism::offsets::trailer_slave ) )
             {
                 continue;
             }
@@ -644,6 +662,12 @@ namespace ts_extra_utilities
     // legit teardown still lands a frame later
     void __fastcall hk_set_lines( void* vehicle, uint8_t state, uint8_t force )
     {
+        // checkbox off = entire coupling system bypassed: pure native call
+        if ( !settings::g_settings.cargo_restore )
+        {
+            set_lines_hook->get_original< line_state_fn >()( vehicle, state, force );
+            return;
+        }
         const int vi = canon_age >= 90 && vehicle != nullptr ? canon_index_of( vehicle ) : -1;
         void* j = vehicle != nullptr &&
                   readable_ptr( static_cast< uint8_t* >( vehicle ) + prism::offsets::trailer_physics_joint )
@@ -668,6 +692,12 @@ namespace ts_extra_utilities
     // and falls through to the native nullptr cleanup
     void __fastcall hk_rebuild_lines( void* front, void* trailer )
     {
+        // checkbox off = entire coupling system bypassed: pure native call
+        if ( !settings::g_settings.cargo_restore )
+        {
+            rebuild_lines_hook->get_original< prism::vehicle_rebuild_lines_fn >()( front, trailer );
+            return;
+        }
         // untouched passthrough during world assembly - the refuse/redirect
         // logic reads joint state that is garbage on half-built trailers
         if ( canon_age < 90 )
@@ -704,9 +734,9 @@ namespace ts_extra_utilities
             }
             if ( !live )
             {
-                const bool front_coupled =
-                    ( readable_ptr( static_cast< uint8_t* >( front ) + prism::offsets::trailer_physics_joint ) &&
-                      joint( front ) != nullptr );
+                // same rule as hk_apply_cables: only a live OUTGOING edge
+                // (slave bolted behind this front) keeps its hoses -
+                // everything else falls through to the native clear
                 void* fslave =
                     readable_ptr( static_cast< uint8_t* >( front ) + prism::offsets::trailer_slave )
                         ? prism::offsets::field< void* >( front, prism::offsets::trailer_slave ) : nullptr;
@@ -716,7 +746,7 @@ namespace ts_extra_utilities
                 const bool arg_live_edge = trailer != nullptr && readable_ptr( trailer ) &&
                     readable_ptr( static_cast< uint8_t* >( trailer ) + prism::offsets::trailer_physics_joint ) &&
                     joint( trailer ) != nullptr;
-                if ( ( front_coupled || slave_intact ) && ( trailer == nullptr || arg_live_edge ) )
+                if ( slave_intact && ( trailer == nullptr || arg_live_edge ) )
                 {
                     return;
                 }
@@ -734,7 +764,27 @@ namespace ts_extra_utilities
         }
         if ( trailer == nullptr )
         {
+            // the native clear still resolves the front's slave claim
+            // through +0xC8 - hide a dead claim for the call or the hose to
+            // the jointless trailer is redrawn instead of removed
+            void* hidden_link = nullptr;
+            if ( front != nullptr && readable_ptr( front ) &&
+                 readable_ptr( static_cast< uint8_t* >( front ) + prism::offsets::trailer_slave ) )
+            {
+                void* s = prism::offsets::field< void* >( front, prism::offsets::trailer_slave );
+                if ( s != nullptr && readable_ptr( s ) &&
+                     readable_ptr( static_cast< uint8_t* >( s ) + prism::offsets::trailer_physics_joint ) &&
+                     joint( s ) == nullptr )
+                {
+                    hidden_link = s;
+                    prism::offsets::field< void* >( front, prism::offsets::trailer_slave ) = nullptr;
+                }
+            }
             rebuild_lines_hook->get_original< prism::vehicle_rebuild_lines_fn >()( front, nullptr );
+            if ( hidden_link != nullptr )
+            {
+                prism::offsets::field< void* >( front, prism::offsets::trailer_slave ) = hidden_link;
+            }
             return;
         }
         void* fixed_front = front;

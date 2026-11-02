@@ -12,7 +12,7 @@ namespace ts_extra_utilities
     using cvar_get_int_fn = int __fastcall( void* );
     using post_event_fn = void __fastcall( void*, const char**, void*, int, void*, int, int, int, int, void*, void* );
     using trailer_brace_anim_fn = void __fastcall( void*, uint8_t, float );
-    using native_attach_dispatch_fn = void __fastcall( void*, uint8_t, uint64_t, void* );
+    using native_attach_dispatch_fn = void __fastcall( void*, uint8_t, uint64_t, uint64_t, uint64_t, const float* );
     using native_detach_dispatch_fn = void __fastcall( void*, uint8_t, uint64_t );
     using line_state_fn = void __fastcall( void*, uint8_t, uint8_t );
     using lamp_mask_setter_fn = uint8_t __fastcall( void*, uint8_t );
@@ -134,8 +134,8 @@ namespace ts_extra_utilities
     void hk_phys_link( void*, void* );
     void hk_trailer_connect_a( void*, void*, float3_t, int, bool, bool );
     void hk_trailer_connect_b( void*, void*, float3_t, int, bool, bool );
-    void hk_attach_dispatch( void*, uint8_t, uint64_t, void* );
-    void hk_attach_dispatch_raw( void*, uint8_t, uint64_t, void* );
+    void hk_attach_dispatch( void*, uint8_t, uint64_t, uint64_t, uint64_t, const float* );
+    void hk_attach_dispatch_raw( void*, uint8_t, uint64_t, uint64_t, uint64_t, const float* );
     void hk_trailer_disconnect( void* );
     uint8_t hk_lane_obstacle_insert( void*, void*, float );
     void hk_pre_detach( void*, void* );

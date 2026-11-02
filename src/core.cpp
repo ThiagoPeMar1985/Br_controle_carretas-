@@ -1,5 +1,8 @@
 ﻿#include "core.hpp"
 
+#include <cstdio>
+#include <cstdlib>
+
 #include <MinHook.h>
 #include <eurotrucks2/scssdk_eut2.h>
 
@@ -18,6 +21,25 @@ extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler( HWND, UINT, WPARAM
 
 namespace ts_extra_utilities
 {
+    void diag_log( const std::string& msg )
+    {
+        static FILE* f = nullptr;
+        static std::string path;
+        if ( f == nullptr && path.empty() )
+        {
+            const char* profile = getenv( "USERPROFILE" );
+            path = std::string( profile != nullptr ? profile : "." ) +
+                "\\Documents\\Euro Truck Simulator 2\\br_carretas_debug.log";
+            f = fopen( path.c_str(), "a" );
+        }
+        if ( f == nullptr ) return;
+        SYSTEMTIME st;
+        GetLocalTime( &st );
+        fprintf( f, "%02d:%02d:%02d.%03d %s\n",
+            st.wHour, st.wMinute, st.wSecond, st.wMilliseconds, msg.c_str() );
+        fflush( f );
+    }
+
     CCore* CCore::g_instance = nullptr;
 
     CCore::CCore( const scs_telemetry_init_params_v101_t* init_params ) : init_params_( init_params )
@@ -36,8 +58,25 @@ namespace ts_extra_utilities
 
     bool CCore::init()
     {
-        MH_Initialize();
-        this->info( "Initializing {}", VERSION );
+        const MH_STATUS mh_status = MH_Initialize();
+        this->info( "Initializing {} (MH_Initialize={})", VERSION, static_cast< int >( mh_status ) );
+        this->info( "game_id={}",
+            init_params_->common.game_id != nullptr ? init_params_->common.game_id : "(null)" );
+
+        // other plugins already mapped in the process - module collisions
+        // with TM Real Walk showed up here before
+        const HMODULE tm_walk = GetModuleHandleA( "TMRealWalk.dll" );
+        if ( tm_walk != nullptr )
+        {
+            char tm_path[ MAX_PATH ] = {};
+            GetModuleFileNameA( tm_walk, tm_path, MAX_PATH );
+            this->info( "TMRealWalk.dll loaded at {:p} path={}",
+                static_cast< void* >( tm_walk ), tm_path );
+        }
+        else
+        {
+            this->info( "TMRealWalk.dll not loaded" );
+        }
 
         // this build targets ETS2 - its fixed image offsets were derived from
         // eurotrucks2.exe only; warn loudly if the dll gets loaded by ATS
@@ -50,25 +89,36 @@ namespace ts_extra_utilities
         }
 
         truckersmp_ = GetModuleHandle( L"core_ets2mp.dll" ) != nullptr || GetModuleHandle( L"core_atsmp.dll" ) != nullptr;
+        this->info( "truckersmp={}", truckersmp_ );
 
         this->dx11_hook = new CDirectX11Hook();
         if ( !this->dx11_hook->hook_present() )
         {
+            this->error( "dx11 present hook failed - aborting init" );
             return false;
         }
+        this->info( "dx11 present hook ok" );
+
         this->di8_hook = new CDirectInput8Hook();
         if ( !this->di8_hook->hook() )
         {
+            this->error( "directinput8 hook failed - aborting init" );
             return false;
         }
+        this->info( "directinput8 hook ok" );
 
         settings::load();
+        this->info( "settings loaded" );
 
         this->trailer_manipulation_ = this->window_manager_->register_window( std::make_shared< CTrailerManipulation >() );
 
         if ( !this->trailer_manipulation_->init() )
         {
             g_instance->error( "Could not initialize the trailer control module" );
+        }
+        else
+        {
+            this->info( "trailer control module initialized" );
         }
 
         // hooks status stays registered for support, hidden by default - the

@@ -66,6 +66,10 @@ namespace ts_extra_utilities
     int anchor_settle[ max_trailers ] = {};
     int anchor_age[ max_trailers ] = {};
     int anchor_delay[ max_trailers ] = {};
+    // último elo traseiro visto - a trava só sai da pose travada quando um
+    // elo da carreta muda (junta frontal ou junta da peça engatada atrás)
+    void* anchor_prev_slave[ max_trailers ] = {};
+    bool anchor_prev_slave_j[ max_trailers ] = {};
     bool record_tried[ max_trailers ] = {};
     int record_retry[ max_trailers ] = {};      // frames até a próxima tentativa
     uint8_t record_quiet[ max_trailers ] = {};  // falhas já logadas (anti-spam)
@@ -107,8 +111,12 @@ namespace ts_extra_utilities
             settings::save();
         }
         ImGui::SameLine();
-        ImGui::TextWrapped( "Carreta fica parada na doca" );
-        ImGui::TextDisabled( "ao carregar/descarregar separado, ela continua separada depois" );
+        ImGui::TextWrapped( "Sistema de acoplamento" );
+        ImGui::TextWrapped(
+            "Ative para usar o sistema de desacoplamento/acoplamento. Ligado, o jogo nao teleporta "
+            "na camera 0 (Ctrl+F9) nem ao carregar/descarregar - as carretas separadas ficam presas "
+            "no lugar. Desligado, engate, desengate, teleporte, carga e descarga voltam ao nativo do "
+            "jogo. Para teleportar para outro lugar, desligue, teleporte e ligue de novo." );
     }
 
     void restore_parked_if_enabled()
@@ -216,6 +224,12 @@ namespace ts_extra_utilities
     using trailer_state_apply_fn = void __fastcall( void* /*record*/ );
     void __fastcall hk_trailer_state_apply( void* record )
     {
+        // checkbox off = entire coupling system bypassed: pure native call
+        if ( !settings::g_settings.cargo_restore )
+        {
+            trailer_state_apply_hook->get_original< trailer_state_apply_fn >()( record );
+            return;
+        }
         void* trailer = record != nullptr
             ? prism::offsets::field< void* >( record, 0xB8 ) : nullptr;
         if ( trailer != nullptr && is_plugin_detached( trailer ) )
@@ -238,6 +252,12 @@ namespace ts_extra_utilities
     using trailer_teleport_fn = void __fastcall( void* /*trailer*/, void* /*transform*/ );
     void __fastcall hk_trailer_teleport( void* self, void* transform )
     {
+        // checkbox off = entire coupling system bypassed: pure native call
+        if ( !settings::g_settings.cargo_restore )
+        {
+            trailer_teleport_hook->get_original< trailer_teleport_fn >()( self, transform );
+            return;
+        }
         // the refusal only covers a JOINTLESS parked piece being dragged by
         // an ACTOR teleport (dock/cargo/ferry - the moves that relocate the
         // rig). Isolated teleports MUST land: the load-time placement snap
@@ -428,6 +448,13 @@ namespace ts_extra_utilities
     }
     void __fastcall hk_actor_teleport( void* self, void* arg, uint8_t a3, uint8_t a4 )
     {
+        // checkbox off = entire coupling system bypassed: pure native call
+        if ( !settings::g_settings.cargo_restore )
+        {
+            rig_armed = false;
+            actor_teleport_hook->get_original< actor_teleport_fn >()( self, arg, a3, a4 );
+            return;
+        }
         // pure passthrough while the world assembles - snapshot/settle math
         // on half-built or staging-position trailers re-seats them in the
         // void (dolly under the map)
@@ -1076,52 +1103,76 @@ namespace ts_extra_utilities
     // Remove entradas órfãs de todos os containers de lane-obstacle vistos -
     // uma entrada cujo owner-node foi liberado sem o slot sair do array quebra
     // o scan inteiro na worker thread do tráfego.
+    // FATIADO: a passada inteira (3-11ms num frame) era o stutter pós-detach
+    // e a engasgada de ~5s na rodovia. Mesma lógica, mesmo resultado - só
+    // espalhado: no máximo 64 inspeções por chamada, retomando de onde parou
     void prune_lane_containers()
     {
-        for ( auto& c : lane_containers )
+        static uint32_t ci = 0;
+        static uint64_t ei = ~0ull;   // ~0 = próximo container, lê count dele
+        uint32_t budget = 64;
+        while ( budget > 0 && ci < 128 )
         {
-            if ( c == nullptr ) continue;
-            if ( !readable_ptr( c ) ||
+            void*& c = lane_containers[ ci ];
+            if ( c == nullptr || !readable_ptr( c ) ||
                  !readable_ptr( static_cast< uint8_t* >( c ) + 0x10 ) )
             {
                 c = nullptr;
+                ++ci;
+                ei = ~0ull;
                 continue;
             }
+            void** elements = *reinterpret_cast< void*** >( static_cast< uint8_t* >( c ) + 8 );
+            auto* count = reinterpret_cast< uint64_t* >( static_cast< uint8_t* >( c ) + 0x10 );
+            if ( elements == nullptr || !readable_ptr( elements ) ||
+                 *count == 0 || *count > 0x10000 )
+            {
+                c = nullptr;
+                ++ci;
+                ei = ~0ull;
+                continue;
+            }
+            bool done = false;
             __try
             {
-                void** elements = *reinterpret_cast< void*** >( static_cast< uint8_t* >( c ) + 8 );
-                auto* count = reinterpret_cast< uint64_t* >( static_cast< uint8_t* >( c ) + 0x10 );
-                if ( elements == nullptr || !readable_ptr( elements ) || *count > 0x10000 )
-                {
-                    c = nullptr;
-                    continue;
-                }
                 uint64_t n = *count;
-                for ( uint64_t i = n; i-- > 0; )
+                if ( ei == ~0ull || ei >= n ) ei = n - 1;
+                while ( budget > 0 )
                 {
-                    void* el = elements[ i ];
+                    --budget;
+                    void* el = elements[ ei ];
                     if ( lane_element_dead( el ) )
                     {
                         CCore::g_instance->info( "lane obstacle: pruned dead entry {:p}", el );
-                        memmove( &elements[ i ], &elements[ i + 1 ], ( n - i - 1 ) * sizeof( void* ) );
+                        std::memmove( &elements[ ei ], &elements[ ei + 1 ],
+                                      ( n - ei - 1 ) * sizeof( void* ) );
                         --n;
+                        *count = n;
+                        // worker no meio do scan com count velho dereferencia
+                        // elements[n] - última entrada VIVA no rabo
+                        if ( n > 0 ) elements[ n ] = elements[ n - 1 ];
+                        if ( n == 0 || ei >= n ) { done = true; break; }
+                        // mesmo ei: o memmove trouxe o próximo elemento pra cá
                     }
-                }
-                if ( n != *count )
-                {
-                    // worker no meio do scan com count velho dereferencia
-                    // elements[n] - deixa a última entrada VIVA no lugar da
-                    // morta que o memmove expôs
-                    if ( n > 0 ) elements[ n ] = elements[ n - 1 ];
-                    *count = n;
+                    else if ( ei == 0 ) { done = true; break; }
+                    else { --ei; }
                 }
             }
             __except ( EXCEPTION_EXECUTE_HANDLER )
             {
                 // container liberado ou realocado no meio da poda - descarta
                 c = nullptr;
+                ++ci;
+                ei = ~0ull;
+                continue;
+            }
+            if ( done )
+            {
+                ++ci;
+                ei = ~0ull;
             }
         }
+        if ( ci >= 128 ) { ci = 0; ei = ~0ull; }
     }
 
     // Hook do insert ordenado de lane-obstacle (0x14094DFC0, roda nas worker
@@ -1542,6 +1593,28 @@ namespace ts_extra_utilities
             hook_xform_t now{};
             if ( !hook_world( t, now ) || trailer_teleport_hook == nullptr ) continue;
             ++anchor_age[ i ];
+            // atualização só por evento: volta a seguir a pose quando um
+            // elo dessa carreta muda - a junta da peça engatada ATRÁS dela
+            // (a junta frontal dela já reabre a janela pela queda da própria
+            // junta). Sem evento, a pose travada não é reescrita todo frame
+            {
+                void* slave =
+                    readable_ptr( static_cast< uint8_t* >( t ) + prism::offsets::trailer_slave )
+                        ? prism::offsets::field< void* >( t, prism::offsets::trailer_slave )
+                        : nullptr;
+                const bool slave_j = slave != nullptr && readable_ptr( slave ) &&
+                    readable_ptr( static_cast< uint8_t* >( slave ) + prism::offsets::trailer_physics_joint ) &&
+                    joint( slave ) != nullptr;
+                if ( slave != anchor_prev_slave[ i ] ||
+                     slave_j != anchor_prev_slave_j[ i ] )
+                {
+                    anchor_prev_slave[ i ] = slave;
+                    anchor_prev_slave_j[ i ] = slave_j;
+                    anchor_settle[ i ] = 0;
+                    anchor_age[ i ] = 0;
+                    anchor_settling[ i ] = true;
+                }
+            }
             const float mx = now.pos.x - anchor_xform[ i ].pos.x;
             const float my = now.pos.y - anchor_xform[ i ].pos.y;
             const float mz = now.pos.z - anchor_xform[ i ].pos.z;
@@ -1599,7 +1672,11 @@ namespace ts_extra_utilities
                     continue;
                 }
             }
-            if ( mx * mx + my * my + mz * mz > 0.01f * 0.01f || rotd > 0.0004f )
+            // correção só contra colisão real: jitter de suspensão (1-3 cm)
+            // não é empurrão - teleportar por ele é o que fazia a carreta
+            // levitar e se debater a cada frame. Um deslocamento desse
+            // tamanho só vem de contato real ou de um elo mexendo nela
+            if ( mx * mx + my * my + mz * mz > 0.08f * 0.08f || rotd > 0.004f )
             {
                 // travado - emula o parked-record nativo: re-asserta a pose
                 // INTEIRA guardada (posição E rotação, incluindo Y) em

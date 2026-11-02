@@ -1,5 +1,6 @@
 #include "license.hpp"
 #include "settings/settings.hpp"
+#include "core.hpp"
 
 #include <windows.h>
 #include <bcrypt.h>
@@ -247,42 +248,55 @@ namespace
 license::info license::check( const char* key_text )
 {
     info out;
-    if ( !pubkey_configured() ) { out.st = status::unconfigured; return out; }
-    if ( key_text == nullptr || key_text[0] == 0 ) { out.st = status::missing; return out; }
+    // log por estágio, uma vez por mudança de (chave,status,motivo)
+    const auto report = [ & ]( const char* why )
+    {
+        static char last[ 192 ] = {};
+        char cur[ 192 ];
+        snprintf( cur, sizeof cur, "%s|%d|%s",
+                  key_text != nullptr ? key_text : "", ( int ) out.st, why );
+        if ( strcmp( cur, last ) == 0 ) return;
+        strcpy_s( last, cur );
+        ts_extra_utilities::CCore::g_instance->info(
+            "license check: key='{}' hwid={} status={} - {}",
+            key_text != nullptr && key_text[0] != 0 ? key_text : "(none)",
+            hardware_id(), ( int ) out.st, why );
+    };
+    if ( !pubkey_configured() ) { out.st = status::unconfigured; report( "pubkey nao configurada" ); return out; }
+    if ( key_text == nullptr || key_text[0] == 0 ) { out.st = status::missing; report( "sem chave" ); return out; }
 
     // "BRCDT1.<unix-seconds>.<b64url(sig r||s 64B)>"
     const std::string k = key_text;
-    if ( k.rfind( "BRCDT1.", 0 ) != 0 ) { out.st = status::invalid; return out; }
+    if ( k.rfind( "BRCDT1.", 0 ) != 0 ) { out.st = status::invalid; report( "prefixo BRCDT1 ausente" ); return out; }
     const size_t d2 = k.find( '.', 7 );
-    if ( d2 == std::string::npos || d2 + 1 >= k.size() ) { out.st = status::invalid; return out; }
+    if ( d2 == std::string::npos || d2 + 1 >= k.size() ) { out.st = status::invalid; report( "formato sem segundo ponto" ); return out; }
     const std::string expiry = k.substr( 7, d2 - 7 );
     const std::string sig_text = k.substr( d2 + 1 );
-    if ( sig_text.find( '.' ) != std::string::npos ) { out.st = status::invalid; return out; }
+    if ( sig_text.find( '.' ) != std::string::npos ) { out.st = status::invalid; report( "ponto extra na assinatura" ); return out; }
 
     BYTE sig[64]{};
     const __time64_t expiry_at = epoch_secs( expiry );
-    if ( expiry_at < 0 || !b64url_decode( sig_text, sig, sizeof( sig ) ) )
+    if ( expiry_at < 0 ) { out.st = status::invalid; report( "expiry nao parseia" ); return out; }
+    if ( !b64url_decode( sig_text, sig, sizeof( sig ) ) )
     {
-        out.st = status::invalid;
-        return out;
+        out.st = status::invalid; report( "assinatura b64 invalida" ); return out;
     }
 
     const std::string payload = "BRCDT1|" + lower( hardware_id() ) + "|" + expiry;
     if ( !ecdsa_verify( payload.data(), static_cast< ULONG >( payload.size() ), sig, sizeof( sig ) ) )
     {
-        out.st = status::invalid;
-        return out;
+        out.st = status::invalid; report( "assinatura ECDSA nao confere" ); return out;
     }
 
     // genuine key: expiry still running? (clock rollback also counts as out)
     const __time64_t now = _time64( nullptr );
     if ( now < ts_extra_utilities::settings::g_settings.license_seen )
     {
-        out.st = status::expired;
-        return out;
+        out.st = status::expired; report( "clock rollback detectado" ); return out;
     }
     out.days_left = static_cast< int >( ( expiry_at - now + 86399 ) / 86400 );
-    if ( out.days_left <= 0 ) { out.st = status::expired; return out; }
+    if ( out.days_left <= 0 ) { out.st = status::expired; report( "expirou" ); return out; }
+    report( "valida" );
 
     // remember the furthest moment seen - a clock set backwards can no longer
     // stretch a license it has already outlived
@@ -320,12 +334,15 @@ license::info license::last()
 
 void license::refresh( const bool force )
 {
-    const ULONGLONG now = GetTickCount64();
-    const ULONGLONG last = g_checked_at.load( std::memory_order_relaxed );
-    if ( !force && now - last < 2000 ) return;
-    g_checked_at.store( now, std::memory_order_relaxed );
+    // só re-checa quando a chave muda ou o chamador força (init / botão):
+    // nada de re-verificar a cada 2s
+    static std::string last_key;
+    const char* cur = ts_extra_utilities::settings::g_settings.license_key;
+    if ( !force && cur != nullptr && last_key == cur ) return;
+    last_key = cur != nullptr ? cur : "";
+    g_checked_at.store( GetTickCount64(), std::memory_order_relaxed );
 
-    const info r = check( ts_extra_utilities::settings::g_settings.license_key );
+    const info r = check( cur );
     g_active.store( r.st == status::valid || r.st == status::unconfigured ? 1 : 0,
         std::memory_order_relaxed );
     g_last_st.store( static_cast< int >( r.st ), std::memory_order_relaxed );

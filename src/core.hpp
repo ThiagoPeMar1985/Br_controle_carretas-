@@ -12,6 +12,10 @@
 
 namespace ts_extra_utilities
 {
+    // sidecar file logger - the game's own log callback crashed the plugin,
+    // so diagnostics go to Documents\Euro Truck Simulator 2\br_carretas_debug.log
+    void diag_log( const std::string& msg );
+
     class CWindowManager;
     class CTrailerManipulation;
 
@@ -88,23 +92,23 @@ namespace ts_extra_utilities
 #endif
         }
 
-        // logging disabled - the game's log callback was crashing the plugin
+        // sidecar file logging - the game's log callback was crashing the plugin
         template < class... T >
         void info( const char* fmt_s, T&&... args ) const
         {
-            ( void ) fmt_s;
+            diag_log( "[br_carretas] " + fmt::vformat( fmt_s, fmt::make_format_args( args... ) ) );
         }
 
         template < class... T >
         void warning( const char* fmt_s, T&&... args ) const
         {
-            ( void ) fmt_s;
+            diag_log( "[br_carretas] WARNING " + fmt::vformat( fmt_s, fmt::make_format_args( args... ) ) );
         }
 
         template < class... T >
         void error( const char* fmt_s, T&&... args ) const
         {
-            ( void ) fmt_s;
+            diag_log( "[br_carretas] ERROR " + fmt::vformat( fmt_s, fmt::make_format_args( args... ) ) );
         }
     };
 }

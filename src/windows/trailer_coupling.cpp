@@ -116,7 +116,7 @@ namespace ts_extra_utilities
     // pairing, cables, anchors) which our manual replica could never fully
     // reproduce. It takes the trailer to attach from game_actor+0xC8
     using native_attach_dispatch_fn = void __fastcall( void* /*game_actor*/, uint8_t /*dl*/,
-        uint64_t /*r8*/, void* /*settle_value_override*/ );
+        uint64_t /*r8*/, uint64_t /*r9*/, uint64_t /*arg5*/, const float* /*settle_override*/ );
     native_attach_dispatch_fn* native_attach_fn = nullptr;
 
     // line/hose teardown + lamp-mask setter + the camera update vfunc,
@@ -303,7 +303,7 @@ namespace ts_extra_utilities
         // estacionada mais fundo vira membro fantasma e afunda sem trava
         sever_parked_claims();
         native_chain_call_active.store( true, std::memory_order_release );
-        attach_dispatch_hook->get_original< native_attach_dispatch_fn >()( game_actor, 1, 0, nullptr );
+        attach_dispatch_hook->get_original< native_attach_dispatch_fn >()( game_actor, 1, 0, 0, 0, nullptr );
         native_chain_call_active.store( false, std::memory_order_release );
         if ( severed && readable_ptr( trailer ) )
         {
@@ -885,6 +885,12 @@ namespace ts_extra_utilities
     // Also pumps the sim-thread queues (ops and console lines).
     void hk_crashes_when_disconnected( prism::physics_trailer_u* self, prism::game_trailer_actor_u* trailer )
     {
+        // checkbox off = entire coupling system bypassed: pure native call
+        if ( !settings::g_settings.cargo_restore )
+        {
+            crashes_when_disconnected_hook->get_original< prism::crashes_when_disconnected_fn >()( self, trailer );
+            return;
+        }
         pump_sim_heartbeat();
         // console commands run first: a queued "g_traffic 0" must land before a
         // delayed disconnect drops the joint
@@ -973,6 +979,11 @@ namespace ts_extra_utilities
     // candidate sits inside gap range, the visibility leaf does not
     void hk_connect_slave( prism::physics_trailer_u* self )
     {
+        if ( !settings::g_settings.cargo_restore )
+        {
+            connect_slave_hook->get_original< prism::physics_trailer_u_connect_slave_fn >()( self );
+            return;
+        }
         void* slave = self != nullptr
             ? prism::offsets::field< void* >( self, prism::offsets::trailer_slave ) : nullptr;
         const int si = canon_index_of( self ), ti = canon_index_of( slave );
@@ -1021,6 +1032,10 @@ namespace ts_extra_utilities
     using joint_walk_fn = float __fastcall( void* /*node*/, float /*arg*/ );
     float __fastcall hk_joint_walk( void* self, float arg )
     {
+        if ( !settings::g_settings.cargo_restore )
+        {
+            return joint_walk_hook->get_original< joint_walk_fn >()( self, arg );
+        }
         thread_local void* jw_seen[ 96 ];
         thread_local int jw_depth = 0;
         for ( int i = 0; i < jw_depth; ++i )
@@ -1056,6 +1071,11 @@ namespace ts_extra_utilities
     using phys_link_fn = void __fastcall( void* /*parent*/, void* /*child*/ );
     void __fastcall hk_phys_link( void* parent, void* child )
     {
+        if ( !settings::g_settings.cargo_restore )
+        {
+            phys_link_hook->get_original< phys_link_fn >()( parent, child );
+            return;
+        }
         if ( parent != nullptr && child != nullptr &&
              readable_ptr( parent ) && readable_ptr( child ) )
         {
@@ -1149,6 +1169,12 @@ namespace ts_extra_utilities
     }
     void __fastcall hk_trailer_disconnect( void* trailer )
     {
+        // checkbox off = entire coupling system bypassed: pure native call
+        if ( !settings::g_settings.cargo_restore )
+        {
+            trailer_disconnect_hook->get_original< prism::physics_trailer_u_disconnect_fn >()( trailer );
+            return;
+        }
         if ( trailer == nullptr || !is_trailer_obj( trailer ) ) return;
         // the walker's lamp cut writes [src+0x2A0] where src comes out of each
         // member's light ctx ([m+0x110]+0x18) - a src pointing at a recycled
@@ -1353,12 +1379,24 @@ namespace ts_extra_utilities
     void __fastcall hk_trailer_connect_a( void* trailer, void* parent, float3_t vec,
                                           int state, bool slave_hook, bool is_slave )
     {
+        if ( !settings::g_settings.cargo_restore )
+        {
+            trailer_connect_hook->get_original< prism::physics_trailer_u_connect_fn >()(
+                trailer, parent, vec, state, slave_hook, is_slave );
+            return;
+        }
         run_native_connect( trailer, parent, vec, state, slave_hook, is_slave,
             trailer_connect_hook->get_original< prism::physics_trailer_u_connect_fn >() );
     }
     void __fastcall hk_trailer_connect_b( void* trailer, void* parent, float3_t vec,
                                           int state, bool slave_hook, bool is_slave )
     {
+        if ( !settings::g_settings.cargo_restore )
+        {
+            trailer_connect_hook2->get_original< prism::physics_trailer_u_connect_fn >()(
+                trailer, parent, vec, state, slave_hook, is_slave );
+            return;
+        }
         run_native_connect( trailer, parent, vec, state, slave_hook, is_slave,
             trailer_connect_hook2->get_original< prism::physics_trailer_u_connect_fn >() );
     }
@@ -1369,6 +1407,11 @@ namespace ts_extra_utilities
     // detached trailer left sitting at quit
     void __fastcall hk_pre_detach( void* self, void* trailer )
     {
+        if ( !settings::g_settings.cargo_restore )
+        {
+            pre_detach_hook->get_original< prism::vehicle_pre_detach_fn >()( self, trailer );
+            return;
+        }
         if ( trailer == nullptr ||
             prism::offsets::field< void* >( trailer, prism::offsets::trailer_physics_joint ) == nullptr )
         {
@@ -1387,6 +1430,12 @@ namespace ts_extra_utilities
     void __fastcall hk_detach_dispatch_raw( void* self, uint8_t dl, uint64_t r8 );
     void __fastcall hk_detach_dispatch( void* self, uint8_t dl, uint64_t r8 )
     {
+        // checkbox off = entire coupling system bypassed: pure native call
+        if ( !settings::g_settings.cargo_restore )
+        {
+            detach_dispatch_hook->get_original< native_detach_dispatch_fn >()( self, dl, r8 );
+            return;
+        }
         // only the player's T key (caller exe+0x9F7DAE, seen in the logs) is
         // bound by the handbrake rule - the game's own detach (delivery,
         // world teardown on load/quit, caller exe+0x5DBED6) must always run
@@ -1519,9 +1568,17 @@ namespace ts_extra_utilities
     // Natively detached trailers are unaffected: T re-attach still works
     // set by the wrapper: the game itself (not the player's T key) called the attach
     bool attach_from_game = false;
-    void __fastcall hk_attach_dispatch_raw( void* self, uint8_t dl, uint64_t r8, void* settle_override );
-    void __fastcall hk_attach_dispatch( void* self, uint8_t dl, uint64_t r8, void* settle_override )
+    void __fastcall hk_attach_dispatch_raw( void* self, uint8_t dl, uint64_t r8, uint64_t r9,
+        uint64_t arg5, const float* settle_override );
+    void __fastcall hk_attach_dispatch( void* self, uint8_t dl, uint64_t r8, uint64_t r9,
+        uint64_t arg5, const float* settle_override )
     {
+        // checkbox off = entire coupling system bypassed: pure native call
+        if ( !settings::g_settings.cargo_restore )
+        {
+            attach_dispatch_hook->get_original< native_attach_dispatch_fn >()( self, dl, r8, r9, arg5, settle_override );
+            return;
+        }
         // the delivery/dock sequence never needs an attach - a game-driven
         // re-attach there is what yanks the parked pieces around
         // the handbrake rule binds the player's T key only (caller
@@ -1541,7 +1598,7 @@ namespace ts_extra_utilities
             return;
         }
         attach_from_game = caller != 0x9F7DD6;
-        __try { hk_attach_dispatch_raw( self, dl, r8, settle_override ); }
+        __try { hk_attach_dispatch_raw( self, dl, r8, r9, arg5, settle_override ); }
         __except ( EXCEPTION_EXECUTE_HANDLER )
         {
             const bool canon_alive = !canon_dead();
@@ -1552,7 +1609,8 @@ namespace ts_extra_utilities
         for ( auto& torn : lines_torn ) torn = false;
     }
 
-    void __fastcall hk_attach_dispatch_raw( void* self, uint8_t dl, uint64_t r8, void* settle_override )
+    void __fastcall hk_attach_dispatch_raw( void* self, uint8_t dl, uint64_t r8, uint64_t r9,
+        uint64_t arg5, const float* settle_override )
     {
         if ( canon_dead() ) reset_trailer_state();
         // the user's chosen attach target beats the game's proximity pick -
@@ -1629,15 +1687,15 @@ namespace ts_extra_utilities
             released_marks = true;
             CCore::g_instance->info( "attach dispatcher: T-attach released marks on {:p}", head );
         }
-        // last-resort guard: a limbo trailer (no parked record AND no actor
-        // in the game_actor slots) kills the game silently inside the native
-        // attach - refuse the call instead
+        // last-resort guard: the native attach crashes on an object that
+        // isn't a trailer at all. A missing parked record is NOT limbo -
+        // the record manager never exists in this profile, so no parked
+        // trailer ever has one; and parked trailers aren't actor-slot
+        // members either. The old check refused every real parked piece
         if ( attach_target != nullptr && head == attach_target &&
-            readable_ptr( attach_target ) &&
-            prism::offsets::field< void* >( attach_target, prism::offsets::trailer_parked_state ) == nullptr &&
-            find_trailer_actor( attach_target, self ) == nullptr )
+            !is_trailer_obj( attach_target ) )
         {
-            CCore::g_instance->warning( "attach refused: target {:p} has no record/actor (limbo)", attach_target );
+            CCore::g_instance->warning( "attach refused: target {:p} is not a trailer object", attach_target );
             return;
         }
         // sever a parked-piece claim on the trailer being attached: the
@@ -1649,7 +1707,9 @@ namespace ts_extra_utilities
         if ( head != nullptr && readable_ptr( head ) )
         {
             void* s = prism::offsets::field< void* >( head, prism::offsets::trailer_slave );
-            if ( s != nullptr && joint( s ) == nullptr && claim_edge_ours( head, s ) )
+            // jointless = peça estacionada: ela NUNCA pode entrar no
+            // registro do engate (a claim c2->c0 virava ciclo e crashava)
+            if ( s != nullptr && joint( s ) == nullptr )
             {
                 severed_slave = s;
                 prism::offsets::field< void* >( head, prism::offsets::trailer_slave ) = nullptr;
@@ -1663,7 +1723,7 @@ namespace ts_extra_utilities
         // be a live trailer object or the internal teardown faults on it
         sanitize_slave_walk( head );
         native_chain_call_active.store( true, std::memory_order_release );
-        attach_dispatch_hook->get_original< native_attach_dispatch_fn >()( self, dl, r8, settle_override );
+        attach_dispatch_hook->get_original< native_attach_dispatch_fn >()( self, dl, r8, r9, arg5, settle_override );
         native_chain_call_active.store( false, std::memory_order_release );
         if ( severed_slave != nullptr && readable_ptr( head ) )
         {

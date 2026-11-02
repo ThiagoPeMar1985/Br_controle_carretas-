@@ -462,18 +462,107 @@ namespace ts_extra_utilities
         license::refresh();
         if ( !license::active() ) return;
 
+        // security-camera model: a cheap edge signature is read every frame
+        // (~0.02ms) and the heavy machinery only wakes on a coupling change
+        // or a ~2Hz keepalive pulse. Steady-state frames skip the whole
+        // chain survey - the 3-8ms "top chain" spikes were the stutters
+        static uint64_t idle_sig = ~0ull;
+        static uint32_t active = 0;
+        static uint32_t pulse = 0;
+        uint64_t sig = 0;
+        void* cam_truck = nullptr;
+        if ( auto* game_actor = CCore::g_instance->get_game_actor() )
+        {
+            cam_truck = prism::offsets::field< void* >( game_actor, prism::offsets::game_actor_truck );
+        }
+        void* cam_towed = cam_truck != nullptr && readable_ptr( cam_truck )
+            ? prism::offsets::field< void* >( cam_truck, 0x15A8 ) : nullptr;
+        sig = sig * 1315423911u ^ reinterpret_cast< uintptr_t >( cam_towed );
+        if ( cam_towed != nullptr && readable_ptr( cam_towed ) && joint( cam_towed ) != nullptr )
+        {
+            sig ^= 1ull;
+        }
+        for ( uint32_t i = 0; i < max_trailers && canon[ i ] != nullptr; ++i )
+        {
+            void* t = canon[ i ];
+            sig = sig * 1315423911u ^ reinterpret_cast< uintptr_t >( t );
+            if ( !readable_ptr( t ) ) continue;
+            if ( joint( t ) != nullptr ) sig ^= 1ull << i;
+            void* s = readable_ptr( static_cast< uint8_t* >( t ) + prism::offsets::trailer_slave )
+                ? prism::offsets::field< void* >( t, prism::offsets::trailer_slave ) : nullptr;
+            sig = sig * 1315423911u ^ reinterpret_cast< uintptr_t >( s );
+            if ( s != nullptr && readable_ptr( s ) &&
+                 readable_ptr( static_cast< uint8_t* >( s ) + prism::offsets::trailer_physics_joint ) &&
+                 joint( s ) != nullptr )
+            {
+                sig ^= 1ull << ( i + 8 );
+            }
+        }
+        if ( sig != idle_sig ) { idle_sig = sig; active = 300; }
+        else if ( active > 0 ) { --active; }
+        // awake during a coupling transition (~5s window) or on the slow
+        // keepalive pulse that catches changes no signature can see
+        const bool wake = active > 0 || ++pulse >= 30;
+        if ( wake ) pulse = 0;
+
         // per-section cycle accounting (rdtsc ≈ 20ns a read): when the game
         // crawls the next log line names the stage eating frame time instead
         // of guessing - silent while everything stays cheap
+        const bool coupling_on = settings::g_settings.cargo_restore;
+        // toggle off: the native paths must not inherit plugin-created
+        // claims - drop every jointless slave edge (all of them are plugin
+        // visibility claims; a native link always joins a live joint),
+        // cancel queued ops and clear the teleport guards
+        static bool coupling_was_on = true;
+        if ( coupling_was_on && !coupling_on )
+        {
+            sever_parked_claims();
+            pending = {};
+        }
+        coupling_was_on = coupling_on;
         uint64_t pt[ 10 ] = {};
         pt[ 0 ] = __rdtsc();
-        refresh_trailer_chain();   // trailer_coupling.cpp
+        if ( wake )
+        {
+            if ( coupling_on )
+            {
+                refresh_trailer_chain();   // trailer_coupling.cpp
+            }
+            else
+            {
+                // native mode: trailers[] still feeds the always-on features
+                // (axles, steering, brake boost, air) - fill it from the
+                // game's own links only: no canon tracking, no state writes
+                trailer_count = 0;
+                const auto native_walk = []( void* head )
+                {
+                    for ( void* t = head; t != nullptr && is_trailer_obj( t ) &&
+                         trailer_count < max_trailers; )
+                    {
+                        bool dup = false;
+                        for ( uint32_t i = 0; i < trailer_count; ++i ) dup |= trailers[ i ] == t;
+                        if ( dup ) return;
+                        trailers[ trailer_count++ ] = t;
+                        void* next = readable_ptr( static_cast< uint8_t* >( t ) + prism::offsets::trailer_slave )
+                            ? prism::offsets::field< void* >( t, prism::offsets::trailer_slave ) : nullptr;
+                        t = ( next != t ) ? next : nullptr;
+                    }
+                };
+                void* nw_truck = cam_truck;
+                native_walk( nw_truck != nullptr && readable_ptr( nw_truck )
+                    ? prism::offsets::field< void* >( nw_truck, 0x15A8 ) : nullptr );
+                if ( auto* game_actor = CCore::g_instance->get_game_actor() )
+                {
+                    native_walk( prism::offsets::field< void* >( game_actor, prism::offsets::game_actor_trailer ) );
+                }
+            }
+        }
         pt[ 1 ] = __rdtsc();
-        update_convoy_state();     // trailer_coupling.cpp
+        if ( coupling_on ) update_convoy_state();     // trailer_coupling.cpp
         pt[ 2 ] = __rdtsc();
-        light_watch_tick();        // trailer_lines.cpp - parked lamp pin
+        if ( coupling_on ) light_watch_tick();        // trailer_lines.cpp - parked lamp pin
         pt[ 3 ] = __rdtsc();
-        gc_detached_marks();       // trailer_coupling.cpp
+        if ( wake ) gc_detached_marks();       // trailer_coupling.cpp
         watch_sim_heartbeat();
         pt[ 4 ] = __rdtsc();
 
@@ -482,8 +571,9 @@ namespace ts_extra_utilities
         // reverse-gear lift assist + per-axle lift mask rewrite
         lift_axles_update( game_actor );   // trailer_axles.cpp
         pt[ 5 ] = __rdtsc();
-        // cargo respawn watch + rig restore countdown
-        coupling_parked_update();          // trailer_loadstate.cpp
+        // cargo respawn watch + rig restore countdown - event-driven like
+        // the chain: it only matters when the world just changed
+        if ( wake && coupling_on ) coupling_parked_update();   // trailer_loadstate.cpp
         pt[ 6 ] = __rdtsc();
         update_hotkeys();                  // trailer_coupling.cpp
         update_steering( ImGui::GetIO().DeltaTime );
@@ -2033,18 +2123,21 @@ namespace ts_extra_utilities
         // one key toggles a trailer against its chain parent, the truck
         // variants connect that trailer straight to the fifth wheel. Trailer 0
         // (index 0) is left to the game's own T key
-        bool ad2 = false, ad3 = false, tk2 = false, tk3 = false;
-        key_down( settings::Action::ATTACH_DETACH_2, &ad2 );
-        key_down( settings::Action::ATTACH_DETACH_3, &ad3 );
-        key_down( settings::Action::ATTACH_TRUCK_2, &tk2 );
-        key_down( settings::Action::ATTACH_TRUCK_3, &tk3 );
-        if ( ad2 ) this->toggle_attach( 1 );
-        if ( ad3 ) this->toggle_attach( 2 );
-        // keys name the physical trailer (canon order), not the rotated
-        // trailers[] slot - with trailer 1 on the wheel the list is [1,2,0]
-        // and a raw index would select the wrong piece
-        if ( tk2 ) this->connect_to_truck( canon[ 1 ] );
-        if ( tk3 ) this->connect_to_truck( canon[ 2 ] );
+        if ( settings::g_settings.cargo_restore )
+        {
+            bool ad2 = false, ad3 = false, tk2 = false, tk3 = false;
+            key_down( settings::Action::ATTACH_DETACH_2, &ad2 );
+            key_down( settings::Action::ATTACH_DETACH_3, &ad3 );
+            key_down( settings::Action::ATTACH_TRUCK_2, &tk2 );
+            key_down( settings::Action::ATTACH_TRUCK_3, &tk3 );
+            if ( ad2 ) this->toggle_attach( 1 );
+            if ( ad3 ) this->toggle_attach( 2 );
+            // keys name the physical trailer (canon order), not the rotated
+            // trailers[] slot - with trailer 1 on the wheel the list is [1,2,0]
+            // and a raw index would select the wrong piece
+            if ( tk2 ) this->connect_to_truck( canon[ 1 ] );
+            if ( tk3 ) this->connect_to_truck( canon[ 2 ] );
+        }
         bool slp = false;
         key_down( settings::Action::SLEEP_PARK, &slp );
         if ( slp ) trigger_native_sleep();
