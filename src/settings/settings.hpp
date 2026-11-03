@@ -49,6 +49,11 @@ namespace ts_extra_utilities::settings
         // furthest calendar date (yyyymmdd) a genuine check has run - a clock
         // set backwards past it counts as an expired license
         int32_t license_seen = 0;
+        // master switch for every diagnostic writer (event logs, the VEH
+        // exception tracer, dump_chain, the per-frame perf accounting).
+        // Off by default: logging then costs one flag check - turn on only
+        // when collecting data for the developer
+        bool debug_logs = false;
         // extra brake factor forwarded to coupled trailers, in percent of the
         // truck's value (0 = native balance): the trailers brake proportionally
         // harder so they take the load first on slippery surfaces

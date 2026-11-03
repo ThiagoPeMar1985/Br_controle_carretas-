@@ -9,6 +9,7 @@
 #include "graphics/dx11_hook.hpp"
 #include "input/di8_hook.hpp"
 #include "managers/hooks_manager.hpp"
+#include "settings/settings.hpp"
 
 namespace ts_extra_utilities
 {
@@ -93,21 +94,28 @@ namespace ts_extra_utilities
         }
 
         // sidecar file logging - the game's log callback was crashing the plugin
+        // gated on the Logs-tab switch: hooked paths run every frame, so
+        // ungated logging is a per-frame disk-write storm (fprintf+fflush per
+        // line) that tanks the FPS on slower machines. Off = not even the
+        // format runs - the call costs a single flag check
         template < class... T >
         void info( const char* fmt_s, T&&... args ) const
         {
+            if ( !settings::g_settings.debug_logs ) return;
             diag_log( "[br_carretas] " + fmt::vformat( fmt_s, fmt::make_format_args( args... ) ) );
         }
 
         template < class... T >
         void warning( const char* fmt_s, T&&... args ) const
         {
+            if ( !settings::g_settings.debug_logs ) return;
             diag_log( "[br_carretas] WARNING " + fmt::vformat( fmt_s, fmt::make_format_args( args... ) ) );
         }
 
         template < class... T >
         void error( const char* fmt_s, T&&... args ) const
         {
+            if ( !settings::g_settings.debug_logs ) return;
             diag_log( "[br_carretas] ERROR " + fmt::vformat( fmt_s, fmt::make_format_args( args... ) ) );
         }
     };

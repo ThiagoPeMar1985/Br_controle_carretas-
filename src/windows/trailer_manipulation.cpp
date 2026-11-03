@@ -132,6 +132,7 @@ namespace ts_extra_utilities
     // estava antes/depois de um dispatch
     void dump_chain( const char* tag )
     {
+        if ( !settings::g_settings.debug_logs ) return;
         CCore::g_instance->info( "=== {} ===", tag );
         for ( uint32_t i = 0; i < max_trailers; ++i )
         {
@@ -587,6 +588,10 @@ namespace ts_extra_utilities
         static uint64_t tsc0 = 0;
         static LARGE_INTEGER qpc0{};
         static uint32_t win_frames = 0;
+        // perf accounting is a diagnostic (Logs tab) - the QPC window and
+        // the accumulator stay off entirely when diagnostics are disabled
+        if ( settings::g_settings.debug_logs )
+        {
         if ( win_frames == 0 )
         {
             QueryPerformanceCounter( &qpc0 );
@@ -623,6 +628,7 @@ namespace ts_extra_utilities
             }
             for ( auto& a : acc ) a = 0;
             win_frames = 0;
+        }
         }
     }
 
@@ -928,8 +934,8 @@ namespace ts_extra_utilities
         {
         // folder tabs: click switches, re-clicking the open tab collapses it
         // for the session - the open tab itself is persisted to settings.ini
-        static const char* tab_names[] = { "Teclas", "Oversize", "Carretas", "Licença" };
-        for ( int t = 0; t < 4; ++t )
+        static const char* tab_names[] = { "Teclas", "Oversize", "Carretas", "Licença", "Logs" };
+        for ( int t = 0; t < 5; ++t )
         {
             if ( t > 0 ) ImGui::SameLine();
             const bool open = settings::g_settings.ui_tab == t;
@@ -947,6 +953,7 @@ namespace ts_extra_utilities
         case 1: this->render_oversize_tab(); break;
         case 2: this->render_trailers_tab(); break;
         case 3: this->render_license_tab(); break;
+        case 4: this->render_logs_tab(); break;
         default: break;
         }
         }
@@ -1194,6 +1201,31 @@ namespace ts_extra_utilities
             "nenhum dado é coletado. o hash do ID do hardware é usado somente "
             "para gerar a sua licença - nada é enviado para lugar nenhum e "
             "nada é guardado além da chave que você cola aqui" );
+
+        ImGui::EndChild();
+    }
+
+    // the Logs tab: one switch for every diagnostic writer (event logs, the
+    // VEH exception tracer, dump_chain, per-frame perf accounting). Off by
+    // default - the engine calls hooked paths every frame and writing each
+    // event to disk costs real FPS on slower machines
+    void CTrailerManipulation::render_logs_tab() const
+    {
+        ImGui::BeginChild( "##logs", ImVec2( 0.f, 0.f ) );
+
+        ImGui::SeparatorText( "Diagnóstico" );
+        bool debug_logs = settings::g_settings.debug_logs;
+        if ( ui::toggle_switch( "##debug_logs", &debug_logs ) )
+        {
+            settings::g_settings.debug_logs = debug_logs;
+            settings::save();
+        }
+        ImGui::SameLine();
+        ImGui::TextWrapped( "Ativar logs de diagnóstico" );
+        ui::text_disabled_wrapped(
+            "desligado = custo zero, nada é escrito. ligue só quando algo der "
+            "errado: reproduza o problema e envie ao desenvolvedor o arquivo "
+            "br_carretas_debug.log em Documentos\\Euro Truck Simulator 2" );
 
         ImGui::EndChild();
     }

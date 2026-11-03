@@ -1312,6 +1312,11 @@ namespace ts_extra_utilities
             ep->ContextRecord->Rip += 5;
             return EXCEPTION_CONTINUE_EXECUTION;
         }
+        // the register/stack dumps below are diagnostics (Logs tab) - the
+        // nav-curve emulation above stays on always since it prevents a
+        // crash. Off = the thousands of first-chance engine exceptions cost
+        // one flag check each
+        if ( !settings::g_settings.debug_logs ) return EXCEPTION_CONTINUE_SEARCH;
         CCore::g_instance->warning(
             "AV 0x{:X} at exe+0x{:X} rax={:p} rbx={:p} rcx={:p} rdx={:p} rsi={:p} rdi={:p} r8={:p} addr={:p}",
             code, rip >= base ? rip - base : rip,
