@@ -29,6 +29,8 @@ namespace ts_extra_utilities::settings
         // per-slot axle selection masks for the trailer-lift feature (-1 = native).
         // The N-th trailer in the chain always uses slot N.
         int32_t axle_masks[ trailer_slot_count ];
+        // truck axle selection mask for the truck-lift feature (-1 = native)
+        int32_t truck_axle_mask = -1;
         // raise the first liftable axle while reverse gear is engaged
         bool reverse_lift = true;
         // restore the rig and re-park detached trailers after the cargo

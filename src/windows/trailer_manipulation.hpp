@@ -20,6 +20,7 @@ namespace ts_extra_utilities
         void update_steering( float dt );
         void render_trailer_connect( uint32_t i ) const;
         void render_trailer_lift( uint32_t i ) const;
+        void render_truck_lift() const;
         void render_trailer_steering( uint32_t i ) const;
         void render_keybind_row( int i ) const;
         void render_keybinds() const;

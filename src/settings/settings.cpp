@@ -187,6 +187,7 @@ namespace ts_extra_utilities::settings
         {
             g_settings.axle_masks[ i ] = -1;
         }
+        g_settings.truck_axle_mask = -1;
         g_settings.reverse_lift = true;
         g_settings.cargo_restore = true;
         g_settings.steering_speed = 0.5f;
@@ -254,6 +255,8 @@ namespace ts_extra_utilities::settings
             g_settings.axle_masks[ i ] = GetPrivateProfileIntW(
                 L"axle_lift", key_name_w, -1, path.c_str() );
         }
+        g_settings.truck_axle_mask = GetPrivateProfileIntW(
+            L"axle_lift", L"truck", -1, path.c_str() );
         g_settings.reverse_lift = GetPrivateProfileIntW( L"axle_lift", L"reverse_lift", 1, path.c_str() ) != 0;
         g_settings.cargo_restore = GetPrivateProfileIntW( L"general", L"cargo_restore", 1, path.c_str() ) != 0;
         g_settings.oversize_collapsed = GetPrivateProfileIntW( L"general", L"oversize_collapsed", 0, path.c_str() ) != 0;
@@ -305,6 +308,8 @@ namespace ts_extra_utilities::settings
             WritePrivateProfileStringW( L"axle_lift", key_name_w,
                 std::to_wstring( g_settings.axle_masks[ i ] ).c_str(), path.c_str() );
         }
+        WritePrivateProfileStringW( L"axle_lift", L"truck",
+            std::to_wstring( g_settings.truck_axle_mask ).c_str(), path.c_str() );
         WritePrivateProfileStringW( L"axle_lift", L"reverse_lift",
             g_settings.reverse_lift ? L"1" : L"0", path.c_str() );
         WritePrivateProfileStringW( L"general", L"cargo_restore",
