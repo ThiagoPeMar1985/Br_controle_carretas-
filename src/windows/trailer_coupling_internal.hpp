@@ -127,6 +127,7 @@ namespace ts_extra_utilities
     void unhide_detached();
     void reset_trailer_state();
     void sever_parked_claims();
+    void sever_phys_claims();
     void restore_parked_claims();
     void rebuild_parked_claim_links();
     void hk_connect_slave( prism::physics_trailer_u* );

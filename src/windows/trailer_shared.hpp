@@ -282,6 +282,11 @@ namespace ts_extra_utilities
     // can hand the native walker a recycled pointer (the KERNELBASE src AV
     // at the disconnect teardown)
     inline std::atomic< bool > native_chain_call_active{ false };
+    // set right after a native attach/detach dispatch: the next update()
+    // runs the convoy pass immediately instead of waiting out the 10Hz
+    // throttle - a stale claim surviving the whole 100ms gap is what let
+    // the cyclic phys graph exist at attach time
+    inline std::atomic< bool > convoy_refresh_requested{ false };
 
     // frames each canon slot has been continuously jointless while not live
     // to the truck - a settled parked trailer gets auto-marked past the

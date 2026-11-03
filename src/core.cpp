@@ -209,6 +209,24 @@ namespace ts_extra_utilities
     void CCore::toggle_ui()
     {
         this->render_ui = !this->render_ui;
+        // opening the window also frees the cursor - one keypress for both,
+        // instead of open-then-release
+        auto& io = ImGui::GetIO();
+        if ( this->render_ui && !this->disable_in_game_mouse )
+        {
+            this->disable_in_game_mouse = true;
+            io.MousePos.x = io.DisplaySize.x * 0.5f;
+            io.MousePos.y = io.DisplaySize.y * 0.5f;
+            io.MouseDrawCursor = true;
+        }
+        else if ( !this->render_ui && this->disable_in_game_mouse )
+        {
+            // closing the window gives the cursor back to the game
+            this->disable_in_game_mouse = false;
+            io.MouseDrawCursor = false;
+            last_mouse_pos_x_ = io.MousePos.x;
+            last_mouse_pos_y_ = io.MousePos.y;
+        }
     }
 
     bool CCore::on_wnd_proc( HWND hwnd, UINT umsg, WPARAM wparam, LPARAM lparam )

@@ -27,9 +27,11 @@ namespace ts_extra_utilities
         void render_keys_tab() const;
         void render_oversize_tab() const;
         void render_trailers_tab() const;
+        void render_options_tab() const;
         void render_license_tab() const;
         void render_logs_tab() const;
         void connect_trailer( uint32_t i ) const;
+        void connect_trailer_to_truck( uint32_t i ) const;
         void disconnect_trailer( uint32_t i ) const;
         void toggle_attach( uint32_t i ) const;
         void connect_to_truck( void* trailer ) const;
@@ -41,6 +43,7 @@ namespace ts_extra_utilities
         bool init() override;
         // every frame, also while the window is hidden: refreshes the trailer chain and polls the attach hotkeys
         void update();
+        void update_impl();
         void render() override;
     };
 }

@@ -1326,6 +1326,32 @@ namespace ts_extra_utilities
         }
     }
 
+    // companion to sever_parked_claims: the phys machine copies the slave
+    // claims into the +0x60/+0x68 graph - the same jointless target that is
+    // a claim there is a cycle candidate here (the attach-time AV at
+    // exe+0x150B0DB: leaf claim + real link both physicalized). Cut every
+    // phys edge that touches a jointless trailer before the native join;
+    // the machine relinks real edges itself next pass
+    void sever_phys_claims()
+    {
+        if ( !trailer_maintenance_ready() ) return;
+        for ( uint32_t i = 0; i < max_trailers && canon[ i ] != nullptr; ++i )
+        {
+            void* t = canon[ i ];
+            if ( !readable_ptr( t ) ) continue;
+            for ( int dir = 0; dir < 2; ++dir )
+            {
+                const uint32_t edge = dir == 0 ? 0x60 : 0x68;
+                void* next = prism::offsets::field< void* >( t, edge );
+                if ( next == t ||
+                     ( next != nullptr && is_trailer_obj( next ) && joint( next ) == nullptr ) )
+                {
+                    prism::offsets::field< void* >( t, edge ) = nullptr;
+                }
+            }
+        }
+    }
+
     // religa as claims cortadas - roda no fim de cada chamada nativa. Só
     // religa se o join não escreveu nada no lugar (uma aresta real criada
     // pelo attach vence) e a peça continua sem junta
@@ -1356,6 +1382,7 @@ namespace ts_extra_utilities
         if ( trailer == nullptr || !is_trailer_obj( trailer ) || orig == nullptr ) return;
         native_chain_call_active.store( true, std::memory_order_release );
         sever_parked_claims();
+        sever_phys_claims();
         __try
         {
             orig( trailer, parent, vec, state, slave_hook, is_slave );
@@ -1496,10 +1523,14 @@ namespace ts_extra_utilities
         // aresta pra slot morto mata o teardown em exe+0x789CB7
         sanitize_phys_walk( prism::offsets::field< void* >( self, prism::offsets::game_actor_trailer ) );
         if ( towed != nullptr ) sanitize_phys_walk( towed );
+        // corta as claims físicas (+0x60/+0x68) pra peças sem junta - o
+        // dispatcher anda esse grafo sem guarda de ciclo
+        sever_phys_claims();
         dump_chain( "pre-detach(T)" );
         native_chain_call_active.store( true, std::memory_order_release );
         detach_dispatch_hook->get_original< native_detach_dispatch_fn >()( self, dl, r8 );
         native_chain_call_active.store( false, std::memory_order_release );
+        convoy_refresh_requested.store( true, std::memory_order_release );
         dump_chain( "post-detach(T)" );
         // the native detach cascade re-raises the line entities of pieces
         // behind the released head - the once-per-mark teardown of the loose
@@ -1719,12 +1750,16 @@ namespace ts_extra_utilities
         // claims estacionadas além da do head, senão uma peça mais fundo é
         // jointada pela metade e afunda sem trava
         sever_parked_claims();
+        // idem pro grafo físico (+0x60/+0x68): uma claim de visibilidade
+        // fisicalizada vira ciclo quando o link real do engate nasce
+        sever_phys_claims();
         // the dispatcher walks the chain for registration - every link must
         // be a live trailer object or the internal teardown faults on it
         sanitize_slave_walk( head );
         native_chain_call_active.store( true, std::memory_order_release );
         attach_dispatch_hook->get_original< native_attach_dispatch_fn >()( self, dl, r8, r9, arg5, settle_override );
         native_chain_call_active.store( false, std::memory_order_release );
+        convoy_refresh_requested.store( true, std::memory_order_release );
         if ( severed_slave != nullptr && readable_ptr( head ) )
         {
             prism::offsets::field< void* >( head, prism::offsets::trailer_slave ) = severed_slave;

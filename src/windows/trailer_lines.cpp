@@ -395,7 +395,9 @@ namespace ts_extra_utilities
         for ( uint32_t i = 0; i < max_trailers && canon[ i ] != nullptr; ++i )
         {
             void* t = canon[ i ];
-            if ( !readable_ptr( t ) ) continue;
+            // uma única validação de span cobre os campos lidos nesta
+            // iteração (<0x1200) em vez de uma VirtualQuery por campo
+            if ( readable_span( t, 0x1200 ) < 0x1200 ) continue;
             const bool parked_piece = !trailer_is_live( t );
             if ( !parked_piece ) continue;
             // the native propagator copies the whole +0x2A0 light DWORD down
@@ -451,7 +453,7 @@ namespace ts_extra_utilities
             sig = sig * 1315423911u ^
                   ( readable_ptr( t ) && trailer_is_live( t ) ? 1u : 0u );
         }
-        if ( sig != sweep_sig || ++sweep_idle >= 900 )
+        if ( sig != sweep_sig || ++sweep_idle >= 150 )
         {
             sweep_sig = sig;
             sweep_idle = 0;

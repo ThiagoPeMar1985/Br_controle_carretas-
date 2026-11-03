@@ -27,6 +27,17 @@
 
 namespace ts_extra_utilities
 {
+    // The renderer-side maintenance requests a camera anchor, but only the
+    // camera's own update hook writes it. This avoids racing the game's
+    // resolver, which also stores camera+0x3F0 directly.
+    namespace
+    {
+        std::atomic< void* > camera_anchor_request{ nullptr };
+        std::atomic< bool > camera_anchor_override{ false };
+        std::atomic< bool > camera_anchor_restore{ false };
+        std::atomic< bool > camera_recompute_pending{ false };
+    }
+
     // Chase-camera target setter (base vfunc 31, 0x14063C2D0): whenever the
     // native resolver tries to anchor the camera on a tracked trailer whose
     // physics joint is dead, swap the target for null - the same "no
@@ -54,6 +65,31 @@ namespace ts_extra_utilities
         {
             cam_update_hook->get_original< cam_update_fn >()( cam, dt );
             return;
+        }
+        const bool force_anchor = camera_anchor_override.load( std::memory_order_acquire );
+        const bool restore_anchor = !force_anchor &&
+            camera_anchor_restore.exchange( false, std::memory_order_acq_rel );
+        void* requested_anchor = camera_anchor_request.load( std::memory_order_acquire );
+        auto& anchor = prism::offsets::field< void* >( cam, 0x3F0 );
+        if ( force_anchor )
+        {
+            if ( anchor != requested_anchor ) anchor = requested_anchor;
+        }
+        else if ( restore_anchor && anchor != requested_anchor )
+        {
+            if ( cam_set_target_hook != nullptr && plausible_vfunc( cam, 31 ) )
+            {
+                cam_set_target_hook->get_original< cam_set_target_fn >()( cam, requested_anchor );
+            }
+            else
+            {
+                anchor = requested_anchor;
+            }
+        }
+        if ( camera_recompute_pending.exchange( false, std::memory_order_acq_rel ) &&
+             plausible_vfunc( cam, 14 ) )
+        {
+            vcall< cam_recompute_fn >( cam, 14, uint8_t( 1 ) );
         }
         struct hidden_link { void* owner; void* slave; };
         hidden_link hidden[ max_trailers ];
@@ -85,6 +121,10 @@ namespace ts_extra_utilities
                     hidden[ i ].slave;
             }
         }
+        // The native resolver can rewrite the target during its update.
+        // Re-store the requested anchor at the end of this same camera tick,
+        // so the next tick never sees an alternating target.
+        if ( force_anchor && anchor != requested_anchor ) anchor = requested_anchor;
     }
     float __fastcall hk_combo_length( void* self )
     {
@@ -265,7 +305,6 @@ namespace ts_extra_utilities
             return;
         }
 
-        void*& anchor = prism::offsets::field< void* >( chase, 0x3F0 );
         // desired anchor = the trailer JOINTED TO THE TRUCK - the head of
         // the live chain. A trailer still jointed to a PARKED parent must
         // not count: truck+0x15A8 is authoritative. The camera measures the
@@ -313,25 +352,24 @@ namespace ts_extra_utilities
                 if ( trailers[ i ] != nullptr && joint( trailers[ i ] ) == nullptr ) ++jointless_now;
             const bool set_changed = !was_detached || det_recs_now != last_det_recs ||
                 jointless_now != last_jointless;
-            // the native resolver re-writes the anchor to a parked trailer
-            // every frame while anything sits detached - keep re-storing
-            // chain_head, but vfunc 14 (recompute) RESETS the orbit state:
-            // per-frame calls snap the camera back behind the truck the
-            // moment the user tries to orbit. Recompute only on transitions
-            if ( anchor != chain_head )
+            // Publish the target for the camera thread. Do not write
+            // camera+0x3F0 here: the native resolver writes it too, and a
+            // render/update-thread tug-of-war makes the chase view vibrate.
+            const bool anchor_changed = last_forced_anchor != chain_head;
+            camera_anchor_request.store( chain_head, std::memory_order_release );
+            camera_anchor_override.store( true, std::memory_order_release );
+            // With no trailer left on the fifth wheel (the trailer-0 detach),
+            // the anchor transition is sufficient. Recomputing again as the
+            // detached-record counters settle resets the orbit repeatedly and
+            // looks like camera vibration. Tail detachments keep a live head,
+            // so their changed combination length still needs one recompute.
+            if ( anchor_changed || ( set_changed && chain_head != nullptr ) )
             {
-                anchor = chain_head;   // raw store, no release - see comment above
-                if ( last_forced_anchor != chain_head )
-                {
-                    vcall< cam_recompute_fn >( chase, 14, uint8_t( 1 ) );
-                    last_forced_anchor = chain_head;
-                    CCore::g_instance->info( "cam: anchor -> {:p} (live chain head)", chain_head );
-                }
+                camera_recompute_pending.store( true, std::memory_order_release );
             }
-            else if ( set_changed )
-            {
-                vcall< cam_recompute_fn >( chase, 14, uint8_t( 1 ) );
-            }
+            if ( anchor_changed )
+                CCore::g_instance->info( "cam: anchor -> {:p} (live chain head)", chain_head );
+            last_forced_anchor = chain_head;
             was_detached = true;
             last_det_recs = det_recs_now;
             last_jointless = jointless_now;
@@ -382,15 +420,16 @@ namespace ts_extra_utilities
             // combination length by walking trailer_slave links STARTING AT
             // the anchor; anchoring on the last trailer measures only that
             // trailer and the camera parks just behind the truck
-            if ( anchor != chain_head && cam_set_target_hook != nullptr &&
-                plausible_vfunc( chase, 31 ) )
+            camera_anchor_request.store( chain_head, std::memory_order_release );
+            camera_anchor_override.store( false, std::memory_order_release );
+            if ( was_detached ||
+                 last_forced_anchor != reinterpret_cast< void* >( ~0ull ) )
             {
-                // go through the real setter (vfunc 31) - refcounted
-                // store, the same call the native resolver makes. The
-                // field currently holds our raw null, so there's no
-                // stale ref for the setter to release.
-                cam_set_target_hook->get_original< cam_set_target_fn >()( chase, chain_head );
-                CCore::g_instance->info( "cam: anchor -> first trailer {:p} (set coupled)", chain_head );
+                // Restore the native ref-counted target on the camera thread,
+                // once at the transition back to the coupled state.
+                camera_anchor_restore.store( true, std::memory_order_release );
+                camera_recompute_pending.store( true, std::memory_order_release );
+                CCore::g_instance->info( "cam: restore native anchor {:p}", chain_head );
             }
             prism::offsets::field< float >( chase, 0x480 ) = saved_zoom_min;
             prism::offsets::field< float >( chase, 0x4D8 ) =
@@ -403,11 +442,7 @@ namespace ts_extra_utilities
             // recompute (vfunc 14) re-reads the anchor's joint and switches
             // the camera back to the jointed distance set (full SCS range)
             // - skipped while detached because it resets the orbit state
-            if ( last_forced_anchor != reinterpret_cast< void* >( ~0ull ) )
-            {
-                vcall< cam_recompute_fn >( chase, 14, uint8_t( 1 ) );
-                last_forced_anchor = reinterpret_cast< void* >( ~0ull );
-            }
+            last_forced_anchor = reinterpret_cast< void* >( ~0ull );
         }
         override_active = any_detached;
     }

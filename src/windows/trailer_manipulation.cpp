@@ -453,7 +453,46 @@ namespace ts_extra_utilities
     // Per-frame update - each subsystem exposes an entry point; convoy
     // refresh, state maintenance and hotkeys live in trailer_coupling.cpp.
     //========================================================================
+
+    // filter for the update() guard: an entity that faults every frame would
+    // otherwise write a log line every frame and tank the FPS on slower
+    // machines - log at most once every 5s, with the faulting address so the
+    // report points at the exact instruction that died
+    static int update_fault_filter( EXCEPTION_POINTERS* ep )
+    {
+        static DWORD last_log = 0;
+        const DWORD now = GetTickCount();
+        if ( now - last_log >= 5000 )
+        {
+            last_log = now;
+            const auto* rec = ep != nullptr ? ep->ExceptionRecord : nullptr;
+            const auto rip = rec != nullptr
+                ? reinterpret_cast< uintptr_t >( rec->ExceptionAddress ) : 0;
+            const auto base = reinterpret_cast< uintptr_t >( GetModuleHandle( nullptr ) );
+            const std::string where = rip >= base && rip < base + 0x2000000
+                ? fmt::format( "exe+0x{:X}", rip - base )
+                : fmt::format( "{:p}", reinterpret_cast< void* >( rip ) );
+            CCore::g_instance->warning(
+                "update faulted (0x{:X} at {}) - trailer state reset",
+                rec != nullptr ? rec->ExceptionCode : 0u, where );
+        }
+        return EXCEPTION_EXECUTE_HANDLER;
+    }
+
     void CTrailerManipulation::update()
+    {
+        // a stale trailer pointer must never reach the game: respawns leave
+        // canon half-dead between plausibility checks, and any fault here
+        // kills the game. Catch it, drop every cached trailer, and rebuild
+        // from live state next frame
+        __try { update_impl(); }
+        __except ( update_fault_filter( GetExceptionInformation() ) )
+        {
+            reset_trailer_state();
+        }
+    }
+
+    void CTrailerManipulation::update_impl()
     {
         // joystick buttons have no WM_KEYDOWN - poll them while a capture is open
         settings::poll_joystick_capture();
@@ -521,9 +560,21 @@ namespace ts_extra_utilities
             pending = {};
         }
         coupling_was_on = coupling_on;
+        // trailer bookkeeping does not need the full frame rate: the chain
+        // scan + convoy maintenance cost dozens of VirtualQuery kernel
+        // calls per trailer per pass - 10Hz keeps the state correct and
+        // cuts the per-frame bill ~6x
+        static DWORD convoy_tick = 0;
+        const DWORD now_ms = GetTickCount();
+        // a native attach/detach just ran: re-sync the maintenance pass
+        // immediately instead of leaving a stale claim up for the rest of
+        // the 100ms window
+        const bool convoy_due = convoy_refresh_requested.exchange( false, std::memory_order_acq_rel ) ||
+            now_ms - convoy_tick >= 100;
+        if ( convoy_due ) convoy_tick = now_ms;
         uint64_t pt[ 10 ] = {};
         pt[ 0 ] = __rdtsc();
-        if ( wake )
+        if ( wake && convoy_due )
         {
             if ( coupling_on )
             {
@@ -559,9 +610,9 @@ namespace ts_extra_utilities
             }
         }
         pt[ 1 ] = __rdtsc();
-        if ( coupling_on ) update_convoy_state();     // trailer_coupling.cpp
+        if ( coupling_on && convoy_due ) update_convoy_state();     // trailer_coupling.cpp
         pt[ 2 ] = __rdtsc();
-        if ( coupling_on ) light_watch_tick();        // trailer_lines.cpp - parked lamp pin
+        if ( coupling_on && convoy_due ) light_watch_tick();        // trailer_lines.cpp - parked lamp pin
         pt[ 3 ] = __rdtsc();
         if ( wake ) gc_detached_marks();       // trailer_coupling.cpp
         watch_sim_heartbeat();
@@ -725,6 +776,50 @@ namespace ts_extra_utilities
         queue_op( pending_kind::connect, trailer, parent, i == 0 );
     }
 
+    void CTrailerManipulation::connect_trailer_to_truck( const uint32_t i ) const
+    {
+        if ( !this->connect_valid_ || i >= max_trailers ) return;
+        void* trailer = canon[ i ];
+        if ( trailer == nullptr || !readable_ptr( trailer ) || joint( trailer ) != nullptr ) return;
+        auto* game_actor = CCore::g_instance->get_game_actor();
+        void* truck = game_actor != nullptr && readable_ptr( game_actor )
+            ? prism::offsets::field< void* >( game_actor, prism::offsets::game_actor_truck )
+            : nullptr;
+        if ( truck == nullptr || !readable_ptr( truck ) ) return;
+
+        void* towed = prism::offsets::field< void* >( truck, 0x15A8 );
+        bool wheel_free = towed == nullptr || !readable_ptr( towed ) || joint( towed ) == nullptr;
+        for ( uint32_t n = 0; wheel_free && n < max_trailers; ++n )
+        {
+            void* other = canon[ n ];
+            if ( other != nullptr && other != trailer && readable_ptr( other ) &&
+                 joint( other ) != nullptr &&
+                 prism::offsets::field< void* >( other, prism::offsets::trailer_parent ) == truck )
+                wheel_free = false;
+        }
+        if ( !wheel_free )
+        {
+            CCore::g_instance->warning( "A quinta roda do cavalo está ocupada" );
+            return;
+        }
+        if ( hook_far( trailer, truck, true ) )
+        {
+            CCore::g_instance->warning(
+                "A carreta {} está longe do cavalo; aproxime até a quinta roda",
+                i + 1 );
+            return;
+        }
+        if ( !handbrake_ok() )
+        {
+            CCore::g_instance->warning( "Puxe o freio de mão para engatar a carreta {}", i + 1 );
+            return;
+        }
+        if ( queue_op( pending_kind::connect, trailer, truck, true, 0 ) )
+        {
+            unmark_detached( trailer );
+        }
+    }
+
     // "connect to truck" only SELECTS which parked trailer the native T key
     // attaches next - nothing couples here. hk_attach_dispatch aims the
     // native attach at the selection while the fifth wheel is free
@@ -814,11 +909,15 @@ namespace ts_extra_utilities
         {
             const auto action = static_cast< settings::Action >( i );
             // steering binds live in the Oversize panel; sleep não é
-            // implementada - a linha some da tela
+            // implementada - a linha some da tela. Os binds de abrir a
+            // janela e liberar o mouse também saem: não são reconfiguráveis
+            // e a aba de teclas fica só com teclas de função
             if ( action == settings::Action::STEER_LEFT ||
                  action == settings::Action::STEER_RIGHT ||
                  action == settings::Action::STEER_CENTER ||
                  action == settings::Action::TOGGLE_STEERING_LOCK ||
+                 action == settings::Action::TOGGLE_UI ||
+                 action == settings::Action::TOGGLE_CURSOR ||
                  action == settings::Action::SLEEP_PARK ) continue;
             this->render_keybind_row( i );
         }
@@ -834,57 +933,97 @@ namespace ts_extra_utilities
     {
         // i is the canon index - the button must always mean the same
         // physical trailer, no matter how trailers[] is currently rotated
-        if ( i == 0 )
-        {
-            ImGui::TextDisabled( "Gerenciada pelo jogo (tecla T)" );
-            return;
-        }
         void* trailer = i < max_trailers ? canon[ i ] : nullptr;
         if ( trailer == nullptr || !readable_ptr( trailer ) ) return;
 
-        ImGui::SeparatorText( "Engatar / Desengatar" );
-        if ( !this->connect_valid_ )
+        void* truck = nullptr;
+        if ( auto* ga = CCore::g_instance->get_game_actor(); ga != nullptr && readable_ptr( ga ) )
         {
-            ImGui::TextDisabled( "Indisponível nesta versão do jogo" );
-            return;
+            truck = prism::offsets::field< void* >( ga, prism::offsets::game_actor_truck );
         }
-
+        const bool coupling_enabled = settings::g_settings.cargo_restore;
         const bool attached = joint( trailer ) != nullptr;
-        ImGui::BeginDisabled( attached );
-        if ( ImGui::Button( "Engatar##trailer" ) )
+        void* physical_parent = nullptr;
+        if ( attached )
         {
-            this->connect_trailer( i );
+            physical_parent = prism::offsets::field< void* >( trailer, prism::offsets::trailer_parent );
+            if ( physical_parent == nullptr && trailer == truck_towed ) physical_parent = truck;
         }
-        ImGui::EndDisabled();
-        ImGui::SameLine();
-        ImGui::BeginDisabled( !attached );
-        if ( ImGui::Button( "Desengatar##trailer" ) )
-        {
-            this->disconnect_trailer( i );
-        }
-        ImGui::EndDisabled();
+        const bool direct_to_truck = attached && truck != nullptr &&
+            ( physical_parent == truck || trailer == truck_towed );
 
-        // picking up a trailer behind the first one with the truck directly,
-        // only possible while the fifth wheel is free (trailer 1 detached or
-        // absent)
-        if ( !attached )
+        const auto paint = []( const bool on, const bool avail )
         {
-            const bool wheel_free = truck_towed == nullptr &&
-                ( canon[ 0 ] == nullptr || joint( canon[ 0 ] ) == nullptr );
-            ImGui::BeginDisabled( !wheel_free );
-            const bool is_target = attach_target == trailer;
-            if ( is_target ) ImGui::TextColored( ImVec4( 0.15f, 0.68f, 0.38f, 1.f ), "Alvo do T: esta carreta" );
-            if ( ImGui::Button( is_target ? "Voltar alvo p/ carreta 1##trailer" : "Selecionar p/ engate (T)##trailer" ) )
+            const ImVec4 bg = !avail ? ImVec4( 0.18f, 0.19f, 0.21f, 1.f )
+                : on ? ImVec4( 0.13f, 0.55f, 0.22f, 1.f )
+                : ImVec4( 0.15f, 0.40f, 0.80f, 1.f );
+            ImGui::PushStyleColor( ImGuiCol_Button, bg );
+            ImGui::PushStyleColor( ImGuiCol_ButtonHovered, bg );
+            ImGui::PushStyleColor( ImGuiCol_ButtonActive, bg );
+            ImGui::PushStyleColor( ImGuiCol_Text, ImVec4( 1.f, 1.f, 1.f, 1.f ) );
+        };
+
+        ImGui::SeparatorText( "Conexão entre carretas" );
+        if ( i == 0 )
+        {
+            ImGui::TextDisabled( "T0: conexão direta com o cavalo (abaixo)" );
+        }
+        else
+        {
+            void* previous = canon[ i - 1 ];
+            const bool chain_attached = attached && previous != nullptr &&
+                physical_parent == previous;
+            const bool previous_ready = previous != nullptr && readable_ptr( previous ) &&
+                joint( previous ) != nullptr;
+            const float chain_gap = !attached && previous_ready
+                ? hook_gap( trailer, previous, false ) : -1.f;
+            const bool chain_candidate = !attached && previous_ready &&
+                ( chain_gap < 0.f || chain_gap <= 8.f ) && handbrake_ok();
+            const bool chain_available = coupling_enabled && ( chain_attached ||
+                ( this->connect_valid_ && chain_candidate ) );
+            paint( coupling_enabled && chain_attached, chain_available );
+            ImGui::BeginDisabled( !chain_available );
+            const char* label = chain_attached ? "Desatrelar##chain" : "Atrelar##chain";
+            if ( ImGui::Button( label ) )
             {
-                this->connect_to_truck( trailer );
+                if ( chain_attached ) this->disconnect_trailer( i );
+                else this->connect_trailer( i );
             }
             ImGui::EndDisabled();
-            if ( !wheel_free )
+            ImGui::PopStyleColor( 4 );
+        }
+
+        ImGui::SeparatorText( "Engate direto no cavalo (T)" );
+        bool wheel_free = truck != nullptr && readable_ptr( truck );
+        if ( wheel_free )
+        {
+            void* towed = prism::offsets::field< void* >( truck, 0x15A8 );
+            wheel_free = towed == nullptr || !readable_ptr( towed ) || joint( towed ) == nullptr;
+            for ( uint32_t n = 0; wheel_free && n < max_trailers; ++n )
             {
-                ImGui::SameLine();
-                ImGui::TextDisabled( "(quinta roda ocupada)" );
+                void* other = canon[ n ];
+                if ( other != nullptr && other != trailer && readable_ptr( other ) &&
+                     joint( other ) != nullptr &&
+                     prism::offsets::field< void* >( other, prism::offsets::trailer_parent ) == truck )
+                    wheel_free = false;
             }
         }
+
+        const float truck_gap = !attached && wheel_free && truck != nullptr
+            ? hook_gap( trailer, truck, true ) : -1.f;
+        const bool truck_candidate = !attached && wheel_free &&
+            ( truck_gap < 0.f || truck_gap <= 8.f ) && handbrake_ok();
+        const bool truck_available = coupling_enabled && ( direct_to_truck ||
+            ( this->connect_valid_ && truck_candidate ) );
+        paint( coupling_enabled && direct_to_truck, truck_available );
+        ImGui::BeginDisabled( !truck_available );
+        if ( ImGui::Button( direct_to_truck ? "Desatrelar##truck" : "Atrelar##truck" ) )
+        {
+            if ( direct_to_truck ) this->disconnect_trailer( i );
+            else this->connect_trailer_to_truck( i );
+        }
+        ImGui::EndDisabled();
+        ImGui::PopStyleColor( 4 );
     }
 
     void CTrailerManipulation::render()
@@ -934,12 +1073,14 @@ namespace ts_extra_utilities
         {
         // folder tabs: click switches, re-clicking the open tab collapses it
         // for the session - the open tab itself is persisted to settings.ini
-        static const char* tab_names[] = { "Teclas", "Oversize", "Carretas", "Licença", "Logs" };
-        for ( int t = 0; t < 5; ++t )
+        static const char* tab_names[] = { "Teclas", "Oversize", "Carretas", "Opções", "Licença", "Logs" };
+        const float tab_width = ( ImGui::GetContentRegionAvail().x
+            - ImGui::GetStyle().ItemSpacing.x * 5.f ) / 6.f;
+        for ( int t = 0; t < 6; ++t )
         {
             if ( t > 0 ) ImGui::SameLine();
             const bool open = settings::g_settings.ui_tab == t;
-            if ( ImGui::Selectable( tab_names[ t ], open, 0, ImVec2( 110.f, 0.f ) ) )
+            if ( ImGui::Selectable( tab_names[ t ], open, 0, ImVec2( tab_width, 0.f ) ) )
             {
                 settings::g_settings.ui_tab = open ? -1 : t;
                 if ( !open ) settings::save();
@@ -952,8 +1093,9 @@ namespace ts_extra_utilities
         case 0: this->render_keys_tab(); break;
         case 1: this->render_oversize_tab(); break;
         case 2: this->render_trailers_tab(); break;
-        case 3: this->render_license_tab(); break;
-        case 4: this->render_logs_tab(); break;
+        case 3: this->render_options_tab(); break;
+        case 4: this->render_license_tab(); break;
+        case 5: this->render_logs_tab(); break;
         default: break;
         }
         }
@@ -963,12 +1105,108 @@ namespace ts_extra_utilities
         ImGui::PopStyleVar( 5 );
     }
 
-    // the Teclas tab: the window binds plus every truck-side assist
+    // the Teclas tab: only the function keybinds
     void CTrailerManipulation::render_keys_tab() const
     {
         ImGui::BeginChild( "##keys", ImVec2( 0.f, 0.f ) );
         ImGui::SeparatorText( "Teclas" );
         this->render_keybinds();
+        ImGui::EndChild();
+    }
+
+    // the Opções tab: every truck-side assist (axle-on-reverse, brake, air)
+    void CTrailerManipulation::render_options_tab() const
+    {
+        ImGui::BeginChild( "##options", ImVec2( 0.f, 0.f ) );
+
+        // truck axle lift: the truck shares the trailer's lift-controller
+        // layout (truck+0x6C8) and the actor flag uses bit0 for it
+        ImGui::SeparatorText( "Cavalo" );
+        {
+            void* truck = nullptr;
+            if ( auto* ga = CCore::g_instance->get_game_actor() )
+            {
+                truck = prism::offsets::field< void* >( ga, prism::offsets::game_actor_truck );
+            }
+            void* ctl = truck != nullptr && readable_ptr( truck )
+                ? prism::offsets::field< void* >( truck, prism::offsets::trailer_lift_controller )
+                : nullptr;
+            if ( ctl != nullptr && readable_ptr( ctl ) )
+            {
+                const auto state = prism::offsets::field< uint8_t >(
+                    ctl, prism::offsets::lift_controller_state );
+                ImGui::Text( "Eixos do cavalo: %s", state != 0 ? "levantados" : "no chão" );
+                const bool up = state != 0;
+                const char* label = up ? "Baixar" : "Levantar";
+                const float bw = ImGui::CalcTextSize( label ).x + 20.f;
+                ui::right_side( bw );
+                // truck diagram: same chassis line + wheel dots - the liftable
+                // truck axle draws green and raised when it's up
+                {
+                    void* axle_data = truck != nullptr && readable_ptr( truck )
+                        ? prism::offsets::field< void* >( truck, prism::offsets::vehicle_chassis_data )
+                        : nullptr;
+                    uint8_t* tflags = nullptr;
+                    uint64_t tcount = 0;
+                    if ( axle_data != nullptr && readable_ptr( axle_data ) )
+                    {
+                        tflags = prism::offsets::field< uint8_t* >( axle_data, prism::offsets::axle_data_flags );
+                        tcount = prism::offsets::field< uint64_t >( axle_data, prism::offsets::axle_data_flags_count );
+                    }
+                    auto* dl = ImGui::GetWindowDrawList();
+                    const float w = ImGui::GetContentRegionAvail().x;
+                    const float ax_h = 34.f;
+                    const ImVec2 org = ImGui::GetCursorScreenPos();
+                    ImGui::Dummy( ImVec2( w, ax_h ) );
+                    const float lx0 = org.x + 10.f, lx1 = org.x + w - 8.f;
+                    const float ly = org.y + 12.f;
+                    dl->AddLine( ImVec2( lx0, ly ), ImVec2( lx1, ly ), IM_COL32( 150, 160, 168, 255 ), 4.f );
+                    const float wr = 9.f;
+                    const float gap = wr * 2.4f;
+                    const uint32_t shown = tcount > 0 && tcount <= 8 && tflags != nullptr
+                        ? static_cast< uint32_t >( tcount ) : 0;
+                    if ( shown == 0 )
+                    {
+                        ImGui::SetCursorScreenPos( ImVec2( org.x, org.y + ax_h ) );
+                    }
+                    else
+                    {
+                        // truck axles group toward the front-ish: steer axle
+                        // front, drive/lift cluster rear - rear-anchor like
+                        // the trailer drawing
+                        const float rear_x = lx1 - ( lx1 - lx0 ) * 0.12f;
+                        for ( uint32_t a = 0; a < shown; ++a )
+                        {
+                            const float cx = rear_x - static_cast< float >( shown - 1 - a ) * gap;
+                            const bool liftable = tflags != nullptr && readable_ptr( tflags + a ) && tflags[ a ] != 0;
+                            const float cy = ly + wr + 4.f - ( liftable && up ? 10.f : 0.f );
+                            dl->AddCircleFilled( ImVec2( cx, cy ), wr,
+                                liftable ? ( up ? IM_COL32( 46, 180, 60, 255 ) : IM_COL32( 92, 98, 104, 255 ) )
+                                         : IM_COL32( 10, 10, 10, 255 ) );
+                            dl->AddCircle( ImVec2( cx, cy ), wr, IM_COL32( 190, 195, 200, 255 ), 24, 1.5f );
+                        }
+                        ImGui::SetCursorScreenPos( ImVec2( org.x, org.y + ax_h ) );
+                    }
+                }
+                if ( ImGui::Button( fmt::format( "{}##trucklift", label ).c_str(), ImVec2( bw, 0.f ) ) )
+                {
+                    prism::offsets::field< uint8_t >( ctl, prism::offsets::lift_controller_state ) =
+                        up ? 1 : 2;
+                    if ( auto* ga = CCore::g_instance->get_game_actor() )
+                    {
+                        if ( up )
+                            prism::offsets::field< uint8_t >( ga, prism::offsets::game_actor_lift_state ) &= ~1u;
+                        else
+                            prism::offsets::field< uint8_t >( ga, prism::offsets::game_actor_lift_state ) |= 1u;
+                    }
+                }
+            }
+            else
+            {
+                ImGui::TextDisabled( "Sem eixo elevável no cavalo" );
+            }
+        }
+
         ImGui::SeparatorText( "Assistente" );
         bool reverse_lift = settings::g_settings.reverse_lift;
         if ( ui::toggle_switch( "##reverse_lift", &reverse_lift ) )
@@ -979,8 +1217,6 @@ namespace ts_extra_utilities
         ImGui::SameLine();
         ImGui::TextWrapped( "Eixo na ré (vanderleia/4º eixo)" );
         ImGui::TextDisabled( "ativado: engatou a ré - ergue os eixos eleváveis da carreta, se existirem" );
-
-        render_cargo_restore_option(); // trailer_loadstate.cpp
 
         ImGui::SeparatorText( "Freio" );
         float brake_boost = settings::g_settings.trailer_brake_boost;
@@ -1030,6 +1266,7 @@ namespace ts_extra_utilities
     // the rotated trailers[] list is currently arranged
     void CTrailerManipulation::render_trailers_tab() const
     {
+        render_cargo_restore_option(); // trailer_loadstate.cpp - o toggle vive aqui
         ImGui::BeginChild( "##trailers", ImVec2( 0.f, 0.f ) );
         uint32_t canon_count = 0;
         while ( canon_count < max_trailers && canon[ canon_count ] != nullptr ) ++canon_count;
@@ -1049,6 +1286,9 @@ namespace ts_extra_utilities
                 ImGui::SeparatorText( fmt::format( "Carreta {}", i + 1 ).c_str() );
                 this->render_trailer_connect( i );
                 ImGui::SeparatorText( "Eixos" );
+                ui::text_disabled_wrapped(
+                    "clique nas bolinhas: verde = eixo que vai levantar; "
+                    "cinza claro = eixo que fica no chão" );
                 // lift/steer still key on trailers[] position - resolve the
                 // canon piece back to its current slot
                 int ti = -1;
@@ -1383,7 +1623,7 @@ namespace ts_extra_utilities
             --lane_prune_frames;
             prune_lane_containers();
         }
-        else if ( ++lane_prune_idle >= 300 )
+        else if ( ++lane_prune_idle >= 50 )
         {
             lane_prune_idle = 0;
             prune_lane_containers();
@@ -1430,7 +1670,9 @@ namespace ts_extra_utilities
 
         // frames with a populated canon - the assembly window detector every
         // risky path gates on
-        canon_age = canon[ 0 ] != nullptr ? canon_age + 1 : 0;
+        // refresh runs at ~10Hz now - +6 per call keeps every canon_age
+        // threshold at the same wall-clock meaning as the old 60Hz frame count
+        canon_age = canon[ 0 ] != nullptr ? canon_age + 6 : 0;
 
         // the trailer parked on the truck through "connect to truck" is free
         // again once its joint is gone - release the coupling-state pin and
@@ -1553,7 +1795,7 @@ namespace ts_extra_utilities
                     if ( !live_to_truck && joint( t ) == nullptr )
                     {
                         if ( canon_jointless_frames[ i ] < 0xFFFF ) ++canon_jointless_frames[ i ];
-                        if ( canon_jointless_frames[ i ] >= 90 &&
+                        if ( canon_jointless_frames[ i ] >= 15 &&
                              !is_detached( t ) && !is_plugin_detached( t ) &&
                              canon_age >= 90 && traffic_game_state != nullptr &&
                              *traffic_game_state == 2 )
@@ -1635,7 +1877,7 @@ namespace ts_extra_utilities
             // second, so whatever re-raised the entities (respawn, native
             // cascade, the game's own line pass) is undone
             static uint32_t torn_tick = 0;
-            if ( ++torn_tick >= 60 )
+            if ( ++torn_tick >= 10 )
             {
                 torn_tick = 0;
                 for ( auto& torn : lines_torn ) torn = false;
@@ -1745,7 +1987,7 @@ namespace ts_extra_utilities
                         // the detached piece's lane-obstacle owner node dies
                         // around now - dense-prune the containers for a few
                         // seconds so no worker scan/erase meets the orphan
-                        lane_prune_frames = 240;
+                        lane_prune_frames = 40;
                         if ( set_lines_fn != nullptr )
                         {
                             set_lines_fn( live[ i ], 0, 1 );
@@ -1869,7 +2111,7 @@ namespace ts_extra_utilities
                         // without churning the trailer's physical state
                         static uint32_t brace_retry[ max_trailers ] = {};
                         const int ci = canon_index_of( t );
-                        if ( ci >= 0 && brace_retry[ ci ]++ > 120 )
+                        if ( ci >= 0 && brace_retry[ ci ]++ > 20 )
                         {
                             brace_retry[ ci ] = 0;
                             vcall< prism::physics_trailer_u_set_trailer_brace_fn >( t, 0x328 / 8, true );

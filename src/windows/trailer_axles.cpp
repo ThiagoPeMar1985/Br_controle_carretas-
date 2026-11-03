@@ -132,6 +132,27 @@ namespace ts_extra_utilities
             ? prism::offsets::field< uint8_t >( controller, prism::offsets::lift_controller_state )
             : 0;
         ImGui::Text( "Eixos: %s", state != 0 ? "levantados" : "no chão" );
+        if ( controller != nullptr )
+        {
+            // lift/lower straight from the UI - same writes the game's lift
+            // key performs: 2 = raising, 1 = lowering (+ actor flag 0x2)
+            const bool up = state != 0;
+            const char* label = up ? "Baixar" : "Levantar";
+            const float bw = ImGui::CalcTextSize( label ).x + 20.f;
+            ui::right_side( bw );
+            if ( ImGui::Button( fmt::format( "{}##lift", label ).c_str(), ImVec2( bw, 0.f ) ) )
+            {
+                prism::offsets::field< uint8_t >( controller, prism::offsets::lift_controller_state ) =
+                    up ? 1 : 2;
+                if ( auto* ga = CCore::g_instance->get_game_actor() )
+                {
+                    if ( up )
+                        prism::offsets::field< uint8_t >( ga, prism::offsets::game_actor_lift_state ) &= ~2u;
+                    else
+                        prism::offsets::field< uint8_t >( ga, prism::offsets::game_actor_lift_state ) |= 2u;
+                }
+            }
+        }
 
         // axles moving or up with a real mask physically occupy the air - the
         // selection must stay put until they are back on the ground; a state
@@ -143,10 +164,13 @@ namespace ts_extra_utilities
             ImGui::TextDisabled( "Abaixe os eixos para alterar quais serão levantados." );
         }
 
-        if ( lift.native_axles == 0 )
+        // diagrama sai pra toda carreta que tem dados de eixo - as sem eixo
+        // elevável aparecem com todos os círculos cinza (clique só nos
+        // eleváveis), que é exatamente o desenho que a referência mostra
+        const bool none_liftable = lift.native_axles == 0;
+        if ( none_liftable )
         {
             ImGui::TextDisabled( "Nenhum eixo elevável nesta carreta" );
-            return;
         }
 
         auto& stored = settings::g_settings.axle_masks[ i ];
@@ -162,26 +186,66 @@ namespace ts_extra_utilities
 
         ImGui::BeginDisabled( locked );
         uint32_t next = selection;
-        const float switch_w = ImGui::GetFrameHeight() * 1.9f;
-        for ( uint32_t a = 0; a < lift.axle_count; ++a )
+        // trailer diagram: chassis bar + drawbar + one wheel per axle - green
+        // lifts on the next raise, gray stays on the ground. Only natively
+        // liftable axles respond to clicks, same rule as update()
         {
-            if ( ( lift.native_axles >> a ) & 1 )
+            auto* dl = ImGui::GetWindowDrawList();
+            const float w = ImGui::GetContentRegionAvail().x;
+            const float ax_h = 74.f;
+            const ImVec2 org = ImGui::GetCursorScreenPos();
+            ImGui::Dummy( ImVec2( w, ax_h ) );
+            // carreta da referência: caixa escura alta, saia preta em rampa
+            // sob a frente e perninha de apoio; rodas embaixo da saia
+            const float bx0 = org.x + 6.f, bx1 = org.x + w - 6.f;
+            const float by0 = org.y + 2.f,  by1 = org.y + 36.f;
+            const auto blk = IM_COL32( 12, 13, 15, 255 );
+            dl->AddRectFilled( ImVec2( bx0, by0 ), ImVec2( bx1, by1 ), IM_COL32( 37, 44, 50, 255 ), 0 );
+            dl->AddRect( ImVec2( bx0, by0 ), ImVec2( bx1, by1 ), IM_COL32( 55, 63, 70, 255 ), 0, 0, 1.5f );
+            // saia: triângulo na descida + retângulo no trecho reto
+            const float sk0 = bx0 + ( bx1 - bx0 ) * 0.16f;
+            const float skd = ( bx1 - bx0 ) * 0.14f;
+            const float skh = 12.f;
+            dl->AddTriangleFilled( ImVec2( sk0, by1 ), ImVec2( sk0 + skd, by1 ),
+                ImVec2( sk0 + skd, by1 + skh ), blk );
+            dl->AddRectFilled( ImVec2( sk0 + skd, by1 ), ImVec2( bx1, by1 + skh ), blk );
+            // perninha de apoio sob a descida da saia
+            const float lg = sk0 + skd * 0.85f;
+            dl->AddRectFilled( ImVec2( lg - 2.f, by1 + skh ), ImVec2( lg + 2.f, by1 + skh + 14.f ), blk );
+            dl->AddRectFilled( ImVec2( lg - 7.f, by1 + skh + 12.f ), ImVec2( lg + 7.f, by1 + skh + 16.f ), blk );
+            // rodas em GRUPO na traseira sob a saia.
+            // verde = vai erguer, grafite = elevável marcado pra ficar no
+            // chão, preto = eixo fixo - clique alterna verde/grafite
+            const float wr = 10.f;
+            const float gap = wr * 2.4f;
+            // ancora pela roda TRASEIRA perto do fim da carreta e anda pra
+            // frente - como numa carreta real, o conjunto mora no fundo
+            const float rear_x = bx1 - ( bx1 - bx0 ) * 0.16f;
+            const uint32_t shown = lift.axle_count < 8 ? lift.axle_count : 8;
+            for ( uint32_t a = 0; a < shown; ++a )
             {
-                bool on = ( selection >> a ) & 1;
-                ImGui::Text( "Eixo %u", a + 1 );
-                ui::right_side( switch_w );
-                const auto id = fmt::format( "##axle{}", a );
-                if ( ui::toggle_switch( id.c_str(), &on ) )
+                const float cx = rear_x - static_cast< float >( shown - 1 - a ) * gap;
+                const bool liftable = ( lift.native_axles >> a ) & 1;
+                const bool on = liftable && ( ( next >> a ) & 1 );
+                // eixo marcado pra erguer aparece LEVANTADO no desenho -
+                // verde em cima diz na hora qual vai subir
+                const float cy = by1 + skh + wr + 4.f - ( on ? 10.f : 0.f );
+                const ImU32 fill = !liftable ? IM_COL32( 10, 10, 10, 255 )
+                    : on ? IM_COL32( 46, 180, 60, 255 )
+                    : IM_COL32( 92, 98, 104, 255 );
+                dl->AddCircleFilled( ImVec2( cx, cy ), wr, fill );
+                dl->AddCircle( ImVec2( cx, cy ), wr, IM_COL32( 190, 195, 200, 255 ), 24, 1.5f );
+                if ( liftable )
                 {
-                    next = on ? next | ( 1u << a ) : next & ~( 1u << a );
+                    ImGui::SetCursorScreenPos( ImVec2( cx - 11.f, cy - 11.f ) );
+                    if ( ImGui::InvisibleButton( fmt::format( "##ax{}", a ).c_str(),
+                        ImVec2( 22.f, 22.f ) ) )
+                    {
+                        next = on ? next & ~( 1u << a ) : next | ( 1u << a );
+                    }
                 }
             }
-            else
-            {
-                ImGui::TextDisabled( "Eixo %u", a + 1 );
-                ui::right_side( switch_w );
-                ImGui::TextDisabled( "fixo" );
-            }
+            ImGui::SetCursorScreenPos( ImVec2( org.x, org.y + ax_h ) );
         }
         ImGui::EndDisabled();
 

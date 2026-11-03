@@ -237,12 +237,15 @@ namespace ts_extra_utilities::settings
         // unreachable - fall back to the defaults instead
         const int ui = static_cast< int >( Action::TOGGLE_UI );
         const int cursor = static_cast< int >( Action::TOGGLE_CURSOR );
-        if ( g_settings.keys[ ui ] == 0 || g_settings.keys[ cursor ] == 0 ||
-            g_settings.keys[ ui ] == g_settings.keys[ cursor ] )
+        // unbound cursor stays unbound (o mouse já libera ao abrir a janela);
+        // só a tecla de abrir a janela precisa de default/garantia
+        if ( g_settings.keys[ ui ] == 0 )
         {
             g_settings.keys[ ui ] = VK_DELETE;
-            g_settings.keys[ cursor ] = VK_INSERT;
         }
+        // cursor release fica sem bind pra sempre - o mouse já é liberado
+        // automaticamente ao abrir a janela; ignora o que estiver salvo no ini
+        g_settings.keys[ cursor ] = 0;
 
         for ( int i = 0; i < trailer_slot_count; ++i )
         {
@@ -255,7 +258,7 @@ namespace ts_extra_utilities::settings
         g_settings.cargo_restore = GetPrivateProfileIntW( L"general", L"cargo_restore", 1, path.c_str() ) != 0;
         g_settings.oversize_collapsed = GetPrivateProfileIntW( L"general", L"oversize_collapsed", 0, path.c_str() ) != 0;
         g_settings.ui_tab = GetPrivateProfileIntW( L"general", L"ui_tab", 0, path.c_str() );
-        if ( g_settings.ui_tab < -1 || g_settings.ui_tab > 4 ) g_settings.ui_tab = 0;
+        if ( g_settings.ui_tab < -1 || g_settings.ui_tab > 5 ) g_settings.ui_tab = 0;
         wchar_t lic_in[ 256 ] = {};
         GetPrivateProfileStringW( L"license", L"key", L"", lic_in, 256, path.c_str() );
         WideCharToMultiByte( CP_UTF8, 0, lic_in, -1,

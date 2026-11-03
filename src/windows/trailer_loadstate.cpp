@@ -1258,7 +1258,7 @@ namespace ts_extra_utilities
             }
             if ( notify_decoupled_fn != nullptr ) notify_decoupled_fn( t );
             traffic_detach_tail();
-            lane_prune_frames = 240;
+            lane_prune_frames = 40;
         }
         __except ( EXCEPTION_EXECUTE_HANDLER )
         {
@@ -1468,11 +1468,9 @@ namespace ts_extra_utilities
                 continue;
             }
             void* t = canon[ i ];
-            // só as NOSSAS peças desatreladas ganham a trava emulada - uma
-            // carreta sem junta e sem marca (respawn do jogo, estacionada por
-            // um T-detach simples, ainda assentando sozinha) é problema do
-            // jogo; pinar uma pose de meio-assentamento a congela no ar
-            if ( !readable_ptr( t ) || joint( t ) != nullptr ||
+            // uma única validação de span cobre todos os campos lidos nesta
+            // iteração (<0x1200) em vez de uma VirtualQuery por campo
+            if ( readable_span( t, 0x1200 ) < 0x1200 || joint( t ) != nullptr ||
                  ( !is_detached( t ) && !is_plugin_detached( t ) ) )
             {
                 anchor_valid[ i ] = false;
@@ -1548,7 +1546,7 @@ namespace ts_extra_utilities
                     // falhou - retenta em ~2s em vez de desistir pra sempre:
                     // o manager pode aparecer tarde ou a fábrica falhar uma
                     // vez e a peça ficar presa na âncora emulada sem record
-                    record_retry[ i ] = 120;
+                    record_retry[ i ] = 20;
                     if ( record_quiet[ i ] < 5 )
                     {
                         ++record_quiet[ i ];
@@ -1580,7 +1578,7 @@ namespace ts_extra_utilities
             // carretas sem junta enquanto o jogo as reposiciona por poses de
             // preparo como (0,0,-512), e ancorar uma dessas teleporta a
             // carreta pro vazio no frame seguinte
-            if ( anchor_delay[ i ] < 40 )
+            if ( anchor_delay[ i ] < 7 )
             {
                 ++anchor_delay[ i ];
                 continue;
@@ -1628,7 +1626,7 @@ namespace ts_extra_utilities
                                aq.y * now.quat.y + aq.z * now.quat.z;
             const float rotd = 1.f - std::fabs( qdot );   // 0 = mesma rotação
             const bool moving = mx * mx + my * my + mz * mz > 0.02f * 0.02f || rotd > 0.001f;
-            if ( anchor_settle[ i ] < 30 && anchor_age[ i ] < 240 )
+            if ( anchor_settle[ i ] < 5 && anchor_age[ i ] < 40 )
             {
                 // fase de assentamento: uma carreta recém-desatrelada ainda
                 // está tombando em cima do apoio - segue a pose em vez de
