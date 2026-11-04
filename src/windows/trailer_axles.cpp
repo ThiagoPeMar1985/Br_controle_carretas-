@@ -62,6 +62,11 @@ namespace ts_extra_utilities
     };
 
     LiftAxles lift_axles[ max_trailers ];
+    // o cavalo usa o mesmo layout de controller das carretas (truck+0x6C8);
+    // native_axles aqui vem da MÁSCARA original do controller - são os eixos
+    // que o jogo ergue nativamente. As flags do caminhão NÃO são reescritas
+    // (a semântica delas no truck não é garantidamente "elevável")
+    LiftAxles truck_lift;
 
     // Reverse-gear lift assist: with all axles on the ground, engaging reverse
     // raises the steerable axles; leaving reverse lowers them and restores
@@ -89,7 +94,7 @@ namespace ts_extra_utilities
 
     void release_all_axles()
     {
-        for ( auto& lift : lift_axles )
+        auto releases = []( LiftAxles& lift )
         {
             // give the game its own mask and flag bytes back; the objects may
             // already be gone if the plugin is unloaded after trailers were,
@@ -115,7 +120,9 @@ namespace ts_extra_utilities
                 }
                 lift = LiftAxles{};
             }
-        }
+        };
+        releases( truck_lift );
+        for ( auto& lift : lift_axles ) releases( lift );
     }
 
     void CTrailerManipulation::render_trailer_lift( const uint32_t i ) const
@@ -252,6 +259,183 @@ namespace ts_extra_utilities
         if ( next != selection )
         {
             stored = static_cast< int32_t>( next );
+            settings::save();
+        }
+    }
+
+    void CTrailerManipulation::render_truck_lift() const
+    {
+        void* truck = nullptr;
+        if ( auto* ga = CCore::g_instance->get_game_actor() )
+        {
+            truck = prism::offsets::field< void* >( ga, prism::offsets::game_actor_truck );
+        }
+        void* ctl = truck != nullptr && readable_ptr( truck )
+            ? prism::offsets::field< void* >( truck, prism::offsets::trailer_lift_controller )
+            : nullptr;
+        // sem controller (ou sem caminhão resolvido) o desenho continua:
+        // máscara de eleváveis fica zerada = todas as rodas pretas/fixas
+        const bool has_lift = ctl != nullptr && readable_ptr( ctl );
+        uint8_t state = 0;
+        if ( has_lift )
+        {
+            state = prism::offsets::field< uint8_t >( ctl, prism::offsets::lift_controller_state );
+            ImGui::Text( "Eixos do cavalo: %s", state != 0 ? "levantados" : "no chão" );
+            const char* label = state != 0 ? "Baixar" : "Levantar";
+            const float bw = ImGui::CalcTextSize( label ).x + 20.f;
+            if ( ImGui::Button( fmt::format( "{}##trucklift", label ).c_str(), ImVec2( bw, 0.f ) ) )
+            {
+                prism::offsets::field< uint8_t >( ctl, prism::offsets::lift_controller_state ) =
+                    state != 0 ? 1 : 2;
+                if ( auto* ga = CCore::g_instance->get_game_actor() )
+                {
+                    if ( state != 0 )
+                        prism::offsets::field< uint8_t >( ga, prism::offsets::game_actor_lift_state ) &= ~1u;
+                    else
+                        prism::offsets::field< uint8_t >( ga, prism::offsets::game_actor_lift_state ) |= 1u;
+                }
+            }
+        }
+        else
+        {
+            ImGui::TextDisabled( "Sem eixo elevável no cavalo" );
+        }
+
+        // mesma regra das carretas: os eixos só podem ser remarcados no chão
+        // com uma máscara real aplicada
+        const bool locked = state != 0 && truck_lift.applied_mask != 0
+            && truck_lift.applied_mask != ~0u;
+        if ( locked )
+        {
+            ImGui::TextDisabled( "Abaixe os eixos para alterar quais serão levantados." );
+        }
+
+        // seleção vem da máscara nativa do controller - só eixos que o jogo
+        // ergue podem ser marcados, igual lift.native_axles das carretas
+        auto& stored = settings::g_settings.truck_axle_mask;
+        uint32_t selection = ( stored < 0 ? truck_lift.native_axles
+            : static_cast< uint32_t >( stored ) ) & truck_lift.native_axles;
+        uint32_t next = selection;
+
+        void* axle_data = prism::offsets::field< void* >( truck, prism::offsets::vehicle_chassis_data );
+        uint64_t tcount = 0;
+        if ( axle_data != nullptr && readable_ptr( axle_data ) )
+        {
+            tcount = prism::offsets::field< uint64_t >( axle_data, prism::offsets::axle_data_flags_count );
+        }
+        const uint32_t shown = tcount >= 2 && tcount <= 4
+            ? static_cast< uint32_t >( tcount ) : 0;
+
+        // diagrama do cavalo: cabine cinza-clara + chassi escuro + uma roda
+        // por eixo, na contagem real do caminhão (2/3/4 eixos). Cores iguais
+        // às das carretas: verde levantado = selecionado pra erguer, cinza =
+        // elevável fora da seleção, preto = fixo. Clique só nos eleváveis
+        {
+            auto* dl = ImGui::GetWindowDrawList();
+            const float ax_h = 48.f;
+            const ImVec2 org = ImGui::GetCursorScreenPos();
+            const uint32_t ax_n = shown != 0 ? shown : 3u;
+            // sem controller a máscara fica zerada - native_axles guardaria
+            // eixos eleváveis do caminhão ANTERIOR num cavalo sem lift
+            const uint32_t lift_mask = has_lift ? truck_lift.native_axles : 0u;
+            // tamanho fixo por configuração: 4x2 curto, 6x2/6x4 médio,
+            // 8x2/8x4 comprido - NUNCA estica na largura da janela
+            const float truck_w = 112.f + static_cast< float >( ax_n - 2 ) * 50.f;
+            ImGui::Dummy( ImVec2( truck_w + 12.f, ax_h ) );
+            const float cab_x = org.x + 16.f;
+            const float cab_w = 42.f;
+            const float ch1 = cab_x + truck_w;
+            const auto blk = IM_COL32( 12, 13, 15, 255 );
+            // trilho do chassi mais grosso atravessa o caminhão; as rodas
+            // pendem EMBAIXO dele - igual a saia da carreta
+            const float ry0 = org.y + 21.f;
+            const float ry1 = org.y + 27.f;
+            dl->AddRectFilled( ImVec2( cab_x + 4.f, ry0 ), ImVec2( ch1, ry1 ), blk, 1.f );
+            // para-choque: bloco escuro embaixo da frente da cabine, colado
+            // no trilho e na altura das rodas
+            dl->AddRectFilled( ImVec2( cab_x, ry0 - 2.f ), ImVec2( cab_x + 9.f, ry1 + 4.f ),
+                blk, 1.f );
+            dl->AddRectFilled( ImVec2( cab_x, ry1 + 4.f ), ImVec2( cab_x + 11.f, ry1 + 7.f ),
+                blk, 0.f );
+            // cabine sentada EM CIMA do trilho: corpo cinza-claro, janela
+            // escura, faixa inferior fechada
+            dl->AddRectFilled( ImVec2( cab_x, org.y + 3.f ), ImVec2( cab_x + cab_w, ry0 ),
+                IM_COL32( 172, 180, 186, 255 ), 3.f );
+            dl->AddRectFilled( ImVec2( cab_x + cab_w * 0.12f, org.y + 7.f ),
+                ImVec2( cab_x + cab_w * 0.80f, org.y + 14.f ),
+                IM_COL32( 70, 78, 84, 255 ), 2.f );
+            dl->AddRectFilled( ImVec2( cab_x, ry0 - 5.f ), ImVec2( cab_x + cab_w, ry0 ),
+                IM_COL32( 118, 126, 132, 255 ), 0.f );
+            // rodas: topo encostado no trilho; direcional encostado no
+            // para-choque, 2º direcional colado nos 4-eixos, tração na
+            // traseira - mesmo tamanho das bolinhas das carretas (wr=10)
+            const float wr = 10.f;
+            const float wy = ry1 + wr - 2.f;
+            const float steer_x = cab_x + 12.f + wr;
+            const float rear1 = ch1 - wr - 4.f;
+            const float gap = wr * 2.4f;
+            const uint32_t last_steer = ax_n >= 4 ? 1u : 0u;
+            const float first_drive = ax_n > last_steer + 1
+                ? rear1 - static_cast< float >( ax_n - last_steer - 2 ) * gap
+                : rear1;
+            // tanque grandinho no vão entre o direcional e o grupo de
+            // tração, na altura das rodas - não flutua acima delas
+            {
+                const float tk0 = steer_x + ( ax_n >= 4 ? gap : 0.f ) + wr + 6.f;
+                const float tk1 = ax_n > last_steer + 1
+                    ? first_drive - wr - 6.f : tk0 + 30.f;
+                dl->AddRectFilled( ImVec2( tk0, ry1 + 1.f ),
+                    ImVec2( tk1 > tk0 + 10.f ? tk1 : tk0 + 10.f, ry1 + 13.f ),
+                    IM_COL32( 60, 66, 72, 255 ), 2.f );
+                dl->AddRect( ImVec2( tk0, ry1 + 1.f ),
+                    ImVec2( tk1 > tk0 + 10.f ? tk1 : tk0 + 10.f, ry1 + 13.f ),
+                    IM_COL32( 96, 102, 108, 255 ), 2.f, 0, 1.f );
+            }
+            ImGui::BeginDisabled( locked );
+            for ( uint32_t a = 0; a < ax_n; ++a )
+            {
+                float cx;
+                if ( a == 0 )
+                {
+                    cx = steer_x;
+                }
+                else if ( ax_n >= 4 && a == 1 )
+                {
+                    cx = steer_x + gap;
+                }
+                else
+                {
+                    const uint32_t d0 = ax_n >= 4 ? 2u : 1u;
+                    const uint32_t dn = ax_n - d0;
+                    cx = rear1 - static_cast< float >( dn - 1 - ( a - d0 ) ) * gap;
+                }
+                const bool liftable = ( lift_mask >> a ) & 1;
+                const bool on = liftable && ( ( next >> a ) & 1 );
+                // eixo marcado pra erguer aparece LEVANTADO no desenho -
+                // verde em cima diz na hora qual vai subir (igual carreta)
+                const float cy = wy - ( on ? 7.f : 0.f );
+                const ImU32 fill = !liftable ? IM_COL32( 10, 10, 10, 255 )
+                    : on ? IM_COL32( 46, 180, 60, 255 )
+                         : IM_COL32( 92, 98, 104, 255 );
+                dl->AddCircleFilled( ImVec2( cx, cy ), wr, fill );
+                dl->AddCircle( ImVec2( cx, cy ), wr, IM_COL32( 190, 195, 200, 255 ), 24, 1.5f );
+                if ( liftable )
+                {
+                    ImGui::SetCursorScreenPos( ImVec2( cx - wr - 1.f, cy - wr - 1.f ) );
+                    if ( ImGui::InvisibleButton( fmt::format( "##tax{}", a ).c_str(),
+                        ImVec2( wr * 2.f + 2.f, wr * 2.f + 2.f ) ) )
+                    {
+                        next = on ? next & ~( 1u << a ) : next | ( 1u << a );
+                    }
+                }
+            }
+            ImGui::EndDisabled();
+            ImGui::SetCursorScreenPos( ImVec2( org.x, org.y + ax_h ) );
+        }
+
+        if ( next != selection )
+        {
+            stored = static_cast< int32_t >( next );
             settings::save();
         }
     }
@@ -464,6 +648,67 @@ namespace ts_extra_utilities
 
             prism::offsets::field< uint32_t >( controller, prism::offsets::lift_controller_axle_mask ) = selection;
             lift.applied_mask = selection;
+        }
+
+        // Truck lift: same controller layout as the trailers, but ONLY the
+        // +0x38 mask is rewritten - the truck's axle flag bytes are left
+        // alone (their semantics differ from "liftable" there). The axes the
+        // game raises natively = the mask it built = truck_lift.native_axles
+        {
+            auto& lift = truck_lift;
+            void* truck = game_actor != nullptr && readable_ptr( game_actor )
+                ? prism::offsets::field< void* >( game_actor, prism::offsets::game_actor_truck )
+                : nullptr;
+            void* controller = truck != nullptr && readable_ptr( truck )
+                ? prism::offsets::field< void* >( truck, prism::offsets::trailer_lift_controller )
+                : nullptr;
+            if ( controller == nullptr || !readable_ptr( controller ) )
+            {
+                lift = LiftAxles{};
+            }
+            else
+            {
+                const auto raw_mask = prism::offsets::field< uint32_t >(
+                    controller, prism::offsets::lift_controller_axle_mask );
+                const auto raw_count = prism::offsets::field< uint32_t >(
+                    controller, prism::offsets::lift_controller_axle_count );
+                if ( lift.controller != controller || lift.axle_count != raw_count )
+                {
+                    // first sight or truck rebuild: snapshot the native mask -
+                    // the set bits are exactly the axles the game lifts
+                    lift = LiftAxles{};
+                    lift.controller = controller;
+                    lift.axle_count = raw_count <= max_axles ? raw_count : 0;
+                    lift.orig_mask = raw_mask;
+                    lift.native_axles = raw_mask;
+                    lift.applied_mask = ~0u;
+                }
+                else if ( raw_mask != lift.applied_mask )
+                {
+                    // the game re-initialized the mask: re-snapshot
+                    lift.orig_mask = raw_mask;
+                    lift.native_axles = raw_mask;
+                }
+                const auto state = prism::offsets::field< uint8_t >(
+                    controller, prism::offsets::lift_controller_state );
+                if ( state != 0 && lift.applied_mask == 0 )
+                {
+                    // desync: mask 0 can never animate - recover to down
+                    prism::offsets::field< uint8_t >( controller, prism::offsets::lift_controller_state ) = 0;
+                }
+                else if ( state == 0 && lift.native_axles != 0 )
+                {
+                    const auto stored = settings::g_settings.truck_axle_mask;
+                    const uint32_t selection =
+                        ( stored < 0 ? lift.native_axles : static_cast< uint32_t >( stored ) )
+                        & lift.native_axles;
+                    if ( selection != raw_mask )
+                    {
+                        prism::offsets::field< uint32_t >( controller, prism::offsets::lift_controller_axle_mask ) = selection;
+                    }
+                    lift.applied_mask = selection;
+                }
+            }
         }
 
         // the override mask is in place now: command the raise like the native key
