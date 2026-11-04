@@ -1905,17 +1905,27 @@ namespace ts_extra_utilities
                         // around now - dense-prune the containers for a few
                         // seconds so no worker scan/erase meets the orphan
                         lane_prune_frames = 40;
-                        if ( set_lines_fn != nullptr )
+                        // native teardown calls can touch fields the game
+                        // already nulled on the dying joint ([rax+0x10]
+                        // crash) - guard them like release_all_axles does
+                        __try
                         {
-                            set_lines_fn( live[ i ], 0, 1 );
+                            if ( set_lines_fn != nullptr )
+                            {
+                                set_lines_fn( live[ i ], 0, 1 );
+                            }
+                            if ( truck != nullptr && pair_vehicles_fn != nullptr )
+                            {
+                                pair_vehicles_fn( truck, live[ i ] );
+                            }
+                            if ( truck != nullptr && apply_cables_fn != nullptr )
+                            {
+                                apply_cables_fn( truck, nullptr, 0, 0, 0 );
+                            }
                         }
-                        if ( truck != nullptr && pair_vehicles_fn != nullptr )
+                        __except ( EXCEPTION_EXECUTE_HANDLER )
                         {
-                            pair_vehicles_fn( truck, live[ i ] );
-                        }
-                        if ( truck != nullptr && apply_cables_fn != nullptr )
-                        {
-                            apply_cables_fn( truck, nullptr, 0, 0, 0 );
+                            CCore::g_instance->warning( "hose teardown faulted on c{} - skipped", i );
                         }
                     }
                     canon_was_jointed[ i ] = jointed;

@@ -1548,20 +1548,30 @@ namespace ts_extra_utilities
             // same teardown the manual detach tail runs on a parent detach:
             // lines clear, connector unpair (the +0x798..+0x7A0 record is
             // what keeps drawing hoses on the detached trailer), cvar reset
-            if ( set_lines_fn != nullptr )
+            // native teardown calls can touch fields the game already nulled
+            // on the dying joint ([rax+0x10] crash) - guard them like
+            // release_all_axles does
+            __try
             {
-                set_lines_fn( t, 0, 1 );
+                if ( set_lines_fn != nullptr )
+                {
+                    set_lines_fn( t, 0, 1 );
+                }
+                if ( truck != nullptr && pair_vehicles_fn != nullptr )
+                {
+                    pair_vehicles_fn( truck, t );
+                }
+                if ( truck != nullptr && apply_cables_fn != nullptr )
+                {
+                    // mode 0, not the stale cvar: the mode console command lands
+                    // frames later, and mode>0 with +0xC8 on the parked head
+                    // makes the applier redraw the truck hoses we just cut
+                    apply_cables_fn( truck, nullptr, 0, 0, 0 );
+                }
             }
-            if ( truck != nullptr && pair_vehicles_fn != nullptr )
+            __except ( EXCEPTION_EXECUTE_HANDLER )
             {
-                pair_vehicles_fn( truck, t );
-            }
-            if ( truck != nullptr && apply_cables_fn != nullptr )
-            {
-                // mode 0, not the stale cvar: the mode console command lands
-                // frames later, and mode>0 with +0xC8 on the parked head
-                // makes the applier redraw the truck hoses we just cut
-                apply_cables_fn( truck, nullptr, 0, 0, 0 );
+                CCore::g_instance->warning( "hose teardown faulted - skipped" );
             }
             // NO slave re-link: parked trailers are independent pieces - each
             // stays visible and OFF through its own parked record. The slave
