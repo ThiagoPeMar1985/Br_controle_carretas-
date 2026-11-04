@@ -232,6 +232,7 @@ namespace ts_extra_utilities
         carry_arm_tick = 0;
         for ( auto& c : canon ) c = nullptr;
         for ( auto& j : canon_was_jointed ) j = false;
+        for ( auto& j : canon_was_towed ) j = false;
         for ( auto& j : canon_jointless_frames ) j = 0;
         for ( auto& j : lines_torn ) j = false;
         for ( auto& edge : synthetic_edges )
@@ -1914,11 +1915,14 @@ namespace ts_extra_utilities
                             {
                                 set_lines_fn( live[ i ], 0, 1 );
                             }
-                            if ( truck != nullptr && pair_vehicles_fn != nullptr )
+                            // era o trailer rebocado direto pelo cavalo - o
+                            // dispatcher nativo já desfez o par; repetir aqui
+                            // deixa o nó que o fixup de referências lê morto
+                            if ( !canon_was_towed[ i ] && truck != nullptr && pair_vehicles_fn != nullptr )
                             {
                                 pair_vehicles_fn( truck, live[ i ] );
                             }
-                            if ( truck != nullptr && apply_cables_fn != nullptr )
+                            if ( !canon_was_towed[ i ] && truck != nullptr && apply_cables_fn != nullptr )
                             {
                                 apply_cables_fn( truck, nullptr, 0, 0, 0 );
                             }
@@ -1929,6 +1933,7 @@ namespace ts_extra_utilities
                         }
                     }
                     canon_was_jointed[ i ] = jointed;
+                    canon_was_towed[ i ] = jointed && live[ i ] == towed;
                     // engatou de novo - um desengate futuro precisa de um
                     // teardown novo de mangueiras
                     if ( jointed ) lines_torn[ i ] = false;

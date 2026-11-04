@@ -270,6 +270,12 @@ namespace ts_extra_utilities
     // the physical moment the hook broke; hose teardown runs there, not at
     // dispatch time (the async crank drops the joint seconds after)
     inline bool canon_was_jointed[ max_trailers ] = {};
+    // snapshot do último frame jointed: a peça era a towed do cavalo -
+    // nesse caso o teardown nativo do dispatcher já desfaz o par
+    // caminhão<->carreta, pair_vehicles/apply_cables duplicados deixam o
+    // nó morto que o fixup de referências lê (call [rax+0x60] em
+    // exe+0x150B0DB)
+    inline bool canon_was_towed[ max_trailers ] = {};
     // teardown de mangueiras da peça estacionada já rodou neste slot do
     // canon - set_lines(state=0) só ESCONDE entidades sem removê-las do
     // vetor, então chamar por frame nunca termina; rearma quando a carreta

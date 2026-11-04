@@ -1543,30 +1543,16 @@ namespace ts_extra_utilities
         {
             pending_native_detach = nullptr;
             mark_detached( t );
-            // cut the truck<->head hose pair the dispatcher can leave half-
-            // registered when the tow slot was re-pinned by maintenance -
-            // same teardown the manual detach tail runs on a parent detach:
-            // lines clear, connector unpair (the +0x798..+0x7A0 record is
-            // what keeps drawing hoses on the detached trailer), cvar reset
-            // native teardown calls can touch fields the game already nulled
-            // on the dying joint ([rax+0x10] crash) - guard them like
-            // release_all_axles does
+            // cut the truck<->head hose visuals - the dispatcher itself
+            // already unpaired the truck<->trailer connector in the native
+            // detach, so pair_vehicles/apply_cables are skipped here:
+            // calling them again left a dead node in the game's reference
+            // fixup pass (call [rax+0x60] at exe+0x150B0DB, ~2 frames later)
             __try
             {
                 if ( set_lines_fn != nullptr )
                 {
                     set_lines_fn( t, 0, 1 );
-                }
-                if ( truck != nullptr && pair_vehicles_fn != nullptr )
-                {
-                    pair_vehicles_fn( truck, t );
-                }
-                if ( truck != nullptr && apply_cables_fn != nullptr )
-                {
-                    // mode 0, not the stale cvar: the mode console command lands
-                    // frames later, and mode>0 with +0xC8 on the parked head
-                    // makes the applier redraw the truck hoses we just cut
-                    apply_cables_fn( truck, nullptr, 0, 0, 0 );
                 }
             }
             __except ( EXCEPTION_EXECUTE_HANDLER )
