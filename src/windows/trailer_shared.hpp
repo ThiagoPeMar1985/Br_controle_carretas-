@@ -466,6 +466,10 @@ namespace br_carretas
     inline std::atomic< bool > parking_brake_on{ false };
     inline std::atomic< bool > parking_brake_known{ false };
     inline uint64_t cargo_seq_ms = 0;
+    // last actor teleport - a canon swap soon after it is a world reload
+    // (load/cargo dock), never a workshop rebuild: the shop never teleports
+    // the truck. The respawn hold must yield to this flag
+    inline uint64_t actor_tp_ms = 0;
     inline uint64_t steady_ms()
     {
         return static_cast< uint64_t >( std::chrono::duration_cast< std::chrono::milliseconds >(
@@ -622,6 +626,7 @@ namespace br_carretas
     void render_cargo_restore_option();          // trailer_loadstate.cpp - checkbox + setting persistence
     bool block_camera_zero_teleport( void* arg );// trailer_camera_zero.cpp - Ctrl+F9 teleport block
     void workshop_respawn_update();              // trailer_oficina.cpp - workshop destroy/rebuild hold
+    void workshop_respawn_discard();             // trailer_oficina.cpp - drop old-world hold after a load
     bool load_game_active();                     // trailer_loadgame.cpp - save load in progress
     void load_game_update();                     // trailer_loadgame.cpp - drop old-world marks after load
     void garage_update();                         // trailer_garage.cpp - dead trailer marks cleanup

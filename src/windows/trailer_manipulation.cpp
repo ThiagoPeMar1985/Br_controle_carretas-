@@ -585,7 +585,8 @@ namespace br_carretas
             {
                 // native mode: trailers[] still feeds the always-on features
                 // (axles, steering, brake boost, air) - fill it from the
-                // game's own links only: no canon tracking, no state writes
+                // game's own links only: canon tracking only feeds the UI
+                // ordering, no state writes
                 trailer_count = 0;
                 const auto native_walk = []( void* head )
                 {
@@ -596,6 +597,12 @@ namespace br_carretas
                         for ( uint32_t i = 0; i < trailer_count; ++i ) dup |= trailers[ i ] == t;
                         if ( dup ) return;
                         trailers[ trailer_count++ ] = t;
+                        // canon é só o registro de ordem estável do UI - sem
+                        // ele a aba Carretas fica vazia e os controles de
+                        // eixo somem com o checkbox desligado. canon_age não
+                        // avança aqui, então nenhum sistema de desacoplamento
+                        // acorda
+                        track_canon( t );
                         void* next = readable_ptr( static_cast< uint8_t* >( t ) + prism::offsets::trailer_slave )
                             ? prism::offsets::field< void* >( t, prism::offsets::trailer_slave ) : nullptr;
                         t = ( next != t ) ? next : nullptr;
@@ -1867,11 +1874,19 @@ namespace br_carretas
                 if ( si < 0 || edge_done[ si ] ) continue;
                 edge_done[ si ] = true;
                 CCore::g_instance->info( "uncoupled edge c{} -> c{}: hiding its cables", canon_index_of( p ), si );
-                // only hide the loose piece's own lines - rebuilding/pairing
-                // on the live towed chain every second corrupted the physics
-                // (rig thrown into limbo: a legit visibility claim c1->c0
-                // got torn down 30x/s)
-                if ( set_lines_fn != nullptr ) set_lines_fn( sl, 0, 1 );
+                // esconder a linha não basta: o record de conectores
+                // (+0x798..+0x7A0) continua pareado e a máquina nativa
+                // redesenha a mangueira pela aresta de claim - desfaz o par
+                // como o detach nativo faz (pair_vehicles numa aresta morta
+                // desemparelha). Guardado como o teardown acima
+                __try
+                {
+                    if ( set_lines_fn != nullptr ) set_lines_fn( sl, 0, 1 );
+                    if ( pair_vehicles_fn != nullptr ) pair_vehicles_fn( p, sl );
+                }
+                __except ( EXCEPTION_EXECUTE_HANDLER )
+                {
+                }
             }
             bool any_parked = false;
             for ( uint32_t i = 0; i < ln; ++i ) any_parked |= parkedish[ i ];

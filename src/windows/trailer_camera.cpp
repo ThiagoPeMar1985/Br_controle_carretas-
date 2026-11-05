@@ -70,6 +70,30 @@ namespace br_carretas
         const bool restore_anchor = !force_anchor &&
             camera_anchor_restore.exchange( false, std::memory_order_acq_rel );
         void* requested_anchor = camera_anchor_request.load( std::memory_order_acquire );
+        // pin de solo velho: o override pode ficar armado com âncora nula
+        // depois de um re-engate se o tick de manutenção que o soltaria não
+        // rodou (early return no chase lookup) - com uma carreta jointada
+        // no cavalo a âncora nula é sempre stale: solta e re-ancora nativo
+        if ( force_anchor && requested_anchor == nullptr )
+        {
+            void* ga = CCore::g_instance->get_game_actor();
+            void* truck = ga != nullptr && readable_ptr( ga )
+                ? prism::offsets::field< void* >( ga, prism::offsets::game_actor_truck )
+                : nullptr;
+            void* towed = truck != nullptr &&
+                readable_ptr( static_cast< uint8_t* >( truck ) + 0x15A8 )
+                ? prism::offsets::field< void* >( truck, 0x15A8 ) : nullptr;
+            if ( towed != nullptr && readable_ptr( towed ) &&
+                 readable_ptr( static_cast< uint8_t* >( towed ) + prism::offsets::trailer_physics_joint ) &&
+                 joint( towed ) != nullptr )
+            {
+                camera_anchor_request.store( towed, std::memory_order_release );
+                camera_anchor_override.store( false, std::memory_order_release );
+                camera_anchor_restore.store( true, std::memory_order_release );
+                camera_recompute_pending.store( true, std::memory_order_release );
+                CCore::g_instance->info( "cam: stale solo pin released - towing {:p}", towed );
+            }
+        }
         auto& anchor = prism::offsets::field< void* >( cam, 0x3F0 );
         if ( force_anchor )
         {

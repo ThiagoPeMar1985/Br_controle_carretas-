@@ -71,7 +71,9 @@ namespace br_carretas
                 parent_is_truck = ( i == 0 || t == truck_towed );
             }
             CCore::g_instance->info( "Restoring detached trailer {} after cargo respawn", i );
-            if ( parent != nullptr )
+            // a dead or recycled parent kills the native disconnect walk mid-teardown
+            if ( parent != nullptr && readable_ptr( parent )
+                && ( parent_is_truck || is_trailer_obj( parent ) ) )
             {
                 disconnect_now( t, parent, parent_is_truck );
             }
@@ -81,6 +83,8 @@ namespace br_carretas
             // the pointer marks guarding the hook don't block the restore
             for ( void* m = t; m != nullptr; )
             {
+                // a respawn may leave the slave link pointing at a dead/recycled object
+                if ( !readable_ptr( m ) || !is_trailer_obj( m ) ) break;
                 const int mi = canon_index_of( m );
                 if ( mi >= 0 && parked_xform_valid[ mi ] && trailer_teleport_hook != nullptr )
                 {
@@ -91,7 +95,8 @@ namespace br_carretas
                     carry_hold[ mi ] = false;
                 }
                 void* next = prism::offsets::field< void* >( m, prism::offsets::trailer_slave );
-                m = ( next != m && next != nullptr && joint( next ) != nullptr ) ? next : nullptr;
+                m = ( next != m && next != nullptr && readable_ptr( next )
+                    && is_trailer_obj( next ) && joint( next ) != nullptr ) ? next : nullptr;
             }
         }
     }

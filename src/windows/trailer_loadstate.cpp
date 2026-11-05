@@ -373,6 +373,7 @@ namespace br_carretas
     }
     void __fastcall hk_actor_teleport( void* self, void* arg, uint8_t a3, uint8_t a4 )
     {
+        actor_tp_ms = steady_ms();
         // checkbox off = entire coupling system bypassed: pure native call
         if ( !settings::g_settings.cargo_restore || load_game_active() )
         {
@@ -1274,6 +1275,20 @@ namespace br_carretas
             // TENTA de novo todo frame: quando qualquer park nativo o criar,
             // toda carreta em limbo ganha o record na próxima passada.
             void* mgr = readable_ptr( parked_record_mgr ) ? *parked_record_mgr : nullptr;
+            // record órfão: +0x1188 aponta um record que nenhum manager lista
+            // (o singleton não existe neste mundo - veio do save ou sobrou de
+            // um mundo anterior). A máquina nativa de parked processa o record
+            // a cada frame enquanto +0x1258 está armado e segue seus ponteiros
+            // mortos - AV em exe+0x867688 no teardown do desatrelar/devolução
+            // à garagem. Zera e deixa a fábrica recriar quando o manager surgir.
+            if ( mgr == nullptr &&
+                 prism::offsets::field< void* >( t, prism::offsets::trailer_parked_state ) != nullptr )
+            {
+                prism::offsets::field< void* >( t, prism::offsets::trailer_parked_state ) = nullptr;
+                prism::offsets::field< uint8_t >( t, prism::offsets::trailer_parked ) = 0;
+                prism::offsets::field< uint8_t >( t, prism::offsets::trailer_parked_registered ) = 0;
+                CCore::g_instance->info( "c{}: orphan parked record dropped (no manager)", i );
+            }
             if ( record_retry[ i ] > 0 ) --record_retry[ i ];
             const bool wants_record =
                 prism::offsets::field< void* >( t, prism::offsets::trailer_parked_state ) == nullptr &&

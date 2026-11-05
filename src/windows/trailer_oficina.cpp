@@ -39,6 +39,26 @@ namespace br_carretas
     uint64_t last_tick_ms = 0;
     uint64_t canon_dead_since = 0;
 
+    // a finished load wins over the respawn hold - drop the old-world mirror
+    // so the canon pointer swap after reload reads as world reload, not workshop
+    void workshop_respawn_discard()
+    {
+        const uint64_t now_ms = GetTickCount64();
+        hold_had_poses = false;
+        hold_truck_ok = false;
+        respawn_pose_due = 0;
+        canon_dead_since = 0;
+        state_bad_ms = now_ms;
+        last_tick_ms = now_ms;
+        for ( uint32_t i = 0; i < max_trailers; ++i )
+        {
+            hold_canon[ i ] = canon[ i ];
+            hold_ok[ i ] = false;
+            hold_jointed[ i ] = false;
+            pose_pending[ i ] = false;
+        }
+    }
+
     void workshop_respawn_update()
     {
         const uint64_t now_ms = GetTickCount64();
@@ -64,7 +84,8 @@ namespace br_carretas
             const bool in_session =
                 ( state_bad_ms == 0 || now_ms - state_bad_ms > 5000 ) &&
                 ( tick_gap < 4000 ) &&
-                ( canon_dead_since == 0 || now_ms - canon_dead_since < 5000 );
+                ( canon_dead_since == 0 || now_ms - canon_dead_since < 5000 ) &&
+                ( actor_tp_ms == 0 || steady_ms() - actor_tp_ms > 8000 );
             if ( canon_changed && hold_had_poses && in_session )
             {
                 // o caminhão foi junto pro slot da oficina? ele não passa por
