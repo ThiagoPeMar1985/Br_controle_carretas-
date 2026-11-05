@@ -24,7 +24,7 @@
 #include "prism/functions.hpp"
 #include "settings/settings.hpp"
 
-namespace ts_extra_utilities
+namespace br_carretas
 {
     using sound_event_play_fn = void __fastcall( void* /*event*/, uint8_t /*flag*/ );
 

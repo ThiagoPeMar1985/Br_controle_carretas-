@@ -11,7 +11,7 @@
 #include "backends/imgui_impl_win32.h"
 #include "backends/imgui_impl_dx11.h"
 
-namespace ts_extra_utilities
+namespace br_carretas
 {
     using D3D11CreateDeviceAndSwapChain_fnt = decltype(D3D11CreateDeviceAndSwapChain);
     using present_fn = HRESULT __stdcall( IDXGISwapChain*, UINT, UINT );

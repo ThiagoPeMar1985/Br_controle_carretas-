@@ -4,7 +4,7 @@
 
 #include "memory_scan.hpp"
 
-namespace ts_extra_utilities::memory
+namespace br_carretas::memory
 {
     inline uint64_t get_address_for_pattern( const char* pattern, const uint64_t offset = 0 )
     {

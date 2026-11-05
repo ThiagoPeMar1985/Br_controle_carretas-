@@ -3,7 +3,7 @@
 
 #pragma pack(push, 1)
 
-namespace ts_extra_utilities::physx
+namespace br_carretas::physx
 {
     class PxConstraintInvMassScale // Size: 0x0010
     {

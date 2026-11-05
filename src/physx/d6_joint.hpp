@@ -4,7 +4,7 @@
 #include "common.hpp"
 
 #pragma pack(push, 1)
-namespace ts_extra_utilities::physx
+namespace br_carretas::physx
 {
     class D6JointData // Size: 0x01B8
     {

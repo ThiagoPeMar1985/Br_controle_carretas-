@@ -4,7 +4,7 @@
 #include "imgui.h"
 #include "managers/hooks_manager.hpp"
 
-namespace ts_extra_utilities
+namespace br_carretas
 {
     void CHooksWindow::render()
     {

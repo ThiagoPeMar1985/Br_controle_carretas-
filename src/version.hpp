@@ -1,6 +1,6 @@
 #pragma once
 
-namespace ts_extra_utilities
+namespace br_carretas
 {
     constexpr const char* VERSION = "1.0.0";
 }

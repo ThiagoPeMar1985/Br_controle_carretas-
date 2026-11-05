@@ -257,7 +257,7 @@ license::info license::check( const char* key_text )
                   key_text != nullptr ? key_text : "", ( int ) out.st, why );
         if ( strcmp( cur, last ) == 0 ) return;
         strcpy_s( last, cur );
-        ts_extra_utilities::CCore::g_instance->info(
+        br_carretas::CCore::g_instance->info(
             "license check: key='{}' hwid={} status={} - {}",
             key_text != nullptr && key_text[0] != 0 ? key_text : "(none)",
             hardware_id(), ( int ) out.st, why );
@@ -290,7 +290,7 @@ license::info license::check( const char* key_text )
 
     // genuine key: expiry still running? (clock rollback also counts as out)
     const __time64_t now = _time64( nullptr );
-    if ( now < ts_extra_utilities::settings::g_settings.license_seen )
+    if ( now < br_carretas::settings::g_settings.license_seen )
     {
         out.st = status::expired; report( "clock rollback detectado" ); return out;
     }
@@ -300,10 +300,10 @@ license::info license::check( const char* key_text )
 
     // remember the furthest moment seen - a clock set backwards can no longer
     // stretch a license it has already outlived
-    if ( now > ts_extra_utilities::settings::g_settings.license_seen )
+    if ( now > br_carretas::settings::g_settings.license_seen )
     {
-        ts_extra_utilities::settings::g_settings.license_seen = static_cast< int32_t >( now );
-        ts_extra_utilities::settings::save();
+        br_carretas::settings::g_settings.license_seen = static_cast< int32_t >( now );
+        br_carretas::settings::save();
     }
     out.st = status::valid;
     return out;
@@ -337,7 +337,7 @@ void license::refresh( const bool force )
     // só re-checa quando a chave muda ou o chamador força (init / botão):
     // nada de re-verificar a cada 2s
     static std::string last_key;
-    const char* cur = ts_extra_utilities::settings::g_settings.license_key;
+    const char* cur = br_carretas::settings::g_settings.license_key;
     if ( !force && cur != nullptr && last_key == cur ) return;
     last_key = cur != nullptr ? cur : "";
     g_checked_at.store( GetTickCount64(), std::memory_order_relaxed );

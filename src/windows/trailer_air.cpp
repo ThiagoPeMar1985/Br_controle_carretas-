@@ -25,7 +25,7 @@
 #include "prism/functions.hpp"
 #include "settings/settings.hpp"
 
-namespace ts_extra_utilities
+namespace br_carretas
 {
     //========================================================================
     // Air compressor diagnostics (temporary - collecting the native refill

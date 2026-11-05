@@ -1,7 +1,7 @@
 #pragma once
 #include "window.hpp"
 
-namespace ts_extra_utilities
+namespace br_carretas
 {
     class CHooksWindow : public CWindow
     {

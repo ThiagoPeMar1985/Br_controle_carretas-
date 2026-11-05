@@ -4,7 +4,7 @@
 #include <memory>
 #include "hooks/hook.hpp"
 
-namespace ts_extra_utilities
+namespace br_carretas
 {
     class CVirtualFunctionHook;
     class CFunctionHook;

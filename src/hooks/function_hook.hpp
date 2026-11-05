@@ -3,7 +3,7 @@
 
 #include <utility>
 
-namespace ts_extra_utilities
+namespace br_carretas
 {
     class CFunctionHook : public CHook
     {

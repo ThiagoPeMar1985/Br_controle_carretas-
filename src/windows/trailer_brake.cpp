@@ -26,7 +26,7 @@
 #include "license/license.hpp"
 #include "settings/settings.hpp"
 
-namespace ts_extra_utilities
+namespace br_carretas
 {
     // each wheelset's native brake mask, captured before our first rewrite -
     // needed to fall back to the game's own braked-axle set while axles are up

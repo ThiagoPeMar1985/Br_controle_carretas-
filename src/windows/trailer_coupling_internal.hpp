@@ -2,7 +2,7 @@
 
 #include "trailer_shared.hpp"
 
-namespace ts_extra_utilities
+namespace br_carretas
 {
     using anchor_relink_fn = void __fastcall( void*, uint32_t );
     using trailer_settle_fn = void __fastcall( void*, float );
@@ -87,6 +87,10 @@ namespace ts_extra_utilities
     extern bool rig_truck_valid;
     extern uint8_t rig_replay_a3;
     extern uint8_t rig_replay_a4;
+    extern bool rig_force_restore;
+    extern int tp_block_watch;
+    extern int carry_park_pending[ max_trailers ];
+    extern int carry_anchor_delay[ max_trailers ];
     extern std::pair< void*, void* > trailer_actors[ max_trailers ];
     extern void* provider_vtbl;
 

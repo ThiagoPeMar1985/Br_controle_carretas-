@@ -3,7 +3,7 @@
 
 #pragma pack(push, 1)
 
-namespace ts_extra_utilities::prism
+namespace br_carretas::prism
 {
     class trailer_u : public core_vehicle_u // size: 0x0188
     {

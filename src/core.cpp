@@ -19,7 +19,7 @@
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler( HWND, UINT, WPARAM, LPARAM );
 
-namespace ts_extra_utilities
+namespace br_carretas
 {
     void diag_log( const std::string& msg )
     {

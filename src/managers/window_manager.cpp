@@ -2,7 +2,7 @@
 
 #include "imgui.h"
 
-namespace ts_extra_utilities
+namespace br_carretas
 {
     bool CWindowManager::init()
     {

@@ -6,7 +6,7 @@
 
 #pragma pack(push, 1)
 
-namespace ts_extra_utilities::prism
+namespace br_carretas::prism
 {
     class accessory_data_u : public unit_t // Size: 0x0118
     {

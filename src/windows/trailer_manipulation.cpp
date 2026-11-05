@@ -22,7 +22,7 @@
 #include "settings/settings.hpp"
 #include "license/license.hpp"
 
-namespace ts_extra_utilities
+namespace br_carretas
 {
 
     void trigger_native_sleep();
@@ -548,6 +548,7 @@ namespace ts_extra_utilities
         // per-section cycle accounting (rdtsc ≈ 20ns a read): when the game
         // crawls the next log line names the stage eating frame time instead
         // of guessing - silent while everything stays cheap
+        load_game_update();
         const bool coupling_on = settings::g_settings.cargo_restore;
         // toggle off: the native paths must not inherit plugin-created
         // claims - drop every jointless slave edge (all of them are plugin

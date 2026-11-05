@@ -6,7 +6,7 @@
 
 struct float3_t;
 
-namespace ts_extra_utilities::prism
+namespace br_carretas::prism
 {
     class accessory_chassis_data_u;
     class physics_actor_physx_t;

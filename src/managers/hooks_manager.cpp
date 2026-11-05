@@ -6,7 +6,7 @@
 #include "hooks/function_hook.hpp"
 #include "hooks/vtable_hook.hpp"
 
-namespace ts_extra_utilities
+namespace br_carretas
 {
     CHooksManager::CHooksManager()
     {

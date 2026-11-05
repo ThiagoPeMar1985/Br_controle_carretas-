@@ -4,7 +4,7 @@
 #include "window.hpp"
 #include "prism/functions.hpp"
 
-namespace ts_extra_utilities
+namespace br_carretas
 {
     // Individually detachable trailers for 1.61 - connect/disconnect go through
     // vfunc slots verified against the native attach path.

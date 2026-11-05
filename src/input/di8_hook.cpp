@@ -5,7 +5,7 @@
 #include "core.hpp"
 #include "hooks/vtable_hook.hpp"
 
-namespace ts_extra_utilities
+namespace br_carretas
 {
     using DirectInput8Create_fnt = decltype(DirectInput8Create);
     using get_device_data_fn = HRESULT __stdcall( IDirectInputDevice8W*, DWORD, LPDIDEVICEOBJECTDATA, LPDWORD, DWORD );

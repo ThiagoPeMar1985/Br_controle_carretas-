@@ -1,7 +1,7 @@
 #pragma once
 #include <string>
 
-namespace ts_extra_utilities::prism
+namespace br_carretas::prism
 {
     constexpr int i_num_letters = 38;
     constexpr char psz_letters[ i_num_letters ] = {

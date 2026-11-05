@@ -10,7 +10,7 @@
 
 #pragma comment( lib, "winmm.lib" )
 
-namespace ts_extra_utilities::settings
+namespace br_carretas::settings
 {
     Settings g_settings;
 

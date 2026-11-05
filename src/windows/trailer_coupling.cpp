@@ -24,7 +24,7 @@
 #include "prism/functions.hpp"
 #include "settings/settings.hpp"
 
-namespace ts_extra_utilities
+namespace br_carretas
 {
     //========================================================================
     // Resolved native functions and globals (filled by coupling_install())
@@ -886,7 +886,7 @@ namespace ts_extra_utilities
     void hk_crashes_when_disconnected( prism::physics_trailer_u* self, prism::game_trailer_actor_u* trailer )
     {
         // checkbox off = entire coupling system bypassed: pure native call
-        if ( !settings::g_settings.cargo_restore )
+        if ( !settings::g_settings.cargo_restore || load_game_active() )
         {
             crashes_when_disconnected_hook->get_original< prism::crashes_when_disconnected_fn >()( self, trailer );
             return;
@@ -979,7 +979,7 @@ namespace ts_extra_utilities
     // candidate sits inside gap range, the visibility leaf does not
     void hk_connect_slave( prism::physics_trailer_u* self )
     {
-        if ( !settings::g_settings.cargo_restore )
+        if ( !settings::g_settings.cargo_restore || load_game_active() )
         {
             connect_slave_hook->get_original< prism::physics_trailer_u_connect_slave_fn >()( self );
             return;
@@ -1032,7 +1032,7 @@ namespace ts_extra_utilities
     using joint_walk_fn = float __fastcall( void* /*node*/, float /*arg*/ );
     float __fastcall hk_joint_walk( void* self, float arg )
     {
-        if ( !settings::g_settings.cargo_restore )
+        if ( !settings::g_settings.cargo_restore || load_game_active() )
         {
             return joint_walk_hook->get_original< joint_walk_fn >()( self, arg );
         }
@@ -1071,7 +1071,7 @@ namespace ts_extra_utilities
     using phys_link_fn = void __fastcall( void* /*parent*/, void* /*child*/ );
     void __fastcall hk_phys_link( void* parent, void* child )
     {
-        if ( !settings::g_settings.cargo_restore )
+        if ( !settings::g_settings.cargo_restore || load_game_active() )
         {
             phys_link_hook->get_original< phys_link_fn >()( parent, child );
             return;
@@ -1169,10 +1169,20 @@ namespace ts_extra_utilities
     }
     void __fastcall hk_trailer_disconnect( void* trailer )
     {
-        // checkbox off = entire coupling system bypassed: pure native call
-        if ( !settings::g_settings.cargo_restore )
+        // checkbox off = entire coupling system bypassed: pure native call -
+        // but no plugin-created claim link may reach the native teardown
+        // walker (exe+0x789CB7 faults on dead targets, game crashes)
+        if ( !settings::g_settings.cargo_restore || load_game_active() )
         {
-            trailer_disconnect_hook->get_original< prism::physics_trailer_u_disconnect_fn >()( trailer );
+            sever_parked_claims();
+            __try
+            {
+                trailer_disconnect_hook->get_original< prism::physics_trailer_u_disconnect_fn >()( trailer );
+            }
+            __except ( EXCEPTION_EXECUTE_HANDLER )
+            {
+                CCore::g_instance->warning( "disconnect walk faulted on {:p} (checkbox off)", trailer );
+            }
             return;
         }
         if ( trailer == nullptr || !is_trailer_obj( trailer ) ) return;
@@ -1406,7 +1416,7 @@ namespace ts_extra_utilities
     void __fastcall hk_trailer_connect_a( void* trailer, void* parent, float3_t vec,
                                           int state, bool slave_hook, bool is_slave )
     {
-        if ( !settings::g_settings.cargo_restore )
+        if ( !settings::g_settings.cargo_restore || load_game_active() )
         {
             trailer_connect_hook->get_original< prism::physics_trailer_u_connect_fn >()(
                 trailer, parent, vec, state, slave_hook, is_slave );
@@ -1418,7 +1428,7 @@ namespace ts_extra_utilities
     void __fastcall hk_trailer_connect_b( void* trailer, void* parent, float3_t vec,
                                           int state, bool slave_hook, bool is_slave )
     {
-        if ( !settings::g_settings.cargo_restore )
+        if ( !settings::g_settings.cargo_restore || load_game_active() )
         {
             trailer_connect_hook2->get_original< prism::physics_trailer_u_connect_fn >()(
                 trailer, parent, vec, state, slave_hook, is_slave );
@@ -1434,7 +1444,7 @@ namespace ts_extra_utilities
     // detached trailer left sitting at quit
     void __fastcall hk_pre_detach( void* self, void* trailer )
     {
-        if ( !settings::g_settings.cargo_restore )
+        if ( !settings::g_settings.cargo_restore || load_game_active() )
         {
             pre_detach_hook->get_original< prism::vehicle_pre_detach_fn >()( self, trailer );
             return;
@@ -1457,10 +1467,20 @@ namespace ts_extra_utilities
     void __fastcall hk_detach_dispatch_raw( void* self, uint8_t dl, uint64_t r8 );
     void __fastcall hk_detach_dispatch( void* self, uint8_t dl, uint64_t r8 )
     {
-        // checkbox off = entire coupling system bypassed: pure native call
-        if ( !settings::g_settings.cargo_restore )
+        // checkbox off = entire coupling system bypassed: pure native call -
+        // same claim-link cleanup as hk_trailer_disconnect (the dispatcher
+        // reaches the same teardown walker)
+        if ( !settings::g_settings.cargo_restore || load_game_active() )
         {
-            detach_dispatch_hook->get_original< native_detach_dispatch_fn >()( self, dl, r8 );
+            sever_parked_claims();
+            __try
+            {
+                detach_dispatch_hook->get_original< native_detach_dispatch_fn >()( self, dl, r8 );
+            }
+            __except ( EXCEPTION_EXECUTE_HANDLER )
+            {
+                CCore::g_instance->warning( "detach dispatch faulted on {:p} (checkbox off)", self );
+            }
             return;
         }
         // only the player's T key (caller exe+0x9F7DAE, seen in the logs) is
@@ -1615,7 +1635,7 @@ namespace ts_extra_utilities
         uint64_t arg5, const float* settle_override )
     {
         // checkbox off = entire coupling system bypassed: pure native call
-        if ( !settings::g_settings.cargo_restore )
+        if ( !settings::g_settings.cargo_restore || load_game_active() )
         {
             attach_dispatch_hook->get_original< native_attach_dispatch_fn >()( self, dl, r8, r9, arg5, settle_override );
             return;

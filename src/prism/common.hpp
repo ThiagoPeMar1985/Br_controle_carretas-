@@ -2,7 +2,7 @@
 
 #pragma pack(push, 1)
 
-namespace ts_extra_utilities
+namespace br_carretas
 {
     struct float2_t // size: 0x0008
     {

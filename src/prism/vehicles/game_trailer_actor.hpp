@@ -2,7 +2,7 @@
 #include "vehicle_shared.hpp"
 
 #pragma pack(push, 1)
-namespace ts_extra_utilities::prism
+namespace br_carretas::prism
 {
     class physics_joint_physx_t;
 

@@ -13,7 +13,7 @@
 // How each was found (offline, from the exe):
 //  - slave trailer: prism::physics_trailer_u::connect_slave tests +0x1088 against null
 //  - first trailer: the `cheat repair` handler walks game_actor +0x18 (truck) and +0xC8
-namespace ts_extra_utilities::prism::offsets
+namespace br_carretas::prism::offsets
 {
     constexpr uint32_t game_actor_truck = 0x0018; // game_physics_vehicle_u*, the player's truck
     constexpr uint32_t game_actor_trailer = 0x00C8; // game_trailer_actor_u*, first trailer

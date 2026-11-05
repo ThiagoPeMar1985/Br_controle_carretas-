@@ -11,7 +11,7 @@
 #include "managers/hooks_manager.hpp"
 #include "settings/settings.hpp"
 
-namespace ts_extra_utilities
+namespace br_carretas
 {
     // sidecar file logger - the game's own log callback crashed the plugin,
     // so diagnostics go to Documents\Euro Truck Simulator 2\br_carretas_debug.log

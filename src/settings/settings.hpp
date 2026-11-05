@@ -2,7 +2,7 @@
 #include <string>
 #include <Windows.h>
 
-namespace ts_extra_utilities::settings
+namespace br_carretas::settings
 {
     enum class Action
     {

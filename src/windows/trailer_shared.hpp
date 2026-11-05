@@ -23,7 +23,7 @@
 #include <winver.h>
 #pragma comment( lib, "version.lib" )
 
-namespace ts_extra_utilities
+namespace br_carretas
 {
     constexpr uint32_t max_trailers = 20;
 
@@ -620,6 +620,11 @@ namespace ts_extra_utilities
     void coupling_register_channels();           // trailer_coupling.cpp - handbrake telemetry for the attach/detach rule
     void coupling_parked_update();               // trailer_loadstate.cpp - cargo respawn watch + rig restore
     void render_cargo_restore_option();          // trailer_loadstate.cpp - checkbox + setting persistence
+    bool block_camera_zero_teleport( void* arg );// trailer_camera_zero.cpp - Ctrl+F9 teleport block
+    void workshop_respawn_update();              // trailer_oficina.cpp - workshop destroy/rebuild hold
+    bool load_game_active();                     // trailer_loadgame.cpp - save load in progress
+    void load_game_update();                     // trailer_loadgame.cpp - drop old-world marks after load
+    void garage_update();                         // trailer_garage.cpp - dead trailer marks cleanup
     extern void* attach_target;                  // trailer_coupling.cpp - trailer picked for the native T attach
     extern void* canon[ max_trailers ];          // trailer_coupling.cpp - stable canonical trailer order
     int canon_index_of( const void* t );         // trailer_coupling.cpp - stable canon slot of a trailer (-1)

@@ -1,7 +1,7 @@
 #pragma once
 #include <string>
 
-namespace ts_extra_utilities
+namespace br_carretas
 {
     class CHook
     {

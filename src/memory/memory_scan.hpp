@@ -4,7 +4,7 @@
 #include <vector>
 #include <sstream>
 
-namespace ts_extra_utilities
+namespace br_carretas
 {
     struct pattern_byte
     {

@@ -5,7 +5,7 @@
 
 #pragma pack(push, 1)
 
-namespace ts_extra_utilities::prism
+namespace br_carretas::prism
 {
     class physics_actor_physx_t // Size: 0x0140
     {

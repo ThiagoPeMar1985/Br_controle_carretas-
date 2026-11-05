@@ -24,7 +24,7 @@
 #include "prism/functions.hpp"
 #include "settings/settings.hpp"
 
-namespace ts_extra_utilities
+namespace br_carretas
 {
     //========================================================================
     // Liftable trailer axles (ported from ts-liftable-axles)

@@ -5,7 +5,7 @@
 
 #pragma pack(push, 1)
 
-namespace ts_extra_utilities::prism
+namespace br_carretas::prism
 {
     class core_vehicle_u : public unit_t // size: 0x0158
     {

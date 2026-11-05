@@ -25,7 +25,7 @@
 #include "prism/functions.hpp"
 #include "settings/settings.hpp"
 
-namespace ts_extra_utilities
+namespace br_carretas
 {
     // The renderer-side maintenance requests a camera anchor, but only the
     // camera's own update hook writes it. This avoids racing the game's

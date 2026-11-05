@@ -1,7 +1,7 @@
 #pragma once
 #include <cstdint>
 
-namespace ts_extra_utilities
+namespace br_carretas
 {
     struct float3_t;
 

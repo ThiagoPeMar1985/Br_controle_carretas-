@@ -2,6 +2,6 @@
 
 #include "version.hpp"
 
-namespace ts_extra_utilities
+namespace br_carretas
 {
 }

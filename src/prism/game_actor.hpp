@@ -6,7 +6,7 @@
 
 #pragma pack(push, 1)
 
-namespace ts_extra_utilities::prism
+namespace br_carretas::prism
 {
     class game_trailer_actor_u;
 

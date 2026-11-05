@@ -4,27 +4,27 @@
 
 #include "./core.hpp"
 
-thread_local std::unique_ptr< ts_extra_utilities::CCore > g_core;
+thread_local std::unique_ptr< br_carretas::CCore > g_core;
 
 __declspec(dllexport) SCSAPI_RESULT scs_telemetry_init( const scs_u32_t version, const scs_telemetry_init_params_t* const params )
 {
     auto* init_params = static_cast< const scs_telemetry_init_params_v100_t* >( params );
-    ts_extra_utilities::diag_log( "[br_carretas] scs_telemetry_init entered" );
-    g_core = std::make_unique< ts_extra_utilities::CCore >( init_params );
+    br_carretas::diag_log( "[br_carretas] scs_telemetry_init entered" );
+    g_core = std::make_unique< br_carretas::CCore >( init_params );
 
     if ( !g_core->init() )
     {
-        ts_extra_utilities::diag_log( "[br_carretas] init failed - returning generic_error" );
+        br_carretas::diag_log( "[br_carretas] init failed - returning generic_error" );
         return SCS_RESULT_generic_error;
     }
 
-    ts_extra_utilities::diag_log( "[br_carretas] init ok" );
+    br_carretas::diag_log( "[br_carretas] init ok" );
     return SCS_RESULT_ok;
 }
 
 __declspec(dllexport) SCSAPI_VOID scs_telemetry_shutdown( void )
 {
-    ts_extra_utilities::diag_log( "[br_carretas] scs_telemetry_shutdown" );
+    br_carretas::diag_log( "[br_carretas] scs_telemetry_shutdown" );
     if ( g_core != nullptr )
     {
         g_core.reset();
