@@ -1081,7 +1081,7 @@ namespace br_carretas
         {
         // folder tabs: click switches, re-clicking the open tab collapses it
         // for the session - the open tab itself is persisted to settings.ini
-        static const char* tab_names[] = { "Teclas", "Oversize", "Carretas", "Opções", "Licença", "Logs" };
+        static const char* tab_names[] = { "Teclas", "Direcionais", "Carretas", "Opções", "Licença", "Logs" };
         const float tab_width = ( ImGui::GetContentRegionAvail().x
             - ImGui::GetStyle().ItemSpacing.x * 5.f ) / 6.f;
         for ( int t = 0; t < 6; ++t )
@@ -1181,7 +1181,7 @@ namespace br_carretas
     void CTrailerManipulation::render_oversize_tab() const
     {
         ImGui::BeginChild( "##oversize", ImVec2( 0.f, 0.f ) );
-        ImGui::SeparatorText( "Oversize" );
+        ImGui::SeparatorText( "Direcionais" );
         this->render_oversize();
         ImGui::EndChild();
     }
@@ -1345,7 +1345,7 @@ namespace br_carretas
         {
             ui::text_disabled_wrapped(
                 "a página da loja está sendo preparada - o link de compra abrirá "
-                "por este botão quando estiver no ar" );
+                "neste botão quando estiver no ar" );
             ImGui::BeginDisabled();
             ImGui::Button( "Abrir página da loja" );
             ImGui::EndDisabled();

@@ -116,10 +116,10 @@ namespace br_carretas
         ImGui::SameLine();
         ImGui::TextWrapped( "Sistema de Desacoplamento" );
         ImGui::TextWrapped(
-            "Ative para usar o sistema de desacoplamento/acoplamento. Ligado, o jogo nao teleporta "
-            "na camera 0 (Ctrl+F9) nem ao carregar/descarregar - as carretas separadas ficam presas "
+            "Ative para usar o sistema de desacoplamento/acoplamento. Ligado, o jogo não teleporta "
+            "na câmera 0 (Ctrl+F9) nem ao carregar/descarregar - as carretas separadas ficam presas "
             "no lugar. Desligado, engate, desengate, teleporte, carga e descarga voltam ao nativo do "
-            "jogo. Para teleportar para outro lugar, desligue, teleporte e ligue de novo." );
+            "jogo. Para teleportar a outro lugar, desligue, teleporte e ligue de novo." );
     }
 
 

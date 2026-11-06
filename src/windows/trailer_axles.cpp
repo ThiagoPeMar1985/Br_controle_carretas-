@@ -317,7 +317,9 @@ namespace br_carretas
             : static_cast< uint32_t >( stored ) ) & truck_lift.native_axles;
         uint32_t next = selection;
 
-        void* axle_data = prism::offsets::field< void* >( truck, prism::offsets::vehicle_chassis_data );
+        void* axle_data = truck != nullptr && readable_ptr( truck )
+            ? prism::offsets::field< void* >( truck, prism::offsets::vehicle_chassis_data )
+            : nullptr;
         uint64_t tcount = 0;
         if ( axle_data != nullptr && readable_ptr( axle_data ) )
         {
