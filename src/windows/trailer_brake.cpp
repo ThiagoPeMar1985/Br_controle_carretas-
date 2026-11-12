@@ -250,8 +250,8 @@ namespace br_carretas
     void brake_register_hooks()
     {
         if ( !expected_build() ) return;
-        truck_brake_broadcast_ret = memory::get_address_from_offset( 0x14064B7EF );
-        truck_forced_broadcast_ret = memory::get_address_from_offset( 0x14064B806 );
+        truck_brake_broadcast_ret = validated_va( 0x14064B7EF );
+        truck_forced_broadcast_ret = validated_va( 0x14064B806 );
         const auto brake_chain_setter_address = memory::get_address_for_pattern(
             "f3 0f 11 89 60 07 00 00 48 8b 89 88 10 00 00" );
         const auto brake_setter_address = memory::get_address_for_pattern(

@@ -63,10 +63,10 @@ namespace br_carretas
     //
     // Reverse-engineered from the telemetry channel registration (1.61):
     // the truck.brake.air.pressure getter callback at 0x14064B850 reads
-    //   psi = [[truck+0x200] + 0x458] * [truck+0x1148] * 14.5
+    //   psi = [[truck+0x200] + 0x458] * [truck+0x1120] * 14.5
     // +0x458 on the air sub-object is the tank MAX pressure (~10 bar - a
     // constant, do NOT write); the live fill is the fraction at
-    // truck+0x1148 (0..~0.93 cutout). The boost adds
+    // truck+0x1120 (0..~0.93 cutout). The boost adds
     // `native_rate * air_boost` psi/s to that fraction.
     // (The +0xA8/+0xD0 float arrays with cached means belong to a different
     // subsystem - per-axle brake air, always 0 when unbraked - and the
@@ -75,7 +75,7 @@ namespace br_carretas
     //========================================================================
     constexpr uint32_t air_sub_ptr    = 0x200;  // truck -> air/brake object
     constexpr uint32_t air_press_off  = 0x458;  // tank MAX pressure (~10 bar)
-    constexpr uint32_t air_scale_off  = 0x1148; // fill fraction 0..~0.93
+    constexpr uint32_t air_scale_off  = 0x1120; // fill fraction 0..~0.93
     constexpr float    air_psi_const  = 14.5f;  // getter's bar->psi factor
 
     float air_win_t = 0.f;                 // rate-window accumulator (s)
@@ -133,7 +133,7 @@ namespace br_carretas
     // the live pressure field is on the truck's air/brake sub-object:
     // game_actor -> +0x18 (truck physics) -> +0x200 (air object) -> +0x458,
     // exactly what the telemetry getter 0x14064B850 reads. The scale factor
-    // the getter applies sits on the truck object itself at +0x1148.
+    // the getter applies sits on the truck object itself at +0x1120.
     void* air_object()
     {
         auto* game_actor = CCore::g_instance->get_game_actor();

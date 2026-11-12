@@ -31,16 +31,16 @@ namespace br_carretas
     void play_brace_sound( void* trailer, const bool up )
     {
         if ( !expected_build() ) return;
-        const auto base = reinterpret_cast< uint64_t >( GetModuleHandle( nullptr ) );
-        void* audio = readable_ptr( trailer ) ? prism::offsets::field< void* >( trailer, 0x12D8 ) : nullptr;
+        const auto sound_vtbl = validated_va( 0x142220EE60 );
+        void* audio = readable_ptr( trailer ) ? prism::offsets::field< void* >( trailer, 0x12A8 ) : nullptr;
         if ( !readable_ptr( audio ) || !readable_ptr( reinterpret_cast< uint8_t* >( audio ) + 0x60 ) )
         {
             return;
         }
         void* channel = prism::offsets::field< void* >( audio, up ? 0x50 : 0x58 );
         void* event = nullptr;
-        if ( readable_ptr( channel ) &&
-            *reinterpret_cast< uint64_t* >( channel ) == base + 0x2220EE60 )
+        if ( readable_ptr( channel ) && sound_vtbl != 0 &&
+            *reinterpret_cast< uint64_t* >( channel ) == sound_vtbl )
         {
             event = channel;
         }
@@ -48,8 +48,8 @@ namespace br_carretas
             readable_ptr( reinterpret_cast< uint8_t* >( channel ) + 0x10 ) )
         {
             void* inner = prism::offsets::field< void* >( channel, 0x8 );
-            if ( readable_ptr( inner ) &&
-                *reinterpret_cast< uint64_t* >( inner ) == base + 0x2220EE60 )
+            if ( readable_ptr( inner ) && sound_vtbl != 0 &&
+                *reinterpret_cast< uint64_t* >( inner ) == sound_vtbl )
             {
                 event = inner;
             }
@@ -72,7 +72,7 @@ namespace br_carretas
             if ( tr != nullptr && readable_ptr( tr ) )
             {
                 decoupling = prism::offsets::field< uint32_t >( tr, prism::offsets::truck_coupling_state ) == 1;
-                coupling_trailer = prism::offsets::field< void* >( tr, 0x15A8 );
+                coupling_trailer = prism::offsets::field< void* >( tr, 0x1580 );
             }
         }
         for ( uint32_t i = 0; i < max_trailers && canon[ i ] != nullptr; ++i )
@@ -105,10 +105,30 @@ namespace br_carretas
     // the light-source context a trailer renders lamps through - the native
     // propagator repoints ctx+0x18 to the chain head every tick, so a parked
     // piece must point back at itself or it freezes mirroring truck lamps
+    // the light-source ctx pointer: 1.62 reads null at the old +0x110 - look
+    // it up by fingerprint (buckets/count/source/mask) instead of a fixed offset
+    static void* light_ctx_of( void* veh )
+    {
+        if ( veh == nullptr || !readable_ptr( veh ) ) return nullptr;
+        static constexpr uint32_t cand[] =
+            { 0x110, 0xE8, 0xE0, 0xF0, 0xF8, 0x100, 0x108, 0x118, 0x120, 0x128 };
+        for ( const uint32_t off : cand )
+        {
+            if ( !readable_ptr( static_cast< uint8_t* >( veh ) + off ) ) continue;
+            void* p = prism::offsets::field< void* >( veh, off );
+            if ( p == nullptr || !plausible_object( p ) ) continue;
+            if ( readable_span( p, 0x2A8 ) < 0x2A8 ) continue;
+            if ( prism::offsets::field< uint64_t >( p, 0x10 ) > 0x80 ) continue;
+            void* src = prism::offsets::field< void* >( p, 0x18 );
+            if ( src == nullptr || !plausible_object( src ) ) continue;
+            return p;
+        }
+        return nullptr;
+    }
     void* light_source_of( void* veh )
     {
         if ( veh == nullptr || !readable_ptr( veh ) ) return nullptr;
-        void* ctx = prism::offsets::field< void* >( veh, prism::offsets::trailer_light_ctx );
+        void* ctx = light_ctx_of( veh );
         if ( ctx == nullptr || !readable_ptr( ctx ) ) return nullptr;
         return prism::offsets::field< void* >( ctx, 0x18 );
     }
@@ -160,7 +180,7 @@ namespace br_carretas
         void* truck = game_actor != nullptr
             ? prism::offsets::field< void* >( game_actor, prism::offsets::game_actor_truck ) : nullptr;
         void* towed = truck != nullptr && readable_ptr( truck )
-            ? prism::offsets::field< void* >( truck, 0x15A8 ) : nullptr;
+            ? prism::offsets::field< void* >( truck, 0x1580 ) : nullptr;
         // the async detach sequence keeps the joint alive while the crank
         // anim runs - rebuilding the truck edge then re-draws the hoses the
         // game is cutting (the undo-then-redo the player sees)
@@ -220,7 +240,7 @@ namespace br_carretas
     void repair_lamp_ctx( void* m )
     {
         if ( m == nullptr || !readable_ptr( m ) ) return;
-        void* ctx = prism::offsets::field< void* >( m, prism::offsets::trailer_light_ctx );
+        void* ctx = light_ctx_of( m );
         if ( ctx == nullptr || !readable_ptr( ctx ) ||
              !readable_ptr( static_cast< uint8_t* >( ctx ) + 0x18 ) ) return;
         void* src = prism::offsets::field< void* >( ctx, 0x18 );
@@ -291,10 +311,7 @@ namespace br_carretas
     // native attach re-registers them on recouple
     void lamp_ctx_sweep( void* reg_owner )
     {
-        void* ctx = readable_ptr( reinterpret_cast< uint8_t* >( reg_owner ) +
-                    prism::offsets::trailer_light_ctx )
-            ? prism::offsets::field< void* >( reg_owner, prism::offsets::trailer_light_ctx )
-            : nullptr;
+        void* ctx = light_ctx_of( reg_owner );
         if ( ctx == nullptr || !readable_ptr( ctx ) ) return;
         void** buckets = prism::offsets::field< void** >( ctx, 0x08 );
         const uint64_t chn = prism::offsets::field< uint64_t >( ctx, 0x10 );
@@ -409,9 +426,7 @@ namespace br_carretas
             {
                 prism::offsets::field< uint32_t >( t, prism::offsets::trailer_lamp_mask ) = 0;
             }
-            void* ctx = readable_ptr( reinterpret_cast< uint8_t* >( t ) +
-                    prism::offsets::trailer_light_ctx )
-                ? prism::offsets::field< void* >( t, prism::offsets::trailer_light_ctx ) : nullptr;
+            void* ctx = light_ctx_of( t );
             if ( !lw_ctx_logged[ i ] )
             {
                 lw_ctx_logged[ i ] = true;
@@ -550,7 +565,7 @@ namespace br_carretas
             return;
         }
         void* towed = truck != nullptr && readable_ptr( truck )
-            ? prism::offsets::field< void* >( truck, 0x15A8 ) : nullptr;
+            ? prism::offsets::field< void* >( truck, 0x1580 ) : nullptr;
         // same cascade guard as hk_rebuild_lines: a canon trailer outside
         // the live (towed) chain that still takes part in a real coupling
         // keeps its cable state - refuse the teardown
@@ -678,7 +693,65 @@ namespace br_carretas
         {
             return;
         }
+        // parked piece: the game's re-shows must not relight hoses - keep cut
+        if ( state != 0 && vi >= 0 && j == nullptr )
+        {
+            state = 0;
+        }
         set_lines_hook->get_original< line_state_fn >()( vehicle, state, force );
+    }
+    // the per-frame hose geometry updater: hide the live->dead claim links
+    // for the call (restored after) so it never redraws detached hoses
+    using hose_update_fn = void __fastcall( void* /*front*/, void* /*trailer*/ );
+    void __fastcall hk_hose_update( void* front, void* trailer )
+    {
+        if ( !settings::g_settings.cargo_restore || canon_age < 90 )
+        {
+            hose_update_hook->get_original< hose_update_fn >()( front, trailer );
+            return;
+        }
+        struct hidden_link { void* owner; void* slave; };
+        hidden_link hidden[ max_trailers ];
+        uint32_t hidden_n = 0;
+        for ( uint32_t i = 0; i < trailer_count && hidden_n < max_trailers; ++i )
+        {
+            void* t = trailers[ i ];
+            if ( t == nullptr || !readable_ptr( t ) ||
+                 !readable_ptr( static_cast< uint8_t* >( t ) + prism::offsets::trailer_physics_joint ) ||
+                 joint( t ) == nullptr )
+            {
+                continue;
+            }
+            void* slave = prism::offsets::field< void* >( t, prism::offsets::trailer_slave );
+            if ( slave != nullptr && readable_ptr( slave ) &&
+                 readable_ptr( static_cast< uint8_t* >( slave ) + prism::offsets::trailer_physics_joint ) &&
+                 joint( slave ) == nullptr )
+            {
+                // claim edge with a live section behind: keep the walk alive -
+                // hiding the link orphans the section's own hose maintenance
+                void* behind = readable_ptr( static_cast< uint8_t* >( slave ) + prism::offsets::trailer_slave )
+                    ? prism::offsets::field< void* >( slave, prism::offsets::trailer_slave ) : nullptr;
+                const bool section_behind = behind != nullptr && readable_ptr( behind ) &&
+                    readable_ptr( static_cast< uint8_t* >( behind ) + prism::offsets::trailer_physics_joint ) &&
+                    joint( behind ) != nullptr;
+                if ( !section_behind )
+                {
+                    hidden[ hidden_n++ ] = { t, slave };
+                    prism::offsets::field< void* >( t, prism::offsets::trailer_slave ) = nullptr;
+                }
+            }
+        }
+        native_chain_call_active.store( true, std::memory_order_release );
+        hose_update_hook->get_original< hose_update_fn >()( front, trailer );
+        native_chain_call_active.store( false, std::memory_order_release );
+        for ( uint32_t i = 0; i < hidden_n; ++i )
+        {
+            if ( readable_ptr( hidden[ i ].owner ) )
+            {
+                prism::offsets::field< void* >( hidden[ i ].owner, prism::offsets::trailer_slave ) =
+                    hidden[ i ].slave;
+            }
+        }
     }
     // rebuild_lines draws the air/electric lines between a front vehicle
     // and a trailer - the resolver walks the +0xC8 chain, and with the
@@ -713,7 +786,7 @@ namespace br_carretas
         {
             truck = prism::offsets::field< void* >( game_actor, prism::offsets::game_actor_truck );
             towed = truck != nullptr && readable_ptr( truck )
-                ? prism::offsets::field< void* >( truck, 0x15A8 ) : nullptr;
+                ? prism::offsets::field< void* >( truck, 0x1580 ) : nullptr;
         }
         const int fi = canon_index_of( front );
         if ( fi >= 0 && readable_ptr( front ) )

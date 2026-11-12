@@ -1039,7 +1039,7 @@ namespace br_carretas
             prism::offsets::field< uint8_t >( t, prism::offsets::trailer_brake_forced ) = 1;
             if ( brace_anim_fn != nullptr )
             {
-                prism::offsets::field< float >( t, 0x1270 ) = 1.f;
+                prism::offsets::field< float >( t, 0x1240 ) = 1.f;
                 brace_anim_fn( t, 1, 1.f / 3.f );
             }
             if ( notify_decoupled_fn != nullptr ) notify_decoupled_fn( t );
@@ -1082,7 +1082,7 @@ namespace br_carretas
         // processo. Emular a carga como 0.0 envenena só aquela amostra do
         // cache; o resto do build de nav segue.
         if ( code == EXCEPTION_ACCESS_VIOLATION && ep->ContextRecord != nullptr &&
-             rip == base + 0x1BEA1C5 &&
+             rip == validated_va( 0x141BEA1C5 ) &&
              ep->ExceptionRecord->NumberParameters > 0 &&
              ep->ExceptionRecord->ExceptionInformation[ 0 ] == 0 /* leitura */ )
         {

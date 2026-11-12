@@ -263,11 +263,11 @@ namespace br_carretas
         // something is still on the wheel
         void* truck = prism::offsets::field< void* >( game_actor, prism::offsets::game_actor_truck );
         void* prev_towed = truck != nullptr && readable_ptr( truck )
-            ? prism::offsets::field< void* >( truck, 0x15A8 ) : nullptr;
+            ? prism::offsets::field< void* >( truck, 0x1580 ) : nullptr;
         if ( prev_towed != nullptr && prev_towed != trailer &&
              joint( prev_towed ) != nullptr && truck != nullptr &&
              set_towed_trailer_fn != nullptr &&
-             prism::offsets::field< void* >( truck, 0x15A8 ) == nullptr )
+             prism::offsets::field< void* >( truck, 0x1580 ) == nullptr )
         {
             set_towed_trailer_fn( truck, true, prev_towed );
         }
@@ -568,7 +568,7 @@ namespace br_carretas
                 // attach (ours and the T key's alike)
                 prism::offsets::field< uint32_t >( truck, prism::offsets::truck_coupling_state ) = 0;
                 if ( set_towed_trailer_fn != nullptr &&
-                    prism::offsets::field< void* >( truck, 0x15A8 ) == trailer )
+                    prism::offsets::field< void* >( truck, 0x1580 ) == trailer )
                 {
                     set_towed_trailer_fn( truck, true, nullptr );
                 }
@@ -584,11 +584,11 @@ namespace br_carretas
         // the native detach lowers the landing gear with its crank anim -
         // the replica plays the sound already; the anim drives the physical
         // gear state on models that have the brace_model_anim node. Rewind
-        // the progress field first (+0x1270) so the anim player actually runs
+        // the progress field first (+0x1240) so the anim player actually runs
         // the wind-down instead of snapping
         if ( brace_anim_fn != nullptr )
         {
-            prism::offsets::field< float >( trailer, 0x1270 ) = 1.f;
+            prism::offsets::field< float >( trailer, 0x1240 ) = 1.f;
             brace_anim_fn( trailer, 1, 1.f / 3.f );
         }
         // give the freshly detached trailer the NATIVE parked registration -
@@ -670,7 +670,7 @@ namespace br_carretas
                 if ( truck != nullptr )
                 {
                     if ( set_towed_trailer_fn != nullptr &&
-                         prism::offsets::field< void* >( truck, 0x15A8 ) != trailer )
+                         prism::offsets::field< void* >( truck, 0x1580 ) != trailer )
                     {
                         set_towed_trailer_fn( truck, true, trailer );
                     }
@@ -1524,7 +1524,7 @@ namespace br_carretas
         void* truck = self != nullptr
             ? prism::offsets::field< void* >( self, prism::offsets::game_actor_truck ) : nullptr;
         void* towed = truck != nullptr && readable_ptr( truck )
-            ? prism::offsets::field< void* >( truck, 0x15A8 ) : nullptr;
+            ? prism::offsets::field< void* >( truck, 0x1580 ) : nullptr;
         if ( towed != nullptr && joint( towed ) != nullptr )
         {
             prism::offsets::field< void* >( self, prism::offsets::game_actor_trailer ) = towed;
@@ -1610,7 +1610,7 @@ namespace br_carretas
         // the trailer-of-interest again, so the T key attaches it like the
         // game's own head
         if ( truck != nullptr && readable_ptr( truck ) &&
-            prism::offsets::field< void* >( truck, 0x15A8 ) == nullptr &&
+            prism::offsets::field< void* >( truck, 0x1580 ) == nullptr &&
             canon[ 0 ] != nullptr && readable_ptr( canon[ 0 ] ) && joint( canon[ 0 ] ) == nullptr )
         {
             prism::offsets::field< void* >( self, prism::offsets::game_actor_trailer ) = canon[ 0 ];
@@ -1851,21 +1851,24 @@ namespace br_carretas
     bool resolve_native_fns()
     {
         if ( !expected_build() ) return false;
-        const auto set_towed_address = memory::get_address_for_pattern( "48 89 5c 24 08 48 89 6c 24 10 48 89 74 24 18 57 48 81 ec 80 00 00 00 48 8b f1 49 8b d8 48 8b 89 a8 15" );
-        const auto clear_detached_address = memory::get_address_for_pattern( "40 57 41 56 48 83 ec 58 44 0f b6 f2 48 8b f9 3a 91 8d 0e 00 00 75" );
-        const auto rebuild_lines_address = memory::get_address_for_pattern( "48 89 5c 24 08 48 89 74 24 10 57 48 83 ec 40 48 8b fa 48 8b f1 e8 ? ? ? ? 48 8b ce e8 ? ? ? ? 48 8d 8e c0 0e 00 00 e8" );
+        // 1.62 reorganized these five functions (the old byte signatures no
+        // longer match); they are fixed-validated addresses now
+        const auto set_towed_address = validated_va( 0x140642080 );
+        const auto clear_detached_address = validated_va( 0x140874010 );
+        const auto rebuild_lines_address = validated_va( 0x1408663F0 );
         const auto distribute_mass_address = memory::get_address_for_pattern( "48 89 6c 24 18 57 48 83 ec 50 0f 29 74 24 40 48 8b f9 0f 57" );
         const auto refresh_lift_address = memory::get_address_for_pattern( "48 8b 91 c8 00 00 00 45 32 c0 48 85 d2 74 2c 4c 8b 8a c8 06" );
-        const auto exec_line_address = memory::get_address_for_pattern( "40 55 41 54 41 55 48 8d ac 24 00 f4 ff ff 48 81 ec 00 0d 00 00 44 8b ea 4c 8b e1" );
+        // 1.62 rebuilt the console executor prologue (a leading home-slot
+        // store) - fixed-validated address now
+        const auto exec_line_address = validated_va( 0x1401E7F80 );
         // the decoupled-state component notify + the truck-side joint release,
         // both from the native T detach flow
-        const auto notify_decoupled_address = memory::get_address_for_pattern( "48 83 ec 48 80 b9 8e 0e 00 00 00 0f 84" );
-        const auto pre_detach_address = memory::get_address_for_pattern( "48 85 d2 0f 84 ? ? ? ? 48 89 5c 24 08 57 48 83 ec 20 48 8b d9 48 8b fa 48 8b 8a e0 0f 00 00" );
+        const auto notify_decoupled_address = validated_va( 0x1408633D0 );
+        const auto pre_detach_address = validated_va( 0x140864160 );
         // accessory event refresh the native attach/detach fire on the trailer:
         // without it the parked trailer's traffic-obstacle anchor stays broken
         // and the traffic lane-modifier sweep dereferences a null owner
-        const auto refresh_accessories_address = memory::get_address_for_pattern(
-            "48 89 5c 24 08 48 89 74 24 10 57 48 83 ec 40 48 8b fa 48 8b f1 e8 ? ? ? ? 48 8b ce e8 ? ? ? ? 48 8d 8e c0 0e 00 00 e8" );
+        const auto refresh_accessories_address = validated_va( 0x1408663F0 );
         if ( notify_decoupled_address != 0 ) notify_decoupled_fn = reinterpret_cast< prism::vehicle_notify_decoupled_fn* >( notify_decoupled_address );
         if ( pre_detach_address != 0 )
         {
@@ -1883,95 +1886,134 @@ namespace br_carretas
         // the world/vehicle manager singleton + the parked-obstacle anchor
         // registration + the in-game state flag, all read out of the native
         // detach body (fixed image offsets for this build)
-        get_cvar_float_fn = reinterpret_cast< prism::cvar_get_float_fn* >( memory::get_address_from_offset( 0x1401DB560 ) );
-        g_traffic_cvar = reinterpret_cast< void* >( memory::get_address_from_offset( 0x142D45500 ) );
-        traffic_manager_global = reinterpret_cast< void** >( memory::get_address_from_offset( 0x1436AF7C8 ) );
-        relink_anchors_fn = reinterpret_cast< anchor_relink_fn* >( memory::get_address_from_offset( 0x140623C90 ) );
-        traffic_game_state = reinterpret_cast< uint32_t* >( memory::get_address_from_offset( 0x143051820 ) );
+        get_cvar_float_fn = reinterpret_cast< prism::cvar_get_float_fn* >( validated_va( 0x1401DB560 ) );
+        g_traffic_cvar = reinterpret_cast< void* >( validated_va( 0x142D45500 ) );
+        traffic_manager_global = reinterpret_cast< void** >( validated_va( 0x1436AF7C8 ) );
+        relink_anchors_fn = reinterpret_cast< anchor_relink_fn* >( validated_va( 0x140623C90 ) );
+        traffic_game_state = reinterpret_cast< uint32_t* >( validated_va( 0x143051820 ) );
 
         // the remaining native attach/detach calls (see declarations above)
-        trailer_settle_fn_ptr = reinterpret_cast< trailer_settle_fn* >( memory::get_address_from_offset( 0x1409FB700 ) );
-        pair_vehicles_fn = reinterpret_cast< vehicle_pair_fn* >( memory::get_address_from_offset( 0x1408771A0 ) );
-        apply_cables_fn = reinterpret_cast< vehicle_cables_fn* >( memory::get_address_from_offset( 0x1408762E0 ) );
+        trailer_settle_fn_ptr = reinterpret_cast< trailer_settle_fn* >( validated_va( 0x1409FB700 ) );
+        pair_vehicles_fn = reinterpret_cast< vehicle_pair_fn* >( validated_va( 0x1408771A0 ) );
+        apply_cables_fn = reinterpret_cast< vehicle_cables_fn* >( validated_va( 0x1408762E0 ) );
         // the native line-state setter + the parked-record factory/manager,
         // all signature-verified fixed offsets for this build
-        set_lines_fn = reinterpret_cast< line_state_fn* >( memory::get_address_from_offset( 0x140874010 ) );
-        parked_record_factory = reinterpret_cast< parked_record_factory_fn* >( memory::get_address_from_offset( 0x1407B69E0 ) );
-        parked_record_mgr = reinterpret_cast< void** >( memory::get_address_from_offset( 0x1436AF828 ) );
-        apply_cables_hook = CCore::g_instance->get_hooks_manager()->register_function_hook(
-            "apply_cables", memory::get_address_from_offset( 0x1408762E0 ),
-            reinterpret_cast< uint64_t >( &hk_apply_cables ) );
-        if ( apply_cables_hook != nullptr )
+        set_lines_fn = reinterpret_cast< line_state_fn* >( validated_va( 0x140874010 ) );
+        parked_record_factory = reinterpret_cast< parked_record_factory_fn* >( validated_va( 0x1407B69E0 ) );
+        parked_record_mgr = reinterpret_cast< void** >( validated_va( 0x1436AF828 ) );
+        if ( const auto addr = validated_va( 0x1408762E0 ) )
         {
-            apply_cables_hook->hook();
+            apply_cables_hook = CCore::g_instance->get_hooks_manager()->register_function_hook(
+                "apply_cables", addr,
+                reinterpret_cast< uint64_t >( &hk_apply_cables ) );
+            if ( apply_cables_hook != nullptr )
+            {
+                apply_cables_hook->hook();
+            }
         }
         // the line-state setter - refuse a hide aimed at a trailer whose
         // front joint is still bolted (the detach cascade)
-        set_lines_hook = CCore::g_instance->get_hooks_manager()->register_function_hook(
-            "set_lines", memory::get_address_from_offset( 0x140874010 ),
-            reinterpret_cast< uint64_t >( &hk_set_lines ) );
-        if ( set_lines_hook != nullptr )
+        if ( const auto addr = validated_va( 0x140874010 ) )
         {
-            set_lines_hook->hook();
+            set_lines_hook = CCore::g_instance->get_hooks_manager()->register_function_hook(
+                "set_lines", addr,
+                reinterpret_cast< uint64_t >( &hk_set_lines ) );
+            if ( set_lines_hook != nullptr )
+            {
+                set_lines_hook->hook();
+            }
         }
-        actor_flag_fixup_fn = reinterpret_cast< actor_flag_fixup* >( memory::get_address_from_offset( 0x1405DCBC0 ) );
-        native_attach_fn = reinterpret_cast< native_attach_dispatch_fn* >( memory::get_address_from_offset( 0x1405DCC20 ) );
-        detach_dispatch_hook = CCore::g_instance->get_hooks_manager()->register_function_hook(
-            "native_detach_dispatch", memory::get_address_from_offset( 0x1405DD410 ),
-            reinterpret_cast< uint64_t >( &hk_detach_dispatch ) );
-        if ( detach_dispatch_hook != nullptr )
+        // the per-frame hose geometry updater - hide the claim links during
+        // its walk so detached pieces' hoses stay cut
+        if ( const auto addr = validated_va( 0x1408653A0 ) )
         {
-            detach_dispatch_hook->hook();
+            hose_update_hook = CCore::g_instance->get_hooks_manager()->register_function_hook(
+                "hose_update", addr,
+                reinterpret_cast< uint64_t >( &hk_hose_update ) );
+            if ( hose_update_hook != nullptr )
+            {
+                hose_update_hook->hook();
+            }
+        }
+        actor_flag_fixup_fn = reinterpret_cast< actor_flag_fixup* >( validated_va( 0x1405DCBC0 ) );
+        native_attach_fn = reinterpret_cast< native_attach_dispatch_fn* >( validated_va( 0x1405DCC20 ) );
+        if ( const auto addr = validated_va( 0x1405DD410 ) )
+        {
+            detach_dispatch_hook = CCore::g_instance->get_hooks_manager()->register_function_hook(
+                "native_detach_dispatch", addr,
+                reinterpret_cast< uint64_t >( &hk_detach_dispatch ) );
+            if ( detach_dispatch_hook != nullptr )
+            {
+                detach_dispatch_hook->hook();
+            }
         }
         // the attach dispatcher + the trailer-state apply: the two funnels
         // every native re-join/reposition of a trailer goes through - hooked
         // so a plugin-detached trailer survives cargo load/unload untouched
-        attach_dispatch_hook = CCore::g_instance->get_hooks_manager()->register_function_hook(
-            "native_attach_dispatch", memory::get_address_from_offset( 0x1405DCC20 ),
-            reinterpret_cast< uint64_t >( &hk_attach_dispatch ) );
-        if ( attach_dispatch_hook != nullptr )
+        if ( const auto addr = validated_va( 0x1405DCC20 ) )
         {
-            attach_dispatch_hook->hook();
+            attach_dispatch_hook = CCore::g_instance->get_hooks_manager()->register_function_hook(
+                "native_attach_dispatch", addr,
+                reinterpret_cast< uint64_t >( &hk_attach_dispatch ) );
+            if ( attach_dispatch_hook != nullptr )
+            {
+                attach_dispatch_hook->hook();
+            }
         }
-        trailer_state_apply_hook = CCore::g_instance->get_hooks_manager()->register_function_hook(
-            "trailer_state_apply", memory::get_address_from_offset( 0x1405E14D1 ),
-            reinterpret_cast< uint64_t >( &hk_trailer_state_apply ) );
-        if ( trailer_state_apply_hook != nullptr )
+        if ( const auto addr = validated_va( 0x1405E14D1 ) )
         {
-            trailer_state_apply_hook->hook();
+            trailer_state_apply_hook = CCore::g_instance->get_hooks_manager()->register_function_hook(
+                "trailer_state_apply", addr,
+                reinterpret_cast< uint64_t >( &hk_trailer_state_apply ) );
+            if ( trailer_state_apply_hook != nullptr )
+            {
+                trailer_state_apply_hook->hook();
+            }
         }
-        trailer_teleport_hook = CCore::g_instance->get_hooks_manager()->register_function_hook(
-            "trailer_teleport", memory::get_address_from_offset( 0x140786320 ),
-            reinterpret_cast< uint64_t >( &hk_trailer_teleport ) );
-        if ( trailer_teleport_hook != nullptr )
+        if ( const auto addr = validated_va( 0x140786320 ) )
         {
-            trailer_teleport_hook->hook();
+            trailer_teleport_hook = CCore::g_instance->get_hooks_manager()->register_function_hook(
+                "trailer_teleport", addr,
+                reinterpret_cast< uint64_t >( &hk_trailer_teleport ) );
+            if ( trailer_teleport_hook != nullptr )
+            {
+                trailer_teleport_hook->hook();
+            }
         }
-        actor_teleport_hook = CCore::g_instance->get_hooks_manager()->register_function_hook(
-            "actor_teleport", memory::get_address_from_offset( 0x1405DE1E0 ),
-            reinterpret_cast< uint64_t >( &hk_actor_teleport ) );
-        if ( actor_teleport_hook != nullptr )
+        if ( const auto addr = validated_va( 0x1405DE1E0 ) )
         {
-            actor_teleport_hook->hook();
+            actor_teleport_hook = CCore::g_instance->get_hooks_manager()->register_function_hook(
+                "actor_teleport", addr,
+                reinterpret_cast< uint64_t >( &hk_actor_teleport ) );
+            if ( actor_teleport_hook != nullptr )
+            {
+                actor_teleport_hook->hook();
+            }
         }
         // chase-camera anchor setter (base vfunc 31): the resolver picks the
         // chain-end trailer, jointless ones included - redirect inside the
         // setter so the native flow anchors the last JOINTED trailer
-        cam_set_target_hook = CCore::g_instance->get_hooks_manager()->register_function_hook(
-            "cam_set_target", memory::get_address_from_offset( 0x14063C2D0 ),
-            reinterpret_cast< uint64_t >( &hk_cam_set_target ) );
-        if ( cam_set_target_hook != nullptr )
+        if ( const auto addr = validated_va( 0x14063C2D0 ) )
         {
-            cam_set_target_hook->hook();
+            cam_set_target_hook = CCore::g_instance->get_hooks_manager()->register_function_hook(
+                "cam_set_target", addr,
+                reinterpret_cast< uint64_t >( &hk_cam_set_target ) );
+            if ( cam_set_target_hook != nullptr )
+            {
+                cam_set_target_hook->hook();
+            }
         }
         // lane-obstacle insert: dead array entries (owner-node cleared without
         // removal) crash the traffic worker - sanitize before the original
-        lane_obstacle_insert_hook = CCore::g_instance->get_hooks_manager()->register_function_hook(
-            "lane_obstacle_insert", memory::get_address_from_offset( 0x14094DFC0 ),
-            reinterpret_cast< uint64_t >( &hk_lane_obstacle_insert ) );
-        if ( lane_obstacle_insert_hook != nullptr )
+        if ( const auto addr = validated_va( 0x14094DFC0 ) )
         {
-            lane_obstacle_insert_hook->hook();
+            lane_obstacle_insert_hook = CCore::g_instance->get_hooks_manager()->register_function_hook(
+                "lane_obstacle_insert", addr,
+                reinterpret_cast< uint64_t >( &hk_lane_obstacle_insert ) );
+            if ( lane_obstacle_insert_hook != nullptr )
+            {
+                lane_obstacle_insert_hook->hook();
+            }
         }
         // chain-length accumulator: the reimplementation stops the walk at
         // the first jointless (detached) trailer so every consumer - camera 2
@@ -1979,119 +2021,152 @@ namespace br_carretas
         // query it calls is resolved separately; if it fails to resolve the
         // hook falls back to the untouched original.
         combo_hook_pos_fn_ptr = reinterpret_cast< combo_hook_pos_fn* >(
-            memory::get_address_from_offset( 0x140789880 ) );
-        combo_length_hook = CCore::g_instance->get_hooks_manager()->register_function_hook(
-            "combo_length", memory::get_address_from_offset( 0x140789AB0 ),
-            reinterpret_cast< uint64_t >( &hk_combo_length ) );
-        if ( combo_length_hook != nullptr )
+            validated_va( 0x140789880 ) );
+        if ( const auto addr = validated_va( 0x140789AB0 ) )
         {
-            combo_length_hook->hook();
+            combo_length_hook = CCore::g_instance->get_hooks_manager()->register_function_hook(
+                "combo_length", addr,
+                reinterpret_cast< uint64_t >( &hk_combo_length ) );
+            if ( combo_length_hook != nullptr )
+            {
+                combo_length_hook->hook();
+            }
         }
         // purecall handler: dead listener nodes on detached trailers call
         // through pure vfunc slots - swallow every one of them, process-wide
         init_purecall_fake();
-        purecall_hook = CCore::g_instance->get_hooks_manager()->register_function_hook(
-            "purecall", memory::get_address_from_offset( 0x141D23610 ),
-            reinterpret_cast< uint64_t >( &hk_purecall ) );
-        if ( purecall_hook != nullptr )
+        if ( const auto addr = validated_va( 0x141D23610 ) )
         {
-            purecall_hook->hook();
-            install_crash_tracer();
+            purecall_hook = CCore::g_instance->get_hooks_manager()->register_function_hook(
+                "purecall", addr,
+                reinterpret_cast< uint64_t >( &hk_purecall ) );
+            if ( purecall_hook != nullptr )
+            {
+                purecall_hook->hook();
+                install_crash_tracer();
+            }
         }
         // trailer vfunc_disconnect impl - the single funnel every teardown
         // (T dispatcher, sim-thread section teardown, our vcall) passes
         // through; the detour sanitizes the slave chain it is about to walk
-        trailer_disconnect_hook = CCore::g_instance->get_hooks_manager()->register_function_hook(
-            "trailer_disconnect", memory::get_address_from_offset( 0x140789C20 ),
-            reinterpret_cast< uint64_t >( &hk_trailer_disconnect ) );
-        if ( trailer_disconnect_hook != nullptr )
+        if ( const auto addr = validated_va( 0x140789C20 ) )
         {
-            trailer_disconnect_hook->hook();
+            trailer_disconnect_hook = CCore::g_instance->get_hooks_manager()->register_function_hook(
+                "trailer_disconnect", addr,
+                reinterpret_cast< uint64_t >( &hk_trailer_disconnect ) );
+            if ( trailer_disconnect_hook != nullptr )
+            {
+                trailer_disconnect_hook->hook();
+            }
         }
         // vfunc_connect has TWO impls across the trailer-class vtables -
         // the dolly uses a different class than the box trailers, so both
         // get the same claim-severing detour
-        trailer_connect_hook = CCore::g_instance->get_hooks_manager()->register_function_hook(
-            "trailer_connect_a", memory::get_address_from_offset( 0x140639090 ),
-            reinterpret_cast< uint64_t >( &hk_trailer_connect_a ) );
-        if ( trailer_connect_hook != nullptr )
+        if ( const auto addr = validated_va( 0x140639090 ) )
         {
-            trailer_connect_hook->hook();
+            trailer_connect_hook = CCore::g_instance->get_hooks_manager()->register_function_hook(
+                "trailer_connect_a", addr,
+                reinterpret_cast< uint64_t >( &hk_trailer_connect_a ) );
+            if ( trailer_connect_hook != nullptr )
+            {
+                trailer_connect_hook->hook();
+            }
         }
-        trailer_connect_hook2 = CCore::g_instance->get_hooks_manager()->register_function_hook(
-            "trailer_connect_b", memory::get_address_from_offset( 0x1407890A0 ),
-            reinterpret_cast< uint64_t >( &hk_trailer_connect_b ) );
-        if ( trailer_connect_hook2 != nullptr )
+        if ( const auto addr = validated_va( 0x1407890A0 ) )
         {
-            trailer_connect_hook2->hook();
+            trailer_connect_hook2 = CCore::g_instance->get_hooks_manager()->register_function_hook(
+                "trailer_connect_b", addr,
+                reinterpret_cast< uint64_t >( &hk_trailer_connect_b ) );
+            if ( trailer_connect_hook2 != nullptr )
+            {
+                trailer_connect_hook2->hook();
+            }
         }
         // lamp-mask setter: keeps parked trailers electrically dark while
         // they stay claimed in the attach tree for visibility
-        lamp_mask_hook = CCore::g_instance->get_hooks_manager()->register_function_hook(
-            "lamp_mask", memory::get_address_from_offset( 0x1409DB4B0 ),
-            reinterpret_cast< uint64_t >( &hk_lamp_mask ) );
-        if ( lamp_mask_hook != nullptr )
+        if ( const auto addr = validated_va( 0x1409DB4B0 ) )
         {
-            lamp_mask_hook->hook();
+            lamp_mask_hook = CCore::g_instance->get_hooks_manager()->register_function_hook(
+                "lamp_mask", addr,
+                reinterpret_cast< uint64_t >( &hk_lamp_mask ) );
+            if ( lamp_mask_hook != nullptr )
+            {
+                lamp_mask_hook->hook();
+            }
         }
-        trailer_dtor_hook = CCore::g_instance->get_hooks_manager()->register_function_hook(
-            "trailer_dtor", memory::get_address_from_offset( 0x1406359E0 ),
-            reinterpret_cast< uint64_t >( &hk_trailer_dtor ) );
-        if ( trailer_dtor_hook != nullptr )
+        if ( const auto addr = validated_va( 0x1406359E0 ) )
         {
-            trailer_dtor_hook->hook();
+            trailer_dtor_hook = CCore::g_instance->get_hooks_manager()->register_function_hook(
+                "trailer_dtor", addr,
+                reinterpret_cast< uint64_t >( &hk_trailer_dtor ) );
+            if ( trailer_dtor_hook != nullptr )
+            {
+                trailer_dtor_hook->hook();
+            }
         }
         // the propagator's raw +0x2A0 stores bypass the mask setter - the
         // detached-trailer cut has to live here too or the pin loses the
         // per-tick race
-        lamp_propagate_hook = CCore::g_instance->get_hooks_manager()->register_function_hook(
-            "lamp_propagate", memory::get_address_from_offset( 0x140790DC0 ),
-            reinterpret_cast< uint64_t >( &hk_lamp_propagate ) );
-        if ( lamp_propagate_hook != nullptr )
+        if ( const auto addr = validated_va( 0x140790DC0 ) )
         {
-            lamp_propagate_hook->hook();
+            lamp_propagate_hook = CCore::g_instance->get_hooks_manager()->register_function_hook(
+                "lamp_propagate", addr,
+                reinterpret_cast< uint64_t >( &hk_lamp_propagate ) );
+            if ( lamp_propagate_hook != nullptr )
+            {
+                lamp_propagate_hook->hook();
+            }
         }
         // joint-tree recursion guard: the accumulator walks node+0x68 chains
         // via a self-recursive vfunc - a cyclic graph overflows the stack
         // instantly (0xC00000FD). The detour returns early on a revisit
-        joint_walk_hook = CCore::g_instance->get_hooks_manager()->register_function_hook(
-            "joint_walk", memory::get_address_from_offset( 0x1409555F0 ),
-            reinterpret_cast< uint64_t >( &hk_joint_walk ) );
-        if ( joint_walk_hook != nullptr )
+        if ( const auto addr = validated_va( 0x1409555F0 ) )
         {
-            joint_walk_hook->hook();
+            joint_walk_hook = CCore::g_instance->get_hooks_manager()->register_function_hook(
+                "joint_walk", addr,
+                reinterpret_cast< uint64_t >( &hk_joint_walk ) );
+            if ( joint_walk_hook != nullptr )
+            {
+                joint_walk_hook->hook();
+            }
         }
         // bidirectional joint link - refuses only the edge that would
         // close a +0x60/+0x68 cycle (find_root has no guard and hangs)
-        phys_link_hook = CCore::g_instance->get_hooks_manager()->register_function_hook(
-            "phys_link", memory::get_address_from_offset( 0x140919680 ),
-            reinterpret_cast< uint64_t >( &hk_phys_link ) );
-        if ( phys_link_hook != nullptr )
+        if ( const auto addr = validated_va( 0x140919680 ) )
         {
-            phys_link_hook->hook();
+            phys_link_hook = CCore::g_instance->get_hooks_manager()->register_function_hook(
+                "phys_link", addr,
+                reinterpret_cast< uint64_t >( &hk_phys_link ) );
+            if ( phys_link_hook != nullptr )
+            {
+                phys_link_hook->hook();
+            }
         }
         // chase-camera update (vfunc 32): the camera's own chain walk follows
         // trailer_slave without checking joints - hide live->dead links for
         // the call so it measures the live combination only
-        cam_update_hook = CCore::g_instance->get_hooks_manager()->register_function_hook(
-            "cam_update", memory::get_address_from_offset( 0x140AC75A0 ),
-            reinterpret_cast< uint64_t >( &hk_cam_update ) );
-        if ( cam_update_hook != nullptr )
+        if ( const auto addr = validated_va( 0x140AC75A0 ) )
         {
-            cam_update_hook->hook();
+            cam_update_hook = CCore::g_instance->get_hooks_manager()->register_function_hook(
+                "cam_update", addr,
+                reinterpret_cast< uint64_t >( &hk_cam_update ) );
+            if ( cam_update_hook != nullptr )
+            {
+                cam_update_hook->hook();
+            }
         }
-        get_cvar_int_fn = reinterpret_cast< cvar_get_int_fn* >( memory::get_address_from_offset( 0x1401CBE10 ) );
-        cables_mode_cvar = reinterpret_cast< void* >( memory::get_address_from_offset( 0x142D485C0 ) );
-        attach_settle_cvar = reinterpret_cast< void* >( memory::get_address_from_offset( 0x142D48200 ) );
+        get_cvar_int_fn = reinterpret_cast< cvar_get_int_fn* >( validated_va( 0x1401CBE10 ) );
+        cables_mode_cvar = reinterpret_cast< void* >( validated_va( 0x142D485C0 ) );
+        attach_settle_cvar = reinterpret_cast< void* >( validated_va( 0x142D48200 ) );
 
         // the coupling/decoupling event poster + its const param block and the
         // two token strings, all fixed image offsets read out of the native
         // attach/detach call sites
-        post_event_fn_ptr = reinterpret_cast< post_event_fn* >( memory::get_address_from_offset( 0x140623DA0 ) );
-        event_param_block = reinterpret_cast< void* >( memory::get_address_from_offset( 0x142733198 ) );
-        event_name_coupling = reinterpret_cast< const char* >( memory::get_address_from_offset( 0x14226E368 ) );
-        event_name_decoupling = reinterpret_cast< const char* >( memory::get_address_from_offset( 0x14226E4B0 ) );
-        brace_anim_fn = reinterpret_cast< trailer_brace_anim_fn* >( memory::get_address_from_offset( 0x140636F50 ) );
+        post_event_fn_ptr = reinterpret_cast< post_event_fn* >( validated_va( 0x140623DA0 ) );
+        event_param_block = reinterpret_cast< void* >( validated_va( 0x142733198 ) );
+        event_name_coupling = reinterpret_cast< const char* >( validated_va( 0x14226E368 ) );
+        event_name_decoupling = reinterpret_cast< const char* >( validated_va( 0x14226E4B0 ) );
+        brace_anim_fn = reinterpret_cast< trailer_brace_anim_fn* >( validated_va( 0x140636F50 ) );
 
         if ( exec_line_address != 0 )
         {
@@ -2201,7 +2276,7 @@ namespace br_carretas
         get_slave_hook_position_fn = reinterpret_cast< prism::physics_trailer_u_get_slave_hook_position_fn* >(
             connect_slave_address + 29 + *reinterpret_cast< int32_t* >( connect_slave_address + 29 ) + 4 );
 
-        resolve_native_fns();
+        const bool natives_ok = resolve_native_fns();
         brake_register_hooks(); // trailer_brake.cpp
 
         crashes_when_disconnected_hook = CCore::g_instance->get_hooks_manager()->register_function_hook(
@@ -2214,7 +2289,7 @@ namespace br_carretas
             connect_slave_address,
             reinterpret_cast< uint64_t >( &hk_connect_slave ) );
 
-        if ( !CCore::g_instance->is_truckersmp() &&
+        if ( !CCore::g_instance->is_truckersmp() && natives_ok &&
             crashes_when_disconnected_hook->hook() == CHook::HOOKED &&
             connect_slave_hook->hook() == CHook::HOOKED )
         {

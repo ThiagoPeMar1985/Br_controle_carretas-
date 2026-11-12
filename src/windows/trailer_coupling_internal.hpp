@@ -150,6 +150,7 @@ namespace br_carretas
     void hk_lamp_propagate( void*, uint32_t );
     void hk_apply_cables( void*, void*, int, int, int );
     void hk_set_lines( void*, uint8_t, uint8_t );
+    void hk_hose_update( void*, void* );
     void hk_rebuild_lines( void*, void* );
     void hk_trailer_state_apply( void* );
     void hk_trailer_teleport( void*, void* );

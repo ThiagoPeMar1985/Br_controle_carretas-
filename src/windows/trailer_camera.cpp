@@ -81,8 +81,8 @@ namespace br_carretas
                 ? prism::offsets::field< void* >( ga, prism::offsets::game_actor_truck )
                 : nullptr;
             void* towed = truck != nullptr &&
-                readable_ptr( static_cast< uint8_t* >( truck ) + 0x15A8 )
-                ? prism::offsets::field< void* >( truck, 0x15A8 ) : nullptr;
+                readable_ptr( static_cast< uint8_t* >( truck ) + 0x1580 )
+                ? prism::offsets::field< void* >( truck, 0x1580 ) : nullptr;
             if ( towed != nullptr && readable_ptr( towed ) &&
                  readable_ptr( static_cast< uint8_t* >( towed ) + prism::offsets::trailer_physics_joint ) &&
                  joint( towed ) != nullptr )
@@ -201,15 +201,17 @@ namespace br_carretas
         return acc;
     }
     // the chase camera object lives in the camera-manager slot array; find it
-    // by its vehicle_behind_rotation_camera vtable (exe+0x23126F0)
+    // by its vehicle_behind_rotation_camera vtable
     void* chase_camera_obj()
     {
         if ( !expected_build() ) return nullptr;
         if ( chase_camera != nullptr ) return chase_camera;
-        const auto base = reinterpret_cast< uint64_t >( GetModuleHandle( nullptr ) );
-        auto* manager = *reinterpret_cast< void** >( base + 0x36AF830 );
+        const auto mgr_va = validated_va( 0x1436AF830 );
+        const auto vtbl_va = validated_va( 0x1423126F0 );
+        if ( mgr_va == 0 || vtbl_va == 0 ) return nullptr;
+        auto* manager = *reinterpret_cast< void** >( mgr_va );
         if ( !readable_ptr( manager ) ) return nullptr;   // plain struct, no vtable
-        const auto chase_vtbl = reinterpret_cast< void* >( base + 0x23126F0 );
+        const auto chase_vtbl = reinterpret_cast< void* >( vtbl_va );
         auto is_chase = [ & ]( void* p )
         {
             return p != nullptr && readable_ptr( p ) &&
@@ -263,7 +265,7 @@ namespace br_carretas
     }
     // per-frame: while a trailer is detached the chase camera anchors on the
     // HEAD OF THE LIVE CHAIN - the trailer physically on the fifth wheel
-    // (truck+0x15A8). Detaching a TAIL trailer does not change the head:
+    // (truck+0x1580). Detaching a TAIL trailer does not change the head:
     // trailer 0 stays the anchor and the camera keeps measuring the live
     // combination through hk_combo_length (which stops at the first dead
     // joint). Only when the truck tows NOTHING does the anchor go null -
@@ -331,7 +333,7 @@ namespace br_carretas
 
         // desired anchor = the trailer JOINTED TO THE TRUCK - the head of
         // the live chain. A trailer still jointed to a PARKED parent must
-        // not count: truck+0x15A8 is authoritative. The camera measures the
+        // not count: truck+0x1580 is authoritative. The camera measures the
         // combination by walking trailer_slave FROM the anchor and
         // hk_combo_length stops at the first dead joint, so it parks behind
         // the last attached trailer. Null = native solo state
@@ -343,7 +345,7 @@ namespace br_carretas
                 : nullptr;
             if ( truck != nullptr && readable_ptr( truck ) )
             {
-                chain_head = prism::offsets::field< void* >( truck, 0x15A8 );
+                chain_head = prism::offsets::field< void* >( truck, 0x1580 );
                 // fallback: first trailer whose parent IS the truck, in case
                 // the towed pointer lags a frame behind the joint
                 if ( chain_head == nullptr )

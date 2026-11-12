@@ -2,23 +2,28 @@
 #include <cstdint>
 
 // Field offsets for the trailer connect/disconnect feature, re-derived for game
-// version 1.61.1.9 (ETS2 and ATS share them). The structs in prism/ still describe
+// version 1.62.2.1 (ETS2 and ATS share them). The structs in prism/ still describe
 // the 1.53-era layout and are NOT valid for these fields anymore, so read them
 // through here instead.
 //
-// 1.61.1.9 added 0x28 bytes to the trailer object ahead of these fields, so every
-// offset past that point moved from the 1.61.1.1 values (slave 0x1060 -> 0x1088).
-// game_actor itself is unchanged.
+// 1.62 moved the tail of the trailer object 0x30 bytes DOWN from the 1.61.1.9
+// values (slave 0x1088 -> 0x1058); every field below +0xE5D kept its 1.61.1.9
+// offset. The truck physics object tail moved 0x28 down (towed 0x15A8 -> 0x1580)
+// and game_actor gained 4 bytes ahead of the lift-state byte (0x248 -> 0x24C).
+// game_actor truck/trailer pointers (0x18/0xC8) are unchanged.
 //
 // How each was found (offline, from the exe):
-//  - slave trailer: prism::physics_trailer_u::connect_slave tests +0x1088 against null
+//  - slave trailer: physics_trailer_u::connect_slave (1.62: 0x140775000) tests
+//    +0x1058 against null
+//  - joint/parent/lamp: the shared vfunc-99 disconnect impl (1.62: 0x140775240)
+//    releases +0xFB0, zeroes +0x2A0 walking +0x1058 and clears +0x1050
 //  - first trailer: the `cheat repair` handler walks game_actor +0x18 (truck) and +0xC8
 namespace br_carretas::prism::offsets
 {
     constexpr uint32_t game_actor_truck = 0x0018; // game_physics_vehicle_u*, the player's truck
     constexpr uint32_t game_actor_trailer = 0x00C8; // game_trailer_actor_u*, first trailer
-    constexpr uint32_t trailer_parent = 0x1080; // game_trailer_actor_u*, previous trailer in the chain
-    constexpr uint32_t trailer_slave = 0x1088; // game_trailer_actor_u*, next trailer in the chain
+    constexpr uint32_t trailer_parent = 0x1050; // game_trailer_actor_u*, previous trailer in the chain
+    constexpr uint32_t trailer_slave = 0x1058; // game_trailer_actor_u*, next trailer in the chain
 
     // Trailer steering (1.61.1.9): physics_trailer_u::steering_advance stores the
     // computed angle to +0x6B8 and passes the pointer at +0x6C0 to
@@ -32,7 +37,7 @@ namespace br_carretas::prism::offsets
     // lowering the brace. hook_locator is the vehicle's own coupling point in local
     // space; chassis+0x740 is the rear hook position on the chassis data object
     // (truck+0x200). All verified in the native attach/detach code.
-    constexpr uint32_t trailer_physics_joint = 0x0FE0; // physics_joint_physx_t*, null while detached
+    constexpr uint32_t trailer_physics_joint = 0x0FB0; // physics_joint_physx_t*, null while detached
     constexpr uint32_t vehicle_hook_locator = 0x0464; // float3_t
     constexpr uint32_t vehicle_chassis_data = 0x0200; // chassis data object
     constexpr uint32_t chassis_hook_position = 0x0740; // float3_t
@@ -41,10 +46,10 @@ namespace br_carretas::prism::offsets
     // settles, which keeps its wheels locked like a spring brake. The native attach
     // path clears the byte when trailer_parked_state exists; manual connects must do
     // the same or the trailer drags along braked.
-    constexpr uint32_t trailer_parked_state = 0x1188; // object*, non-null while the parked state is tracked
-    constexpr uint32_t trailer_parked = 0x1198; // byte, 1 = parked/locked, cleared by native attach
-    constexpr uint32_t trailer_parked_registered = 0x1258; // byte, 1 = parked-state record registered; gates the per-frame pose re-assertion
-    constexpr uint32_t trailer_brace_state = 0x1190; // byte, 1 = landing gear down (re-asserted on parked pieces)
+    constexpr uint32_t trailer_parked_state = 0x1158; // object*, non-null while the parked state is tracked
+    constexpr uint32_t trailer_parked = 0x1168; // byte, 1 = parked/locked, cleared by native attach
+    constexpr uint32_t trailer_parked_registered = 0x1228; // byte, 1 = parked-state record registered; gates the per-frame pose re-assertion
+    constexpr uint32_t trailer_brace_state = 0x1160; // byte, 1 = landing gear down (re-asserted on parked pieces)
 
     // Lamp feed + light source + hose state, read out of the native lamp
     // bodies: the mask setter (0x1409DB4B0) writes the lamp byte at +0x2A0
@@ -56,14 +61,14 @@ namespace br_carretas::prism::offsets
     // "lines connected" byte the cable builder checks.
     constexpr uint32_t trailer_lamp_mask = 0x02A0; // byte, bit 0 = lamp feed on
     constexpr uint32_t trailer_light_ctx = 0x0110; // light-source context object*, +0x18 = owner vehicle
-    constexpr uint32_t trailer_lines_connected = 0x0E8D; // byte, 1 = hoses drawn
-    constexpr uint32_t trailer_leg_up = 0x1284; // byte, 0 = landing gear down
-    constexpr uint32_t trailer_gear_lever = 0x1000; // byte, 0 = gear handle in "down" position
+    constexpr uint32_t trailer_lines_connected = 0x0E5D; // byte, 1 = hoses drawn
+    constexpr uint32_t trailer_leg_up = 0x1254; // byte, 0 = landing gear down
+    constexpr uint32_t trailer_gear_lever = 0x0FD0; // byte, 0 = gear handle in "down" position
 
     // More fields from the native attach/detach code: connect_slave copies the
     // coupling byte parent->slave and passes the parent's chassis-type check to
     // connect(); trailer_total_mass feeds the towing vehicle's wheel load.
-    constexpr uint32_t vehicle_coupling_flag = 0x0FDB; // byte, propagated parent -> slave on connect
+    constexpr uint32_t vehicle_coupling_flag = 0x0FAB; // byte, propagated parent -> slave on connect
     constexpr uint32_t chassis_slave_hook_type = 0x0628; // dword on chassis data, == 2 marks a slave/dolly hook
     constexpr uint32_t trailer_total_mass = 0x04B8; // float, passed to the parent's wheel-load distribution
 
@@ -85,7 +90,7 @@ namespace br_carretas::prism::offsets
     // The native attach state machine ends at 5; a manual connect must write it
     // or the trailer stays braked and dark.
     // Verified at 0x1405d8c94 (spring-brake loop) and 0x14064b760 (broadcast gate).
-    constexpr uint32_t truck_coupling_state = 0x14E0; // dword, 5 = trailer coupled
+    constexpr uint32_t truck_coupling_state = 0x14B8; // dword, 5 = trailer coupled
 
     // vfunc slots on the vehicle/trailer vtable: connect_slave calls [slave+0x310] on
     // the next trailer, the detach path calls [+0x318] then [+0x328](true), and the
@@ -124,7 +129,7 @@ namespace br_carretas::prism::offsets
     // axles raised. The native lift key toggles the bits so its "is lifted" checks,
     // telemetry and the toggle direction stay consistent; the plugin keeps them in
     // sync when it commands a lift itself.
-    constexpr uint32_t game_actor_lift_state = 0x0248;
+    constexpr uint32_t game_actor_lift_state = 0x024C;
 
     template < typename T >
     T& field( void* object, const uint32_t offset )

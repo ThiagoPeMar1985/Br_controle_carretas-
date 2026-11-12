@@ -143,6 +143,24 @@ namespace br_carretas
                 angle_ui[ i ] = prism::offsets::field< float >( trailers[ i ], prism::offsets::trailer_steering );
             }
         }
+        // capture probe (1.62): dumps the game's own steering angle per
+        // steerable trailer, half-second throttle, only with debug logs on
+        if ( settings::g_settings.debug_logs && trailer_count > 0 )
+        {
+            static float probe_t = 0.f;
+            probe_t += dt;
+            if ( probe_t >= 0.5f )
+            {
+                probe_t = 0.f;
+                for ( uint32_t i = 0; i < trailer_count; ++i )
+                {
+                    if ( trailers[ i ] == nullptr || steering_data( trailers[ i ] ) == nullptr ) continue;
+                    CCore::g_instance->info( "PROBE steer t{} data={:p} angle={:.4f}",
+                        i, static_cast< void* >( steering_data( trailers[ i ] ) ),
+                        prism::offsets::field< float >( trailers[ i ], prism::offsets::trailer_steering ) );
+                }
+            }
+        }
     }
 
     // steerable-axle controls for one oversize trailer: lock toggle, angle

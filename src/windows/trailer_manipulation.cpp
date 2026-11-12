@@ -516,7 +516,7 @@ namespace br_carretas
             cam_truck = prism::offsets::field< void* >( game_actor, prism::offsets::game_actor_truck );
         }
         void* cam_towed = cam_truck != nullptr && readable_ptr( cam_truck )
-            ? prism::offsets::field< void* >( cam_truck, 0x15A8 ) : nullptr;
+            ? prism::offsets::field< void* >( cam_truck, 0x1580 ) : nullptr;
         sig = sig * 1315423911u ^ reinterpret_cast< uintptr_t >( cam_towed );
         if ( cam_towed != nullptr && readable_ptr( cam_towed ) && joint( cam_towed ) != nullptr )
         {
@@ -577,7 +577,7 @@ namespace br_carretas
         pt[ 0 ] = __rdtsc();
         if ( wake && convoy_due )
         {
-            if ( coupling_on )
+            if ( coupling_on && this->connect_valid_ )
             {
                 refresh_trailer_chain();   // trailer_coupling.cpp
             }
@@ -610,7 +610,7 @@ namespace br_carretas
                 };
                 void* nw_truck = cam_truck;
                 native_walk( nw_truck != nullptr && readable_ptr( nw_truck )
-                    ? prism::offsets::field< void* >( nw_truck, 0x15A8 ) : nullptr );
+                    ? prism::offsets::field< void* >( nw_truck, 0x1580 ) : nullptr );
                 if ( auto* game_actor = CCore::g_instance->get_game_actor() )
                 {
                     native_walk( prism::offsets::field< void* >( game_actor, prism::offsets::game_actor_trailer ) );
@@ -618,9 +618,9 @@ namespace br_carretas
             }
         }
         pt[ 1 ] = __rdtsc();
-        if ( coupling_on && convoy_due ) update_convoy_state();     // trailer_coupling.cpp
+        if ( coupling_on && this->connect_valid_ && convoy_due ) update_convoy_state();     // trailer_coupling.cpp
         pt[ 2 ] = __rdtsc();
-        if ( coupling_on && convoy_due ) light_watch_tick();        // trailer_lines.cpp - parked lamp pin
+        if ( coupling_on && this->connect_valid_ && convoy_due ) light_watch_tick();        // trailer_lines.cpp - parked lamp pin
         pt[ 3 ] = __rdtsc();
         if ( wake ) gc_detached_marks();       // trailer_coupling.cpp
         watch_sim_heartbeat();
@@ -633,7 +633,7 @@ namespace br_carretas
         pt[ 5 ] = __rdtsc();
         // cargo respawn watch + rig restore countdown - event-driven like
         // the chain: it only matters when the world just changed
-        if ( wake && coupling_on ) coupling_parked_update();   // trailer_loadstate.cpp
+        if ( wake && coupling_on && this->connect_valid_ ) coupling_parked_update();   // trailer_loadstate.cpp
         pt[ 6 ] = __rdtsc();
         update_hotkeys();                  // trailer_coupling.cpp
         update_steering( ImGui::GetIO().DeltaTime );
@@ -795,7 +795,7 @@ namespace br_carretas
             : nullptr;
         if ( truck == nullptr || !readable_ptr( truck ) ) return;
 
-        void* towed = prism::offsets::field< void* >( truck, 0x15A8 );
+        void* towed = prism::offsets::field< void* >( truck, 0x1580 );
         bool wheel_free = towed == nullptr || !readable_ptr( towed ) || joint( towed ) == nullptr;
         for ( uint32_t n = 0; wheel_free && n < max_trailers; ++n )
         {
@@ -1005,7 +1005,7 @@ namespace br_carretas
         bool wheel_free = truck != nullptr && readable_ptr( truck );
         if ( wheel_free )
         {
-            void* towed = prism::offsets::field< void* >( truck, 0x15A8 );
+            void* towed = prism::offsets::field< void* >( truck, 0x1580 );
             wheel_free = towed == nullptr || !readable_ptr( towed ) || joint( towed ) == nullptr;
             for ( uint32_t n = 0; wheel_free && n < max_trailers; ++n )
             {
@@ -1439,7 +1439,7 @@ namespace br_carretas
         }
         if ( ln == 0 ) return;
         void* towed = truck != nullptr && readable_ptr( truck )
-            ? prism::offsets::field< void* >( truck, 0x15A8 ) : nullptr;
+            ? prism::offsets::field< void* >( truck, 0x1580 ) : nullptr;
         const bool towing = towed != nullptr && joint( towed ) != nullptr;
         // the writes: while the truck tows nothing, every piece's
         // slave = its canonical successor - the parked machine's
@@ -1559,7 +1559,7 @@ namespace br_carretas
             ? prism::offsets::field< void* >( game_actor, prism::offsets::game_actor_truck )
             : nullptr;
 
-        // two roots carry trailers: the live towed chain (truck+0x15A8) and
+        // two roots carry trailers: the live towed chain (truck+0x1580) and
         // the trailer-of-interest chain (+0xC8) which also covers parked
         // pieces. Merge both walks, deduped, then append every canon member
         // that fell outside both - a parked trailer must stay in the list or
@@ -1581,7 +1581,7 @@ namespace br_carretas
             }
         };
         walk( truck != nullptr && readable_ptr( truck )
-            ? prism::offsets::field< void* >( truck, 0x15A8 ) : nullptr );
+            ? prism::offsets::field< void* >( truck, 0x1580 ) : nullptr );
         walk( game_actor != nullptr
             ? prism::offsets::field< void* >( game_actor, prism::offsets::game_actor_trailer )
             : nullptr );
@@ -1613,7 +1613,7 @@ namespace br_carretas
                 void* truck = prism::offsets::field< void* >( game_actor, prism::offsets::game_actor_truck );
                 if ( truck != nullptr )
                 {
-                    if ( prism::offsets::field< void* >( truck, 0x15A8 ) == truck_towed &&
+                    if ( prism::offsets::field< void* >( truck, 0x1580 ) == truck_towed &&
                         set_towed_trailer_fn != nullptr )
                     {
                         set_towed_trailer_fn( truck, true, nullptr );
@@ -1637,7 +1637,7 @@ namespace br_carretas
         // [0, 1, 2] because nothing is towed
         if ( trailer_count > 1 && truck != nullptr && readable_ptr( truck ) )
         {
-            void* head = prism::offsets::field< void* >( truck, 0x15A8 );
+            void* head = prism::offsets::field< void* >( truck, 0x1580 );
             int hp = -1, cn = 0;
             for ( void* s : canon ) { if ( s == nullptr ) break; if ( s == head ) hp = cn; ++cn; }
             if ( head != nullptr && hp >= 0 && cn > 1 )
@@ -1882,7 +1882,12 @@ namespace br_carretas
                 __try
                 {
                     if ( set_lines_fn != nullptr ) set_lines_fn( sl, 0, 1 );
-                    if ( pair_vehicles_fn != nullptr ) pair_vehicles_fn( p, sl );
+                    void* behind = readable_ptr( static_cast< uint8_t* >( sl ) + prism::offsets::trailer_slave )
+                        ? prism::offsets::field< void* >( sl, prism::offsets::trailer_slave ) : nullptr;
+                    const bool section_behind = behind != nullptr && readable_ptr( behind ) &&
+                        readable_ptr( static_cast< uint8_t* >( behind ) + prism::offsets::trailer_physics_joint ) &&
+                        joint( behind ) != nullptr;
+                    if ( pair_vehicles_fn != nullptr && !section_behind ) pair_vehicles_fn( p, sl );
                 }
                 __except ( EXCEPTION_EXECUTE_HANDLER )
                 {
@@ -1904,7 +1909,7 @@ namespace br_carretas
                 {
                     truck = prism::offsets::field< void* >( game_actor, prism::offsets::game_actor_truck );
                     towed = truck != nullptr && readable_ptr( truck )
-                        ? prism::offsets::field< void* >( truck, 0x15A8 ) : nullptr;
+                        ? prism::offsets::field< void* >( truck, 0x1580 ) : nullptr;
                 }
                 const bool towing = towed != nullptr && joint( towed ) != nullptr;
                 // hook-break teardown: a canon piece whose joint just died
@@ -2081,7 +2086,7 @@ namespace br_carretas
 
     // per-frame: while a trailer is detached the chase camera anchors on the
     // HEAD OF THE LIVE CHAIN - the trailer physically on the fifth wheel
-    // (truck+0x15A8). Detaching a TAIL trailer does not change the head:
+    // (truck+0x1580). Detaching a TAIL trailer does not change the head:
     // trailer 0 stays the anchor and the camera keeps measuring the live
     // combination through hk_combo_length (which stops at the first dead
     // joint). Only when the truck tows NOTHING does the anchor go null -
@@ -2116,7 +2121,7 @@ namespace br_carretas
         }
         // the truck broadcasts its brake channels down the towed chain only
         // while the coupling state machine sits at 5 (0x14064B760), and it
-        // only reaches the trailer registered at truck+0x15A8 - a plugin
+        // only reaches the trailer registered at truck+0x1580 - a plugin
         // attach can leave either short of that, which silently drops service
         // and park braking on the whole chain. Pin both while our trailer is
         // on the truck; natively coupled links run their own progression
@@ -2127,7 +2132,7 @@ namespace br_carretas
         }
         if ( truck_towed != nullptr && truck != nullptr && joint( truck_towed ) != nullptr )
         {
-            if ( prism::offsets::field< void* >( truck, 0x15A8 ) != truck_towed &&
+            if ( prism::offsets::field< void* >( truck, 0x1580 ) != truck_towed &&
                 set_towed_trailer_fn != nullptr )
             {
                 set_towed_trailer_fn( truck, true, truck_towed );
@@ -2142,7 +2147,7 @@ namespace br_carretas
         // same path the plugin detach uses; trailer->trailer joints in a
         // detached section have another trailer as parent and stay
         if ( truck != nullptr && readable_ptr( truck ) &&
-            prism::offsets::field< void* >( truck, 0x15A8 ) == nullptr )
+            prism::offsets::field< void* >( truck, 0x1580 ) == nullptr )
         {
             for ( uint32_t i = 0; i < trailer_count; ++i )
             {
@@ -2200,7 +2205,7 @@ namespace br_carretas
             lines_sig |= ( edge ? 1ull : 0 ) << ( i + 20 );
         }
         void* towed_sig = truck != nullptr && readable_ptr( truck )
-            ? prism::offsets::field< void* >( truck, 0x15A8 ) : nullptr;
+            ? prism::offsets::field< void* >( truck, 0x1580 ) : nullptr;
         lines_sig |= ( towed_sig != nullptr && readable_ptr( towed_sig ) &&
             readable_ptr( static_cast< uint8_t* >( towed_sig ) + prism::offsets::trailer_physics_joint ) &&
             joint( towed_sig ) != nullptr ? 1ull : 0 ) << 40;
@@ -2211,28 +2216,8 @@ namespace br_carretas
             refresh_all_lines();
         }
 
-        // mode = cables on how much of the LIVE convoy: 1 draws them only
-        // on the first trailer, 2+ on the whole coupled set. Counting live
-        // members - not "is the last chain trailer coupled" - keeps the
-        // front set's hoses when the tail detaches
-        uint32_t convoy_n = 0;
-        for ( uint32_t i = 0; i < trailer_count; ++i )
-        {
-            if ( in_convoy[ i ] ) ++convoy_n;
-        }
-        const uint32_t mode = convoy_n >= 2 ? 2 : convoy_n;
-        static uint32_t sent_cables_mode = UINT32_MAX;
-        if ( mode != sent_cables_mode && execute_line_fn != nullptr &&
-            !pending_cmd_queued.load( std::memory_order_acquire ) )
-        {
-            sent_cables_mode = mode;
-            snprintf( pending_cmd, sizeof( pending_cmd ), "g_trailer_cables_mode %u", mode );
-            pending_cmd_queued.store( true, std::memory_order_release );
-            CCore::g_instance->info( "g_trailer_cables_mode = {}", mode );
-        }
-
         // desestaciona as carretas que voltaram pro convoy - em
-        // trailer_loadstate.cpp (o record +0x1188 fica linkado: o registro
+        // trailer_loadstate.cpp (o record +0x1158 fica linkado: o registro
         // de obstáculo de tráfego o referencia)
         unpark_jointed( in_convoy );
 

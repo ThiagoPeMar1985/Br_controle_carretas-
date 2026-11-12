@@ -27,33 +27,105 @@ namespace br_carretas
 {
     constexpr uint32_t max_trailers = 20;
 
-    // Every get_address_from_offset / base+RVA constant in this plugin was
-    // derived for eurotrucks2.exe 1.61.1.9 - on any other build a wrong VA
-    // hooks random code, so the fixed-offset paths stay off unless the exe
-    // file version matches exactly.
+    // Every fixed VA in this plugin was derived from a specific eurotrucks2.exe
+    // build and carries a byte fingerprint of the code that lived there. The
+    // gate passes while those fingerprints still match the running exe - any
+    // game patch that moves the code turns the fixed-offset paths off instead
+    // of hooking random code. Pattern-scanned lookups validate themselves.
+    struct va_sentinel { uint64_t old_va; uint64_t va; const uint8_t* sig; uint32_t len; };
+
+    // fingerprints re-captured for eurotrucks2.exe 1.62.2.1; code entries carry
+    // the prologue bytes of the derived function, data entries (globals, cvars,
+    // strings) are readability-checked (len 0) or text-checked and ride on their
+    // cluster's code fingerprints; entries exist only for addresses already
+    // re-verified on this exe - everything else resolves null
+    inline const va_sentinel va_sentinels[] = {
+        { 0x1401CBE10, 0x1401D3140, ( const uint8_t* )"\x40\x57\x48\x83\xec\x20\x48\x83\xb9\x20\x01\x00\x00\x00\x48\x8b\xf9\x74\x39\x0f", 20 },  // get_cvar_int
+        { 0x1401DB560, 0x1401E27E0, ( const uint8_t* )"\x40\x53\x48\x83\xec\x20\x48\x83\xb9\x20\x01\x00\x00\x00\x48\x8b\xd9\x74\x39\x0f", 20 },  // get_cvar_float
+        { 0x1405DCC20, 0x1405DB4F0, ( const uint8_t* )"\x48\x89\x5c\x24\x18\x48\x89\x74\x24\x20\x55\x48\x8d\xac\x24\xd0\xfd\xff\xff\x48", 20 },  // native attach dispatcher
+        { 0x140623C90, 0x140622F30, ( const uint8_t* )"\x4c\x6b\x41\x20\x70\x48\x8b\x41\x18\x4c\x03\xc0\x49\x3b\xc0\x74\x2e\x80\x78\x04", 20 },  // anchor relink
+        { 0x140623DA0, 0x140623040, ( const uint8_t* )"\x44\x89\x4c\x24\x20\x4c\x89\x44\x24\x18\x48\x89\x54\x24\x10\x55\x57\x41\x56\x48", 20 },  // post_event
+        { 0x1406359E0, 0x14062A620, ( const uint8_t* )"\x48\x89\x5c\x24\x08\x57\x48\x83\xec\x20\x8b\xda\x48\x8b\xf9\xe8\x6c\xfe\xff\xff", 20 },  // trailer deleting dtor
+        { 0x140639090, 0x14062DCF0, ( const uint8_t* )"\x40\x53\x48\x83\xec\x30\x0f\xb6\x44\x24\x68\x48\x8b\xd9\x88\x44\x24\x28\x0f\xb6", 20 },  // vfunc98 connect impl a
+        { 0x1407890A0, 0x1407746C0, ( const uint8_t* )"\x48\x8b\xc4\x48\x89\x58\x18\x55\x56\x57\x41\x54\x41\x55\x41\x56\x41\x57\x48\x8d", 20 },  // vfunc98 connect impl b
+        { 0x140789C20, 0x140775240, ( const uint8_t* )"\x48\x89\x5c\x24\x08\x57\x48\x83\xec\x30\x48\x8b\x05\xff\xfc\xf9\x02\x48\x8b\xd9", 20 },  // vfunc99 disconnect impl
+        { 0x140874010, 0x140863260, ( const uint8_t* )"\x40\x57\x41\x56\x48\x83\xec\x58\x44\x0f\xb6\xf2\x48\x8b\xf9\x3a\x91\x5d\x0e\x00", 20 },  // set_lines / coupled-state notify
+        { 0x1408762E0, 0x140865530, ( const uint8_t* )"\x48\x89\x5c\x24\x08\x48\x89\x74\x24\x10\x57\x48\x83\xec\x20\x8b\x7c\x24\x50\x41", 20 },  // apply_cables
+        { 0x1409FB700, 0x14096DD10, ( const uint8_t* )"\x48\x8b\xc4\x53\x48\x81\xec\xa0\x00\x00\x00\x0f\x29\x70\xe8\x48\x8d\x50\x88\xf3", 20 },  // trailer settle on hook
+        { 0x140642080, 0x140642080, ( const uint8_t* )"\x48\x89\x5c\x24\x08\x48\x89\x6c\x24\x10\x48\x89\x74\x24\x18\x57\x48\x81\xec\x80", 20 },  // set_towed trailer
+        { 0x1408663F0, 0x1408663F0, ( const uint8_t* )"\x48\x89\x5c\x24\x08\x48\x89\x74\x24\x10\x57\x48\x83\xec\x40\x48\x8b\xfa\x48\x8b", 20 },  // rebuild_lines / refresh_accessories
+        { 0x1408633D0, 0x1408633D0, ( const uint8_t* )"\x48\x83\xec\x48\x80\xb9\x5e\x0e\x00\x00\x00\x0f\x84\xc5\x00\x00\x00\x4c\x8b\x05", 20 },  // notify_decoupled
+        { 0x140864160, 0x140864160, ( const uint8_t* )"\x48\x85\xd2\x0f\x84\x9e\x00\x00\x00\x48\x89\x5c\x24\x08\x57\x48\x83\xec\x20\x48", 20 },  // pre_detach (truck-side joint release)
+        { 0x1408771A0, 0x1408655B0, ( const uint8_t* )"\x48\x89\x4c\x24\x08\x55\x53\x41\x55\x41\x56\x48\x8d\xac\x24\x78\xfe\xff\xff\x48", 20 },  // pair/unpair connector lists
+        { 0x140636F50, 0x14062BBB0, ( const uint8_t* )"\x40\x55\x41\x56\x41\x57\x48\x83\xec\x30\x4c\x8d\xb9\x30\x12\x00\x00\xf3\x0f\x11", 20 },  // brace anim player
+        { 0x1409DB4B0, 0x14094C7A0, ( const uint8_t* )"\x40\x53\x48\x83\xec\x20\x44\x0f\xb6\xc2\x48\x8b\xd9\x38\x91\xa0\x02\x00\x00\x74", 20 },  // lamp mask setter
+        { 0x140790DC0, 0x14077C360, ( const uint8_t* )"\x48\x8b\x81\x58\x10\x00\x00\x89\x91\xa0\x02\x00\x00\x48\x85\xc0\x74\x20\x0f\x1f", 20 },  // lamp feed propagator
+        { 0x1401E7F80, 0x1401E7F80, ( const uint8_t* )"\x48\x89\x4c\x24\x08\x55\x41\x54\x41\x55\x48\x8d\xac\x24\x00\xf4\xff\xff\x48\x81", 20 },  // console execute_line
+        { 0x1408653A0, 0x1408653A0, ( const uint8_t* )"\x48\x89\x5c\x24\x08\x48\x89\x6c\x24\x10\x48\x89\x74\x24\x18\x57\x48\x83\xec\x60", 20 },  // per-frame hose geometry updater
+        { 0x1436AF7C8, 0x143714F50, nullptr, 0 },  // traffic manager global (data)
+        { 0x143051820, 0x1430B5960, nullptr, 0 },  // traffic game state (data)
+        { 0x142D485C0, 0x142DA9FA0, nullptr, 0 },  // trailer-cables cvar (data)
+        { 0x142D48200, 0x142DA9BE0, nullptr, 0 },  // attach-settle cvar (data)
+        { 0x142733198, 0x1427949E8, nullptr, 0 },  // event param block (data)
+        { 0x14226E368, 0x1422BCCD8, ( const uint8_t* )"\x40\x40\x74\x72\x61\x69\x6c\x65\x72\x5f\x63\x6f\x75\x70\x6c\x69\x6e\x67\x40\x40\x00", 21 },  // "@@trailer_coupling@@"
+        { 0x14226E4B0, 0x1422BC730, ( const uint8_t* )"\x40\x40\x74\x72\x61\x69\x6c\x65\x72\x5f\x64\x65\x63\x6f\x75\x70\x6c\x69\x6e\x67\x40\x40", 22 },  // "@@trailer_decoupling@@"
+    };
+
+    // fixed VA validated against its fingerprint; cached per query - the first
+    // call must happen before any hook patches the target bytes
+    inline uint64_t validated_va( const uint64_t old_va )
+    {
+        static constexpr uint32_t cache_n = 80;
+        static uint64_t cache_old[ cache_n ] = {};
+        static uint64_t cache_val[ cache_n ] = {};
+        static uint32_t cache_used = 0;
+        for ( uint32_t i = 0; i < cache_used; ++i )
+        {
+            if ( cache_old[ i ] == old_va ) return cache_val[ i ];
+        }
+        uint64_t v = 0;
+        for ( const auto& s : va_sentinels )
+        {
+            if ( s.old_va == old_va )
+            {
+                // the fingerprint reads through get_address_from_offset (runtime
+                // base); the caller gets the same runtime address, never the
+                // preferred-base VA the table stores
+                v = memory::offset_bytes_match( s.va, s.sig, s.len )
+                    ? memory::get_address_from_offset( s.va ) : 0;
+                break;
+            }
+        }
+        if ( cache_used < cache_n )
+        {
+            cache_old[ cache_used ] = old_va;
+            cache_val[ cache_used ] = v;
+            ++cache_used;
+        }
+        if ( v == 0 && CCore::g_instance != nullptr )
+        {
+            CCore::g_instance->warning(
+                "endereco fixo 0x{:X} nao confirmado neste exe - recurso desligado", old_va );
+        }
+        return v;
+    }
+
     inline bool expected_build()
     {
         static const int8_t verdict = []() -> int8_t {
-            wchar_t exe_path[ MAX_PATH ] = {};
-            if ( GetModuleFileNameW( nullptr, exe_path, MAX_PATH ) == 0 ) return -1;
-            DWORD unused = 0;
-            const DWORD size = GetFileVersionInfoSizeW( exe_path, &unused );
-            if ( size == 0 ) return -1;
-            std::vector< uint8_t > buf( size );
-            if ( !GetFileVersionInfoW( exe_path, 0, size, buf.data() ) ) return -1;
-            VS_FIXEDFILEINFO* info = nullptr;
-            UINT len = 0;
-            if ( !VerQueryValueW( buf.data(), L"\\",
-                    reinterpret_cast< LPVOID* >( &info ), &len ) || info == nullptr ) return -1;
-            const uint64_t v =
-                ( static_cast< uint64_t >( info->dwFileVersionMS ) << 32 ) | info->dwFileVersionLS;
-            constexpr uint64_t want =
-                ( uint64_t( 1 ) << 48 ) | ( uint64_t( 61 ) << 32 ) | ( uint64_t( 1 ) << 16 ) | 9;
-            if ( v != want && CCore::g_instance != nullptr )
+            for ( const auto& s : va_sentinels )
             {
-                CCore::g_instance->error( "Unsupported ETS2 build (expected 1.61.1.9) - fixed-offset features disabled" );
+                if ( !memory::offset_bytes_match( s.va, s.sig, s.len ) )
+                {
+                    if ( CCore::g_instance != nullptr )
+                    {
+                        CCore::g_instance->error(
+                            "Build do jogo nao reconhecido (enderecos fixos divergiram) - recursos de endereco fixo desligados" );
+                    }
+                    return 0;
+                }
             }
-            return v == want ? 1 : 0;
+            return 1;
         }();
         return verdict == 1;
     }
@@ -112,15 +184,14 @@ namespace br_carretas
     }
 
     // trailer-class check: every trailer vtable carries the same vfunc 99
-    // (disconnect) impl at exe+0x789C20 - a readable but foreign pointer
-    // (recycled trailer slot holding e.g. KERNELBASE data) passes
-    // plausible_object yet never carries a trailer vtable
+    // (disconnect) impl - a readable but foreign pointer (recycled trailer
+    // slot holding e.g. KERNELBASE data) passes plausible_object yet never
+    // carries a trailer vtable
     inline bool is_trailer_obj( const void* p )
     {
         if ( !plausible_object( p ) ) return false;
         const auto* vtbl = *reinterpret_cast< const uint64_t* const* >( p );
-        return vtbl[ 99 ] ==
-            reinterpret_cast< uint64_t >( GetModuleHandle( nullptr ) ) + 0x789C20;
+        return vtbl[ 99 ] == validated_va( 0x140789C20 );
     }
 
     template < typename F, typename... A >
@@ -175,6 +246,7 @@ namespace br_carretas
     inline std::shared_ptr< CFunctionHook > trailer_dtor_hook = nullptr;
     inline std::shared_ptr< CFunctionHook > set_lines_hook = nullptr;
     inline std::shared_ptr< CFunctionHook > apply_cables_hook = nullptr;
+    inline std::shared_ptr< CFunctionHook > hose_update_hook = nullptr;
     inline std::shared_ptr< CFunctionHook > rebuild_lines_hook = nullptr;
     inline std::shared_ptr< CFunctionHook > joint_walk_hook = nullptr;
     inline std::shared_ptr< CFunctionHook > phys_link_hook = nullptr;
