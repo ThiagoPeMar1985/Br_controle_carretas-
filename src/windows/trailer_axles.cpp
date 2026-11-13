@@ -1,6 +1,3 @@
-// Eixos eleváveis de carreta + assistente de ré - separado de
-// trailer_manipulation.cpp (mesmo layout do usa_trailer_controls).
-
 #include "trailer_manipulation.hpp"
 #include "trailer_shared.hpp"
 
@@ -26,79 +23,52 @@
 
 namespace br_carretas
 {
-    //========================================================================
-    // Liftable trailer axles (ported from ts-liftable-axles)
-    //
-    // The native trailer lift key raises every axle whose flag byte is set -
-    // the controller mask at +0x38 gates which of those actually animate.
-    // Rewriting both every frame lets the UI pick which natively liftable
-    // axles respond, per trailer. No plugin key is needed: the game's own
-    // lift binding stays the trigger.
-    //
-    // Safety rules (learned the hard way in ts-liftable-axles):
-    //  - only natively liftable axles may be selected: forcing a flag on an
-    //    axle the chassis never marked crashes the wheel/suspension update
-    //  - nothing is written while the controller state is not "down" and a
-    //    real mask is applied - flipping flags mid-air leaves a mixed
-    //    progress state the game cannot resolve
-    //  - a nonzero state with an empty applied mask is a desync (mask 0 can
-    //    never animate): write state 0 to recover
-    //========================================================================
-    constexpr uint32_t max_axles = 16; // sane upper bound for the flag count sanity check
 
-    // Per trailer chain position: the lift controller and axle flag array seen
-    // last, plus the values the game gave them.
+    constexpr uint32_t max_axles = 16;
+
     struct LiftAxles
     {
-        void* controller = nullptr; // trailer+0x6C8, detects a trailer swap/rebuild on change
-        void* axle_data = nullptr; // trailer+0x200
-        uint8_t* flags = nullptr; // per-axle liftable flags inside axle_data
-        uint8_t orig_flags[ max_axles ]{}; // the flags the game set, restored on unload
-        uint32_t orig_mask = 0; // the mask the game built, restored on unload
-        uint32_t applied_mask = 0; // last mask we wrote; a different value means the game re-initialized
-        uint32_t native_axles = 0; // orig_flags folded to axle bits, the default selection
-        uint32_t steer_axles = 0; // axle bits whose wheels map into the steering data (eixos direcionais)
+        void* controller = nullptr;
+        void* axle_data = nullptr;
+        uint8_t* flags = nullptr;
+        uint8_t orig_flags[ max_axles ]{};
+        uint32_t orig_mask = 0;
+        uint32_t applied_mask = 0;
+        uint32_t native_axles = 0;
+        uint32_t steer_axles = 0;
         uint32_t axle_count = 0;
     };
 
     LiftAxles lift_axles[ max_trailers ];
-    // o cavalo usa o mesmo layout de controller das carretas (truck+0x6C8);
-    // native_axles aqui vem da MÁSCARA original do controller - são os eixos
-    // que o jogo ergue nativamente. As flags do caminhão NÃO são reescritas
-    // (a semântica delas no truck não é garantidamente "elevável")
+
     LiftAxles truck_lift;
 
-    // Reverse-gear lift assist: with all axles on the ground, engaging reverse
-    // raises the steerable axles; leaving reverse lowers them and restores
-    // the saved selection. Fed by telemetry channels, read on the render thread.
     std::atomic< bool > reverse_light{ false };
     std::atomic< int32_t > engine_gear{ 0 };
 
-    // While true the effective selection is the steerable axles only; the
-    // saved axle_masks are never touched.
     bool reverse_override = false;
-    // True when the plugin commanded the raise itself - only then is lowering
-    // on reverse exit ours to undo.
+
     bool reverse_auto_lift = false;
     bool was_reversing = false;
 
+    // 217 - callback de telemetria: luz de ré
     SCSAPI_VOID on_light_reverse( const scs_string_t, const scs_u32_t, const scs_value_t* const value, const scs_context_t )
     {
         reverse_light.store( value != nullptr && value->value_bool.value != 0, std::memory_order_relaxed );
     }
 
+    // 218 - callback de telemetria: marcha do motor
     SCSAPI_VOID on_engine_gear( const scs_string_t, const scs_u32_t, const scs_value_t* const value, const scs_context_t )
     {
         engine_gear.store( value != nullptr ? value->value_s32.value : 0, std::memory_order_relaxed );
     }
 
+    // 219 - devolve máscaras/flags dos eixos ao jogo
     void release_all_axles()
     {
         auto releases = []( LiftAxles& lift )
         {
-            // give the game its own mask and flag bytes back; the objects may
-            // already be gone if the plugin is unloaded after trailers were,
-            // so guard the writes
+
             if ( lift.controller != nullptr || lift.flags != nullptr )
             {
                 __try
@@ -125,6 +95,7 @@ namespace br_carretas
         for ( auto& lift : lift_axles ) releases( lift );
     }
 
+    // 220 - UI de eixos de uma carreta
     void CTrailerManipulation::render_trailer_lift( const uint32_t i ) const
     {
         const auto& lift = lift_axles[ i ];
@@ -141,8 +112,7 @@ namespace br_carretas
         ImGui::Text( "Eixos: %s", state != 0 ? "levantados" : "no chão" );
         if ( controller != nullptr )
         {
-            // lift/lower straight from the UI - same writes the game's lift
-            // key performs: 2 = raising, 1 = lowering (+ actor flag 0x2)
+
             const bool up = state != 0;
             const char* label = up ? "Baixar" : "Levantar";
             const float bw = ImGui::CalcTextSize( label ).x + 20.f;
@@ -161,19 +131,12 @@ namespace br_carretas
             }
         }
 
-        // axles moving or up with a real mask physically occupy the air - the
-        // selection must stay put until they are back on the ground; a state
-        // desynced from an empty mask (nothing lifted) stays editable so the
-        // trailer is never soft-locked
         bool locked = state != 0 && lift.applied_mask != 0;
         if ( locked )
         {
             ImGui::TextDisabled( "Abaixe os eixos para alterar quais serão levantados." );
         }
 
-        // diagrama sai pra toda carreta que tem dados de eixo - as sem eixo
-        // elevável aparecem com todos os círculos cinza (clique só nos
-        // eleváveis), que é exatamente o desenho que a referência mostra
         const bool none_liftable = lift.native_axles == 0;
         if ( none_liftable )
         {
@@ -181,7 +144,7 @@ namespace br_carretas
         }
 
         auto& stored = settings::g_settings.axle_masks[ i ];
-        // only natively liftable axles are selectable, matching update()
+
         uint32_t selection = ( stored < 0 ? lift.native_axles : static_cast< uint32_t >( stored ) )
             & lift.native_axles;
         if ( reverse_override )
@@ -193,40 +156,34 @@ namespace br_carretas
 
         ImGui::BeginDisabled( locked );
         uint32_t next = selection;
-        // trailer diagram: chassis bar + drawbar + one wheel per axle - green
-        // lifts on the next raise, gray stays on the ground. Only natively
-        // liftable axles respond to clicks, same rule as update()
+
         {
             auto* dl = ImGui::GetWindowDrawList();
             const float w = ImGui::GetContentRegionAvail().x;
             const float ax_h = 74.f;
             const ImVec2 org = ImGui::GetCursorScreenPos();
             ImGui::Dummy( ImVec2( w, ax_h ) );
-            // carreta da referência: caixa escura alta, saia preta em rampa
-            // sob a frente e perninha de apoio; rodas embaixo da saia
+
             const float bx0 = org.x + 6.f, bx1 = org.x + w - 6.f;
             const float by0 = org.y + 2.f,  by1 = org.y + 36.f;
             const auto blk = IM_COL32( 12, 13, 15, 255 );
             dl->AddRectFilled( ImVec2( bx0, by0 ), ImVec2( bx1, by1 ), IM_COL32( 37, 44, 50, 255 ), 0 );
             dl->AddRect( ImVec2( bx0, by0 ), ImVec2( bx1, by1 ), IM_COL32( 55, 63, 70, 255 ), 0, 0, 1.5f );
-            // saia: triângulo na descida + retângulo no trecho reto
+
             const float sk0 = bx0 + ( bx1 - bx0 ) * 0.16f;
             const float skd = ( bx1 - bx0 ) * 0.14f;
             const float skh = 12.f;
             dl->AddTriangleFilled( ImVec2( sk0, by1 ), ImVec2( sk0 + skd, by1 ),
                 ImVec2( sk0 + skd, by1 + skh ), blk );
             dl->AddRectFilled( ImVec2( sk0 + skd, by1 ), ImVec2( bx1, by1 + skh ), blk );
-            // perninha de apoio sob a descida da saia
+
             const float lg = sk0 + skd * 0.85f;
             dl->AddRectFilled( ImVec2( lg - 2.f, by1 + skh ), ImVec2( lg + 2.f, by1 + skh + 14.f ), blk );
             dl->AddRectFilled( ImVec2( lg - 7.f, by1 + skh + 12.f ), ImVec2( lg + 7.f, by1 + skh + 16.f ), blk );
-            // rodas em GRUPO na traseira sob a saia.
-            // verde = vai erguer, grafite = elevável marcado pra ficar no
-            // chão, preto = eixo fixo - clique alterna verde/grafite
+
             const float wr = 10.f;
             const float gap = wr * 2.4f;
-            // ancora pela roda TRASEIRA perto do fim da carreta e anda pra
-            // frente - como numa carreta real, o conjunto mora no fundo
+
             const float rear_x = bx1 - ( bx1 - bx0 ) * 0.16f;
             const uint32_t shown = lift.axle_count < 8 ? lift.axle_count : 8;
             for ( uint32_t a = 0; a < shown; ++a )
@@ -234,8 +191,7 @@ namespace br_carretas
                 const float cx = rear_x - static_cast< float >( shown - 1 - a ) * gap;
                 const bool liftable = ( lift.native_axles >> a ) & 1;
                 const bool on = liftable && ( ( next >> a ) & 1 );
-                // eixo marcado pra erguer aparece LEVANTADO no desenho -
-                // verde em cima diz na hora qual vai subir
+
                 const float cy = by1 + skh + wr + 4.f - ( on ? 10.f : 0.f );
                 const ImU32 fill = !liftable ? IM_COL32( 10, 10, 10, 255 )
                     : on ? IM_COL32( 46, 180, 60, 255 )
@@ -263,6 +219,7 @@ namespace br_carretas
         }
     }
 
+    // 221 - UI de eixos do cavalo
     void CTrailerManipulation::render_truck_lift() const
     {
         void* truck = nullptr;
@@ -273,8 +230,7 @@ namespace br_carretas
         void* ctl = truck != nullptr && readable_ptr( truck )
             ? prism::offsets::field< void* >( truck, prism::offsets::trailer_lift_controller )
             : nullptr;
-        // sem controller (ou sem caminhão resolvido) o desenho continua:
-        // máscara de eleváveis fica zerada = todas as rodas pretas/fixas
+
         const bool has_lift = ctl != nullptr && readable_ptr( ctl );
         uint8_t state = 0;
         if ( has_lift )
@@ -301,8 +257,6 @@ namespace br_carretas
             ImGui::TextDisabled( "Sem eixo elevável no cavalo" );
         }
 
-        // mesma regra das carretas: os eixos só podem ser remarcados no chão
-        // com uma máscara real aplicada
         const bool locked = state != 0 && truck_lift.applied_mask != 0
             && truck_lift.applied_mask != ~0u;
         if ( locked )
@@ -310,8 +264,6 @@ namespace br_carretas
             ImGui::TextDisabled( "Abaixe os eixos para alterar quais serão levantados." );
         }
 
-        // seleção vem da máscara nativa do controller - só eixos que o jogo
-        // ergue podem ser marcados, igual lift.native_axles das carretas
         auto& stored = settings::g_settings.truck_axle_mask;
         uint32_t selection = ( stored < 0 ? truck_lift.native_axles
             : static_cast< uint32_t >( stored ) ) & truck_lift.native_axles;
@@ -328,39 +280,30 @@ namespace br_carretas
         const uint32_t shown = tcount >= 2 && tcount <= 4
             ? static_cast< uint32_t >( tcount ) : 0;
 
-        // diagrama do cavalo: cabine cinza-clara + chassi escuro + uma roda
-        // por eixo, na contagem real do caminhão (2/3/4 eixos). Cores iguais
-        // às das carretas: verde levantado = selecionado pra erguer, cinza =
-        // elevável fora da seleção, preto = fixo. Clique só nos eleváveis
         {
             auto* dl = ImGui::GetWindowDrawList();
             const float ax_h = 48.f;
             const ImVec2 org = ImGui::GetCursorScreenPos();
             const uint32_t ax_n = shown != 0 ? shown : 3u;
-            // sem controller a máscara fica zerada - native_axles guardaria
-            // eixos eleváveis do caminhão ANTERIOR num cavalo sem lift
+
             const uint32_t lift_mask = has_lift ? truck_lift.native_axles : 0u;
-            // tamanho fixo por configuração: 4x2 curto, 6x2/6x4 médio,
-            // 8x2/8x4 comprido - NUNCA estica na largura da janela
+
             const float truck_w = 112.f + static_cast< float >( ax_n - 2 ) * 50.f;
             ImGui::Dummy( ImVec2( truck_w + 12.f, ax_h ) );
             const float cab_x = org.x + 16.f;
             const float cab_w = 42.f;
             const float ch1 = cab_x + truck_w;
             const auto blk = IM_COL32( 12, 13, 15, 255 );
-            // trilho do chassi mais grosso atravessa o caminhão; as rodas
-            // pendem EMBAIXO dele - igual a saia da carreta
+
             const float ry0 = org.y + 21.f;
             const float ry1 = org.y + 27.f;
             dl->AddRectFilled( ImVec2( cab_x + 4.f, ry0 ), ImVec2( ch1, ry1 ), blk, 1.f );
-            // para-choque: bloco escuro embaixo da frente da cabine, colado
-            // no trilho e na altura das rodas
+
             dl->AddRectFilled( ImVec2( cab_x, ry0 - 2.f ), ImVec2( cab_x + 9.f, ry1 + 4.f ),
                 blk, 1.f );
             dl->AddRectFilled( ImVec2( cab_x, ry1 + 4.f ), ImVec2( cab_x + 11.f, ry1 + 7.f ),
                 blk, 0.f );
-            // cabine sentada EM CIMA do trilho: corpo cinza-claro, janela
-            // escura, faixa inferior fechada
+
             dl->AddRectFilled( ImVec2( cab_x, org.y + 3.f ), ImVec2( cab_x + cab_w, ry0 ),
                 IM_COL32( 172, 180, 186, 255 ), 3.f );
             dl->AddRectFilled( ImVec2( cab_x + cab_w * 0.12f, org.y + 7.f ),
@@ -368,9 +311,7 @@ namespace br_carretas
                 IM_COL32( 70, 78, 84, 255 ), 2.f );
             dl->AddRectFilled( ImVec2( cab_x, ry0 - 5.f ), ImVec2( cab_x + cab_w, ry0 ),
                 IM_COL32( 118, 126, 132, 255 ), 0.f );
-            // rodas: topo encostado no trilho; direcional encostado no
-            // para-choque, 2º direcional colado nos 4-eixos, tração na
-            // traseira - mesmo tamanho das bolinhas das carretas (wr=10)
+
             const float wr = 10.f;
             const float wy = ry1 + wr - 2.f;
             const float steer_x = cab_x + 12.f + wr;
@@ -380,8 +321,7 @@ namespace br_carretas
             const float first_drive = ax_n > last_steer + 1
                 ? rear1 - static_cast< float >( ax_n - last_steer - 2 ) * gap
                 : rear1;
-            // tanque grandinho no vão entre o direcional e o grupo de
-            // tração, na altura das rodas - não flutua acima delas
+
             {
                 const float tk0 = steer_x + ( ax_n >= 4 ? gap : 0.f ) + wr + 6.f;
                 const float tk1 = ax_n > last_steer + 1
@@ -413,8 +353,7 @@ namespace br_carretas
                 }
                 const bool liftable = ( lift_mask >> a ) & 1;
                 const bool on = liftable && ( ( next >> a ) & 1 );
-                // eixo marcado pra erguer aparece LEVANTADO no desenho -
-                // verde em cima diz na hora qual vai subir (igual carreta)
+
                 const float cy = wy - ( on ? 7.f : 0.f );
                 const ImU32 fill = !liftable ? IM_COL32( 10, 10, 10, 255 )
                     : on ? IM_COL32( 46, 180, 60, 255 )
@@ -442,10 +381,10 @@ namespace br_carretas
         }
     }
 
+    // 222 - registra os canais de telemetria (ré/marcha)
     void lift_register_channels()
     {
-        // reverse-gear detection for the axle-lift assist; each channel
-        // failing just narrows the fallback, neither is fatal
+
         const auto* init_params = CCore::g_instance->get_init_params();
         if ( init_params->register_for_channel( SCS_TELEMETRY_TRUCK_CHANNEL_light_reverse,
                 SCS_U32_NIL, SCS_VALUE_TYPE_bool, SCS_TELEMETRY_CHANNEL_FLAG_none,
@@ -461,19 +400,10 @@ namespace br_carretas
         }
     }
 
-    // Reverse-gear lift assist + per-trailer lift mask rewrite - the mask
-    // (+0x38) and per-axle liftable flags pick which natively liftable axles
-    // the game's own lift key raises. Runs from update() every frame.
+    // 223 - por frame: aplica o estado dos eixos levantados
     void lift_axles_update( void* game_actor )
     {
-        // Reverse-gear lift assist: on the engage edge, with every trailer
-        // axle on the ground, all STEERABLE axles of each trailer stay
-        // selected and the controllers are commanded to raise - as if the
-        // lift key was pressed. Steerable trailer axles fight a reverse
-        // maneuver, so this lifts them out of the way like the real auto-lift
-        // of a self-steering axle. On the disengage edge whatever we raised
-        // is lowered again and the saved selection resumes. Axles already up
-        // when reverse engages are left untouched.
+
         const bool reversing = settings::g_settings.reverse_lift
             && ( reverse_light.load( std::memory_order_relaxed )
                 || engine_gear.load( std::memory_order_relaxed ) < 0 );
@@ -481,8 +411,7 @@ namespace br_carretas
         bool reverse_just_engaged = false;
         if ( reversing && !was_reversing )
         {
-            // all trailers must be down, and at least one must have a
-            // steerable axle that is natively liftable
+
             bool all_down = trailer_count > 0, any_liftable = false;
             for ( uint32_t i = 0; i < trailer_count; ++i )
             {
@@ -505,12 +434,12 @@ namespace br_carretas
                 reverse_auto_lift = false;
                 for ( uint32_t i = 0; i < trailer_count; ++i )
                 {
-                    // fresh read - lift_axles[] may still point at a detached trailer
+
                     auto* controller = prism::offsets::field< void* >( trailers[ i ], prism::offsets::trailer_lift_controller );
                     if ( controller != nullptr
                         && prism::offsets::field< uint8_t >( controller, prism::offsets::lift_controller_state ) != 0 )
                     {
-                        prism::offsets::field< uint8_t >( controller, prism::offsets::lift_controller_state ) = 1; // lowering
+                        prism::offsets::field< uint8_t >( controller, prism::offsets::lift_controller_state ) = 1;
                     }
                 }
                 if ( game_actor != nullptr )
@@ -521,9 +450,6 @@ namespace br_carretas
         }
         was_reversing = reversing;
 
-        // Axle lift: rewrite each trailer's lift controller mask (+0x38) and
-        // the per-axle liftable flags on the axle data so the game's lift key
-        // raises exactly the natively liftable axles picked in the UI.
         for ( uint32_t i = 0; i < max_trailers; ++i )
         {
             auto& lift = lift_axles[ i ];
@@ -544,14 +470,14 @@ namespace br_carretas
                 : nullptr;
             if ( flags == nullptr || flag_count == 0 || flag_count > max_axles )
             {
-                lift = LiftAxles{}; // detached, or not set up yet
+                lift = LiftAxles{};
                 continue;
             }
 
             if ( lift.axle_data != axle_data || lift.flags != flags
                 || ( controller != nullptr && lift.controller != controller ) )
             {
-                // first sight, or the game rebuilt the objects: snapshot its values
+
                 lift.axle_data = axle_data;
                 lift.flags = flags;
                 lift.axle_count = static_cast< uint32_t >( flag_count );
@@ -565,12 +491,12 @@ namespace br_carretas
                     lift.orig_flags[ a ] = flags[ a ];
                     if ( flags[ a ] != 0 ) lift.native_axles |= 1u << a;
                 }
-                lift.applied_mask = ~0u; // force a write this frame
+                lift.applied_mask = ~0u;
             }
             else if ( controller != nullptr
                 && prism::offsets::field< uint32_t >( controller, prism::offsets::lift_controller_axle_mask ) != lift.applied_mask )
             {
-                // the game re-initialized the mask (trailer data reload): re-snapshot
+
                 lift.orig_mask = prism::offsets::field< uint32_t >( controller, prism::offsets::lift_controller_axle_mask );
                 lift.native_axles = 0;
                 for ( uint32_t a = 0; a < lift.axle_count; ++a )
@@ -580,8 +506,6 @@ namespace br_carretas
                 }
             }
 
-            // an existing controller must agree with the flag array on the
-            // axle count; a mismatch means the layout shifted in a game update
             if ( controller != nullptr
                 && prism::offsets::field< uint32_t >( controller, prism::offsets::lift_controller_axle_count ) != lift.axle_count )
             {
@@ -593,24 +517,15 @@ namespace br_carretas
             const auto state = prism::offsets::field< uint8_t >( controller, prism::offsets::lift_controller_state );
             if ( state != 0 && lift.applied_mask == 0 )
             {
-                // nothing can be up with an empty mask, but the native toggle
-                // still flipped the state - a mask of 0 never animates, so the
-                // controller would stay "raising" forever; bring it back to down
+
                 prism::offsets::field< uint8_t >( controller, prism::offsets::lift_controller_state ) = 0;
             }
             else if ( state != 0 )
             {
-                // raised or moving: leave the mask and flags untouched -
-                // flipping them mid-air leaves a mixed progress state the
-                // game cannot resolve
+
                 continue;
             }
 
-            // steerable axles: the wheel->steering index map lives in the
-            // steering data at +0xA8 (count +0xB0); a wheel with map[w] != -1
-            // steers. Axle a owns wheels 2a/2a+1, same as the native steering
-            // advance. Recomputed every frame - the data object is rebuilt
-            // on trailer swaps
             lift.steer_axles = 0;
             auto* sdata = steering_data( trailers[ i ] );
             if ( sdata != nullptr && readable_span( sdata, 0xB8 ) >= 0xB8 )
@@ -632,13 +547,12 @@ namespace br_carretas
             }
 
             const auto stored = settings::g_settings.axle_masks[ i ];
-            // only natively liftable axles may be selected; mask off anything
-            // else so a stale settings value can never reach the game
+
             uint32_t selection = ( stored < 0 ? lift.native_axles : static_cast< uint32_t >( stored ) )
                 & lift.native_axles;
             if ( reverse_override )
             {
-                selection = lift.native_axles & lift.steer_axles; // every steerable axle
+                selection = lift.native_axles & lift.steer_axles;
             }
 
             for ( uint32_t a = 0; a < lift.axle_count; ++a )
@@ -652,10 +566,6 @@ namespace br_carretas
             lift.applied_mask = selection;
         }
 
-        // Truck lift: same controller layout as the trailers, but ONLY the
-        // +0x38 mask is rewritten - the truck's axle flag bytes are left
-        // alone (their semantics differ from "liftable" there). The axes the
-        // game raises natively = the mask it built = truck_lift.native_axles
         {
             auto& lift = truck_lift;
             void* truck = game_actor != nullptr && readable_ptr( game_actor )
@@ -676,8 +586,7 @@ namespace br_carretas
                     controller, prism::offsets::lift_controller_axle_count );
                 if ( lift.controller != controller || lift.axle_count != raw_count )
                 {
-                    // first sight or truck rebuild: snapshot the native mask -
-                    // the set bits are exactly the axles the game lifts
+
                     lift = LiftAxles{};
                     lift.controller = controller;
                     lift.axle_count = raw_count <= max_axles ? raw_count : 0;
@@ -687,7 +596,7 @@ namespace br_carretas
                 }
                 else if ( raw_mask != lift.applied_mask )
                 {
-                    // the game re-initialized the mask: re-snapshot
+
                     lift.orig_mask = raw_mask;
                     lift.native_axles = raw_mask;
                 }
@@ -695,7 +604,7 @@ namespace br_carretas
                     controller, prism::offsets::lift_controller_state );
                 if ( state != 0 && lift.applied_mask == 0 )
                 {
-                    // desync: mask 0 can never animate - recover to down
+
                     prism::offsets::field< uint8_t >( controller, prism::offsets::lift_controller_state ) = 0;
                 }
                 else if ( state == 0 && lift.native_axles != 0 )
@@ -713,7 +622,6 @@ namespace br_carretas
             }
         }
 
-        // the override mask is in place now: command the raise like the native key
         if ( reverse_just_engaged )
         {
             if ( game_actor != nullptr )
@@ -727,10 +635,22 @@ namespace br_carretas
                     && lift_axles[ i ].applied_mask != ~0u
                     && prism::offsets::field< uint8_t >( controller, prism::offsets::lift_controller_state ) == 0 )
                 {
-                    prism::offsets::field< uint8_t >( controller, prism::offsets::lift_controller_state ) = 2; // raising
+                    prism::offsets::field< uint8_t >( controller, prism::offsets::lift_controller_state ) = 2;
                 }
             }
             reverse_auto_lift = true;
         }
+    }
+    namespace
+    {
+        const bool fn_idx_reg = []()
+        {
+            fn_index_add( fn_addr_of( &on_light_reverse ), 217, "on_light_reverse" );
+            fn_index_add( fn_addr_of( &on_engine_gear ), 218, "on_engine_gear" );
+            fn_index_add( fn_addr_of( &release_all_axles ), 219, "release_all_axles" );
+            fn_index_add( fn_addr_of( &lift_register_channels ), 222, "lift_register_channels" );
+            fn_index_add( fn_addr_of( &lift_axles_update ), 223, "lift_axles_update" );
+            return true;
+        }();
     }
 }

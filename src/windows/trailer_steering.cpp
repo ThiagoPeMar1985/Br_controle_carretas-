@@ -1,6 +1,3 @@
-// Eixos direcionais de carretas oversize - split out of
-// trailer_manipulation.cpp.
-
 #include "trailer_manipulation.hpp"
 #include "trailer_shared.hpp"
 
@@ -26,13 +23,7 @@
 
 namespace br_carretas
 {
-    //========================================================================
-    // Steering lock state (oversize / steerable-axle trailers)
-    //
-    // Shared between the render thread (UI) and the game thread (the hook).
-    // The hook only compares the pointer, never dereferences it, so a stale
-    // entry is harmless.
-    //========================================================================
+
     struct LockedSteering
     {
         std::atomic< prism::vehicle_wheel_steering_data_t* > data{ nullptr };
@@ -41,26 +32,24 @@ namespace br_carretas
 
     LockedSteering locked_steering[ max_trailers ];
 
-    // UI-only state, render thread
     bool locked_ui[ max_trailers ] = {};
     float angle_ui[ max_trailers ] = {};
-    bool centering_ui[ max_trailers ] = {}; // easing back to 0 at steering_speed
+    bool centering_ui[ max_trailers ] = {};
 
+    // 108 - trava/destrava o controle manual do eixo de T(i)
     void set_locked( const uint32_t i, const bool lock )
     {
         if ( locked_ui[ i ] == lock ) return;
         locked_ui[ i ] = lock;
         if ( lock )
         {
-            // start from where the game had the wheels so they do not jump
+
             angle_ui[ i ] = prism::offsets::field< float >( trailers[ i ], prism::offsets::trailer_steering );
             locked_steering[ i ].angle.store( angle_ui[ i ] );
         }
     }
 
-    // set_individual_steering hook: the game calls this every steering advance
-    // with the angle it computed from the joint. For a trailer the user took
-    // control of, swap in their angle.
+    // 109 - hook: injeta o ângulo do usuário no lugar do ângulo do jogo
     void hk_set_individual_steering( prism::vehicle_wheel_steering_data_t* data, float angle )
     {
         for ( auto& locked : locked_steering )
@@ -74,11 +63,10 @@ namespace br_carretas
         set_individual_steering_hook->get_original< prism::set_individual_steering_fn >()( data, angle );
     }
 
-    // steering hotkeys + lock state for steerable-axle (oversize) trailers;
-    // ignored while the game is in the background or a key is being rebound
+    // 110 - por frame: teclas de direção + centralização suave
     void CTrailerManipulation::update_steering( const float dt )
     {
-        // nothing to steer on a trailer without steerable wheels, or one that is gone
+
         for ( uint32_t i = 0; i < max_trailers; ++i )
         {
             if ( i >= trailer_count || steering_data( trailers[ i ] ) == nullptr )
@@ -109,7 +97,7 @@ namespace br_carretas
                 }
                 else if ( left || right || center_pressed )
                 {
-                    set_locked( i, true ); // steering a trailer means taking control of it
+                    set_locked( i, true );
                 }
 
                 if ( !locked_ui[ i ] ) continue;
@@ -119,7 +107,7 @@ namespace br_carretas
                 if ( left || right ) centering_ui[ i ] = false;
                 if ( centering_ui[ i ] )
                 {
-                    // ease back to straight instead of snapping
+
                     if ( angle_ui[ i ] > step ) angle_ui[ i ] -= step;
                     else if ( angle_ui[ i ] < -step ) angle_ui[ i ] += step;
                     else
@@ -134,7 +122,6 @@ namespace br_carretas
             }
         }
 
-        // published every frame: the data pointer changes when trailers are swapped
         for ( uint32_t i = 0; i < max_trailers; ++i )
         {
             locked_steering[ i ].data.store( locked_ui[ i ] ? steering_data( trailers[ i ] ) : nullptr );
@@ -143,8 +130,7 @@ namespace br_carretas
                 angle_ui[ i ] = prism::offsets::field< float >( trailers[ i ], prism::offsets::trailer_steering );
             }
         }
-        // capture probe (1.62): dumps the game's own steering angle per
-        // steerable trailer, half-second throttle, only with debug logs on
+
         if ( settings::g_settings.debug_logs && trailer_count > 0 )
         {
             static float probe_t = 0.f;
@@ -163,9 +149,7 @@ namespace br_carretas
         }
     }
 
-    // steerable-axle controls for one oversize trailer: lock toggle, angle
-    // slider, arrows and center - the angle is applied by the game's next
-    // steering advance on its own thread
+    // 111 - controles de direção de uma carreta na tela
     void CTrailerManipulation::render_trailer_steering( const uint32_t i ) const
     {
         bool lock = locked_ui[ i ];
@@ -188,7 +172,7 @@ namespace br_carretas
         ImGui::SameLine();
         if ( ImGui::Button( "centro" ) )
         {
-            centering_ui[ i ] = true; // eased to 0 in update() at steering_speed
+            centering_ui[ i ] = true;
         }
         ImGui::SameLine();
         if ( ImGui::ArrowButton( "direita", ImGuiDir_Right ) )
@@ -205,8 +189,7 @@ namespace br_carretas
         }
     }
 
-    // the Oversize panel: steering controls for every steerable trailer in the
-    // chain, the steering keybinds and the response-speed slider
+    // 112 - painel Direcionais (todas as direcionáveis + teclas)
     void CTrailerManipulation::render_oversize() const
     {
         bool any_steerable = false;
@@ -244,8 +227,7 @@ namespace br_carretas
         }
     }
 
-    // steerable axles (oversize trailers): the hook only swaps the angle,
-    // so a miss just means no steering control - never fatal
+    // 113 - instala o hook de direção (achado por padrão)
     void steering_install()
     {
         const auto steering_address = memory::get_address_for_pattern(
@@ -266,6 +248,7 @@ namespace br_carretas
         }
     }
 
+    // 114 - limpa as travas (destrutor/reset)
     void steering_reset()
     {
         for ( uint32_t i = 0; i < max_trailers; ++i )
@@ -273,5 +256,16 @@ namespace br_carretas
             locked_steering[ i ].data.store( nullptr );
             locked_ui[ i ] = false;
         }
+    }
+    namespace
+    {
+        const bool fn_idx_reg = []()
+        {
+            fn_index_add( fn_addr_of( &set_locked ), 108, "set_locked" );
+            fn_index_add( fn_addr_of( &hk_set_individual_steering ), 109, "hk_set_individual_steering" );
+            fn_index_add( fn_addr_of( &steering_install ), 113, "steering_install" );
+            fn_index_add( fn_addr_of( &steering_reset ), 114, "steering_reset" );
+            return true;
+        }();
     }
 }

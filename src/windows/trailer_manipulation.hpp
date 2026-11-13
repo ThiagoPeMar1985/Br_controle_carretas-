@@ -6,12 +6,11 @@
 
 namespace br_carretas
 {
-    // Individually detachable trailers for 1.61 - connect/disconnect go through
-    // vfunc slots verified against the native attach path.
+    // carretas desatreláveis individualmente - engate/desengate pelas vfuncs
     class CTrailerManipulation : public CWindow
     {
     private:
-        bool connect_valid_ = false; // connect/disconnect needs several hooks; off on unsupported builds
+        bool connect_valid_ = false; // engate precisa de vários hooks; desliga em build sem suporte
 
         void refresh_trailer_chain();
         void update_convoy_state();
@@ -42,7 +41,6 @@ namespace br_carretas
         ~CTrailerManipulation() override;
 
         bool init() override;
-        // every frame, also while the window is hidden: refreshes the trailer chain and polls the attach hotkeys
         void update();
         void update_impl();
         void render() override;

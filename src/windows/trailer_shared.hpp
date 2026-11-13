@@ -1,6 +1,4 @@
 #pragma once
-// Shared trailer-chain state and helpers used by the coupling, lines,
-// cargo-restore and camera translation units.
 
 #include <algorithm>
 #include <atomic>
@@ -27,52 +25,70 @@ namespace br_carretas
 {
     constexpr uint32_t max_trailers = 20;
 
-    // Every fixed VA in this plugin was derived from a specific eurotrucks2.exe
-    // build and carries a byte fingerprint of the code that lived there. The
-    // gate passes while those fingerprints still match the running exe - any
-    // game patch that moves the code turns the fixed-offset paths off instead
-    // of hooking random code. Pattern-scanned lookups validate themselves.
     struct va_sentinel { uint64_t old_va; uint64_t va; const uint8_t* sig; uint32_t len; };
 
-    // fingerprints re-captured for eurotrucks2.exe 1.62.2.1; code entries carry
-    // the prologue bytes of the derived function, data entries (globals, cvars,
-    // strings) are readability-checked (len 0) or text-checked and ride on their
-    // cluster's code fingerprints; entries exist only for addresses already
-    // re-verified on this exe - everything else resolves null
     inline const va_sentinel va_sentinels[] = {
-        { 0x1401CBE10, 0x1401D3140, ( const uint8_t* )"\x40\x57\x48\x83\xec\x20\x48\x83\xb9\x20\x01\x00\x00\x00\x48\x8b\xf9\x74\x39\x0f", 20 },  // get_cvar_int
-        { 0x1401DB560, 0x1401E27E0, ( const uint8_t* )"\x40\x53\x48\x83\xec\x20\x48\x83\xb9\x20\x01\x00\x00\x00\x48\x8b\xd9\x74\x39\x0f", 20 },  // get_cvar_float
-        { 0x1405DCC20, 0x1405DB4F0, ( const uint8_t* )"\x48\x89\x5c\x24\x18\x48\x89\x74\x24\x20\x55\x48\x8d\xac\x24\xd0\xfd\xff\xff\x48", 20 },  // native attach dispatcher
-        { 0x140623C90, 0x140622F30, ( const uint8_t* )"\x4c\x6b\x41\x20\x70\x48\x8b\x41\x18\x4c\x03\xc0\x49\x3b\xc0\x74\x2e\x80\x78\x04", 20 },  // anchor relink
-        { 0x140623DA0, 0x140623040, ( const uint8_t* )"\x44\x89\x4c\x24\x20\x4c\x89\x44\x24\x18\x48\x89\x54\x24\x10\x55\x57\x41\x56\x48", 20 },  // post_event
-        { 0x1406359E0, 0x14062A620, ( const uint8_t* )"\x48\x89\x5c\x24\x08\x57\x48\x83\xec\x20\x8b\xda\x48\x8b\xf9\xe8\x6c\xfe\xff\xff", 20 },  // trailer deleting dtor
-        { 0x140639090, 0x14062DCF0, ( const uint8_t* )"\x40\x53\x48\x83\xec\x30\x0f\xb6\x44\x24\x68\x48\x8b\xd9\x88\x44\x24\x28\x0f\xb6", 20 },  // vfunc98 connect impl a
-        { 0x1407890A0, 0x1407746C0, ( const uint8_t* )"\x48\x8b\xc4\x48\x89\x58\x18\x55\x56\x57\x41\x54\x41\x55\x41\x56\x41\x57\x48\x8d", 20 },  // vfunc98 connect impl b
-        { 0x140789C20, 0x140775240, ( const uint8_t* )"\x48\x89\x5c\x24\x08\x57\x48\x83\xec\x30\x48\x8b\x05\xff\xfc\xf9\x02\x48\x8b\xd9", 20 },  // vfunc99 disconnect impl
-        { 0x140874010, 0x140863260, ( const uint8_t* )"\x40\x57\x41\x56\x48\x83\xec\x58\x44\x0f\xb6\xf2\x48\x8b\xf9\x3a\x91\x5d\x0e\x00", 20 },  // set_lines / coupled-state notify
-        { 0x1408762E0, 0x140865530, ( const uint8_t* )"\x48\x89\x5c\x24\x08\x48\x89\x74\x24\x10\x57\x48\x83\xec\x20\x8b\x7c\x24\x50\x41", 20 },  // apply_cables
-        { 0x1409FB700, 0x14096DD10, ( const uint8_t* )"\x48\x8b\xc4\x53\x48\x81\xec\xa0\x00\x00\x00\x0f\x29\x70\xe8\x48\x8d\x50\x88\xf3", 20 },  // trailer settle on hook
-        { 0x140642080, 0x140642080, ( const uint8_t* )"\x48\x89\x5c\x24\x08\x48\x89\x6c\x24\x10\x48\x89\x74\x24\x18\x57\x48\x81\xec\x80", 20 },  // set_towed trailer
-        { 0x1408663F0, 0x1408663F0, ( const uint8_t* )"\x48\x89\x5c\x24\x08\x48\x89\x74\x24\x10\x57\x48\x83\xec\x40\x48\x8b\xfa\x48\x8b", 20 },  // rebuild_lines / refresh_accessories
-        { 0x1408633D0, 0x1408633D0, ( const uint8_t* )"\x48\x83\xec\x48\x80\xb9\x5e\x0e\x00\x00\x00\x0f\x84\xc5\x00\x00\x00\x4c\x8b\x05", 20 },  // notify_decoupled
-        { 0x140864160, 0x140864160, ( const uint8_t* )"\x48\x85\xd2\x0f\x84\x9e\x00\x00\x00\x48\x89\x5c\x24\x08\x57\x48\x83\xec\x20\x48", 20 },  // pre_detach (truck-side joint release)
-        { 0x1408771A0, 0x1408655B0, ( const uint8_t* )"\x48\x89\x4c\x24\x08\x55\x53\x41\x55\x41\x56\x48\x8d\xac\x24\x78\xfe\xff\xff\x48", 20 },  // pair/unpair connector lists
-        { 0x140636F50, 0x14062BBB0, ( const uint8_t* )"\x40\x55\x41\x56\x41\x57\x48\x83\xec\x30\x4c\x8d\xb9\x30\x12\x00\x00\xf3\x0f\x11", 20 },  // brace anim player
-        { 0x1409DB4B0, 0x14094C7A0, ( const uint8_t* )"\x40\x53\x48\x83\xec\x20\x44\x0f\xb6\xc2\x48\x8b\xd9\x38\x91\xa0\x02\x00\x00\x74", 20 },  // lamp mask setter
-        { 0x140790DC0, 0x14077C360, ( const uint8_t* )"\x48\x8b\x81\x58\x10\x00\x00\x89\x91\xa0\x02\x00\x00\x48\x85\xc0\x74\x20\x0f\x1f", 20 },  // lamp feed propagator
-        { 0x1401E7F80, 0x1401E7F80, ( const uint8_t* )"\x48\x89\x4c\x24\x08\x55\x41\x54\x41\x55\x48\x8d\xac\x24\x00\xf4\xff\xff\x48\x81", 20 },  // console execute_line
-        { 0x1408653A0, 0x1408653A0, ( const uint8_t* )"\x48\x89\x5c\x24\x08\x48\x89\x6c\x24\x10\x48\x89\x74\x24\x18\x57\x48\x83\xec\x60", 20 },  // per-frame hose geometry updater
-        { 0x1436AF7C8, 0x143714F50, nullptr, 0 },  // traffic manager global (data)
-        { 0x143051820, 0x1430B5960, nullptr, 0 },  // traffic game state (data)
-        { 0x142D485C0, 0x142DA9FA0, nullptr, 0 },  // trailer-cables cvar (data)
-        { 0x142D48200, 0x142DA9BE0, nullptr, 0 },  // attach-settle cvar (data)
-        { 0x142733198, 0x1427949E8, nullptr, 0 },  // event param block (data)
-        { 0x14226E368, 0x1422BCCD8, ( const uint8_t* )"\x40\x40\x74\x72\x61\x69\x6c\x65\x72\x5f\x63\x6f\x75\x70\x6c\x69\x6e\x67\x40\x40\x00", 21 },  // "@@trailer_coupling@@"
-        { 0x14226E4B0, 0x1422BC730, ( const uint8_t* )"\x40\x40\x74\x72\x61\x69\x6c\x65\x72\x5f\x64\x65\x63\x6f\x75\x70\x6c\x69\x6e\x67\x40\x40", 22 },  // "@@trailer_decoupling@@"
+        // 001 - leitora de cvar inteira
+        { 0x1401CBE10, 0x1401D3140, ( const uint8_t* )"\x40\x57\x48\x83\xec\x20\x48\x83\xb9\x20\x01\x00\x00\x00\x48\x8b\xf9\x74\x39\x0f", 20 },
+        // 002 - leitora de cvar float
+        { 0x1401DB560, 0x1401E27E0, ( const uint8_t* )"\x40\x53\x48\x83\xec\x20\x48\x83\xb9\x20\x01\x00\x00\x00\x48\x8b\xd9\x74\x39\x0f", 20 },
+        // 003 - despachante de engate nativo
+        { 0x1405DCC20, 0x1405DB4F0, ( const uint8_t* )"\x48\x89\x5c\x24\x18\x48\x89\x74\x24\x20\x55\x48\x8d\xac\x24\xd0\xfd\xff\xff\x48", 20 },
+        // 004 - religa âncoras de tráfego
+        { 0x140623C90, 0x140622F30, ( const uint8_t* )"\x4c\x6b\x41\x20\x70\x48\x8b\x41\x18\x4c\x03\xc0\x49\x3b\xc0\x74\x2e\x80\x78\x04", 20 },
+        // 005 - post_event - dispara evento no jogo
+        { 0x140623DA0, 0x140623040, ( const uint8_t* )"\x44\x89\x4c\x24\x20\x4c\x89\x44\x24\x18\x48\x89\x54\x24\x10\x55\x57\x41\x56\x48", 20 },
+        // 006 - destrutor de carreta
+        { 0x1406359E0, 0x14062A620, ( const uint8_t* )"\x48\x89\x5c\x24\x08\x57\x48\x83\xec\x20\x8b\xda\x48\x8b\xf9\xe8\x6c\xfe\xff\xff", 20 },
+        // 007 - engate vfunc98 impl A
+        { 0x140639090, 0x14062DCF0, ( const uint8_t* )"\x40\x53\x48\x83\xec\x30\x0f\xb6\x44\x24\x68\x48\x8b\xd9\x88\x44\x24\x28\x0f\xb6", 20 },
+        // 008 - engate vfunc98 impl B
+        { 0x1407890A0, 0x1407746E0, ( const uint8_t* )"\x48\x8b\xc4\x48\x89\x58\x18\x55\x56\x57\x41\x54\x41\x55\x41\x56\x41\x57\x48\x8d", 20 },
+        // 009 - desengate vfunc99 impl
+        { 0x140789C20, 0x140775260, ( const uint8_t* )"\x48\x89\x5c\x24\x08\x57\x48\x83\xec\x30\x48\x8b\x05\xdf\xfc\xf9\x02\x48\x8b\xd9", 20 },
+        // 010 - set_lines - liga/desliga linhas
+        { 0x140874010, 0x140863280, ( const uint8_t* )"\x40\x57\x41\x56\x48\x83\xec\x58\x44\x0f\xb6\xf2\x48\x8b\xf9\x3a\x91\x5d\x0e\x00", 20 },
+        // 011 - apply_cables - aplica cabos
+        { 0x1408762E0, 0x140865550, ( const uint8_t* )"\x48\x89\x5c\x24\x08\x48\x89\x74\x24\x10\x57\x48\x83\xec\x20\x8b\x7c\x24\x50\x41", 20 },
+        // 012 - settle da carreta no engate
+        { 0x1409FB700, 0x14096DF10, ( const uint8_t* )"\x48\x8b\xc4\x53\x48\x81\xec\xa0\x00\x00\x00\x0f\x29\x70\xe8\x48\x8d\x50\x88\xf3", 20 },
+        // 013 - set_towed - marca carreta rebocada
+        { 0x140642080, 0x140642080, ( const uint8_t* )"\x48\x89\x5c\x24\x08\x48\x89\x6c\x24\x10\x48\x89\x74\x24\x18\x57\x48\x81\xec\x80", 20 },
+        // 014 - rebuild_lines - reconstrói linhas
+        { 0x1408663F0, 0x140866410, ( const uint8_t* )"\x48\x89\x5c\x24\x08\x48\x89\x74\x24\x10\x57\x48\x83\xec\x40\x48\x8b\xfa\x48\x8b", 20 },
+        // 015 - notify_decoupled - aviso de desengate
+        { 0x1408633D0, 0x1408633F0, ( const uint8_t* )"\x48\x83\xec\x48\x80\xb9\x5e\x0e\x00\x00\x00\x0f\x84\xc5\x00\x00\x00\x4c\x8b\x05", 20 },
+        // 016 - pre_detach - solta a junta no cavalo
+        { 0x140864160, 0x140864180, ( const uint8_t* )"\x48\x85\xd2\x0f\x84\x9e\x00\x00\x00\x48\x89\x5c\x24\x08\x57\x48\x83\xec\x20\x48", 20 },
+        // 017 - pair/unpair de conectores
+        { 0x1408771A0, 0x1408655D0, ( const uint8_t* )"\x48\x89\x4c\x24\x08\x55\x53\x41\x55\x41\x56\x48\x8d\xac\x24\x78\xfe\xff\xff\x48", 20 },
+        // 018 - animação do apoio (brace)
+        { 0x140636F50, 0x14062BBB0, ( const uint8_t* )"\x40\x55\x41\x56\x41\x57\x48\x83\xec\x30\x4c\x8d\xb9\x30\x12\x00\x00\xf3\x0f\x11", 20 },
+        // 019 - setter da máscara de luz
+        { 0x1409DB4B0, 0x14094C9A0, ( const uint8_t* )"\x40\x53\x48\x83\xec\x20\x44\x0f\xb6\xc2\x48\x8b\xd9\x38\x91\xa0\x02\x00\x00\x74", 20 },
+        // 020 - propagador de luzes
+        { 0x140790DC0, 0x14077C380, ( const uint8_t* )"\x48\x8b\x81\x58\x10\x00\x00\x89\x91\xa0\x02\x00\x00\x48\x85\xc0\x74\x20\x0f\x1f", 20 },
+        // 021 - execute_line do console
+        { 0x1401E7F80, 0x1401E7F80, ( const uint8_t* )"\x48\x89\x4c\x24\x08\x55\x41\x54\x41\x55\x48\x8d\xac\x24\x00\xf4\xff\xff\x48\x81", 20 },
+        // 022 - geometria de mangueira (por frame)
+        { 0x1408653A0, 0x1408653C0, ( const uint8_t* )"\x48\x89\x5c\x24\x08\x48\x89\x6c\x24\x10\x48\x89\x74\x24\x18\x57\x48\x83\xec\x60", 20 },
+        // 023 - gerenciador de tráfego (dado)
+        { 0x1436AF7C8, 0x143714F50, nullptr, 0 },
+        // 024 - estado do jogo (dado: 2 = no mundo)
+        { 0x143051820, 0x1430B5960, nullptr, 0 },
+        // 025 - cvar g_trailer_cables_mode (dado)
+        { 0x142D485C0, 0x142DA9FA0, nullptr, 0 },
+        // 026 - cvar de settle do engate (dado)
+        { 0x142D48200, 0x142DA9BE0, nullptr, 0 },
+        // 027 - bloco de parâmetros de evento (dado)
+        { 0x142733198, 0x1427949E8, nullptr, 0 },
+        // 028 - string "@@trailer_coupling@@"
+        { 0x14226E368, 0x1422BCCB8, ( const uint8_t* )"\x40\x40\x74\x72\x61\x69\x6c\x65\x72\x5f\x63\x6f\x75\x70\x6c\x69\x6e\x67\x40\x40\x00", 21 },
+        // 029 - string "@@trailer_decoupling@@"
+        { 0x14226E4B0, 0x1422BC710, ( const uint8_t* )"\x40\x40\x74\x72\x61\x69\x6c\x65\x72\x5f\x64\x65\x63\x6f\x75\x70\x6c\x69\x6e\x67\x40\x40", 22 },
     };
 
-    // fixed VA validated against its fingerprint; cached per query - the first
-    // call must happen before any hook patches the target bytes
+    // 030 - confere o endereço fixo contra a assinatura (cache por chamada)
     inline uint64_t validated_va( const uint64_t old_va )
     {
         static constexpr uint32_t cache_n = 80;
@@ -88,9 +104,7 @@ namespace br_carretas
         {
             if ( s.old_va == old_va )
             {
-                // the fingerprint reads through get_address_from_offset (runtime
-                // base); the caller gets the same runtime address, never the
-                // preferred-base VA the table stores
+
                 v = memory::offset_bytes_match( s.va, s.sig, s.len )
                     ? memory::get_address_from_offset( s.va ) : 0;
                 break;
@@ -110,6 +124,7 @@ namespace br_carretas
         return v;
     }
 
+    // 031 - portão do build: todas as assinaturas batem com o exe
     inline bool expected_build()
     {
         static const int8_t verdict = []() -> int8_t {
@@ -130,15 +145,7 @@ namespace br_carretas
         return verdict == 1;
     }
 
-    //========================================================================
-    // Memory safety probes
-    //
-    // Everything reached through a reverse-engineered offset is validated
-    // before dereference: the pointer must be committed/readable, and an
-    // object's vtable - plus the target of any vfunc slot we call - must sit
-    // inside the exe image. A wrong-typed object can carry a "vtable" pointer
-    // into exe data, so slot targets are checked against the code range too.
-    //========================================================================
+    // 032 - ponteiro é legível e comprometido
     inline bool readable_ptr( const void* p )
     {
         if ( p == nullptr ) return false;
@@ -147,9 +154,7 @@ namespace br_carretas
             ( mbi.Protect & ( PAGE_NOACCESS | PAGE_GUARD ) ) == 0;
     }
 
-    // how many bytes past p are continuously readable, capped at want. Field
-    // sweeps must be bounded by this - a plausible object sitting at the end
-    // of a committed region AVs the moment a scan reads past the page end
+    // 033 - quantos bytes legíveis seguem o ponteiro
     inline uintptr_t readable_span( const void* p, const uintptr_t want )
     {
         if ( p == nullptr ) return 0;
@@ -166,6 +171,7 @@ namespace br_carretas
         return span < want ? span : want;
     }
 
+    // 034 - ponteiro parece um objeto do jogo (vtable dentro do exe)
     inline bool plausible_object( const void* p )
     {
         if ( !readable_ptr( p ) ) return false;
@@ -174,6 +180,7 @@ namespace br_carretas
         return vtbl >= base && vtbl < base + 0x4000000;
     }
 
+    // 035 - o slot da vtable aponta pra código do exe
     inline bool plausible_vfunc( const void* obj, const uint32_t slot )
     {
         if ( !plausible_object( obj ) ) return false;
@@ -183,10 +190,7 @@ namespace br_carretas
         return fn >= base && fn < base + 0x2000000;
     }
 
-    // trailer-class check: every trailer vtable carries the same vfunc 99
-    // (disconnect) impl - a readable but foreign pointer (recycled trailer
-    // slot holding e.g. KERNELBASE data) passes plausible_object yet never
-    // carries a trailer vtable
+    // 036 - o ponteiro é objeto-carreta de verdade (vfunc 99)
     inline bool is_trailer_obj( const void* p )
     {
         if ( !plausible_object( p ) ) return false;
@@ -195,21 +199,20 @@ namespace br_carretas
     }
 
     template < typename F, typename... A >
+    // 037 - chama um slot da vtable
     auto vcall( void* object, const uint32_t slot, A&&... args )
     {
         auto* vtbl = *reinterpret_cast< void*** >( object );
         return reinterpret_cast< F* >( vtbl[ slot ] )( object, std::forward< A >( args )... );
     }
 
-    //========================================================================
-    // Game object accessors
-    //========================================================================
+    // 038 - junta física da carreta (+0xFE0)
     inline void* joint( void* trailer )
     {
         return prism::offsets::field< void* >( trailer, prism::offsets::trailer_physics_joint );
     }
 
-    // non-null only on trailers with steerable wheels (heavy-haul / oversize)
+    // 039 - dados de eixo direcional da carreta
     inline prism::vehicle_wheel_steering_data_t* steering_data( void* trailer )
     {
         return trailer == nullptr ? nullptr
@@ -217,13 +220,9 @@ namespace br_carretas
                 trailer, prism::offsets::trailer_steering_data );
     }
 
-    //========================================================================
-    // Hooks installed across the feature files - reset together in the
-    // window destructor
-    //========================================================================
     inline std::shared_ptr< CFunctionHook > brake_chain_setter_hook = nullptr;
     inline std::shared_ptr< CFunctionHook > brake_setter_hook = nullptr;
-    inline std::shared_ptr< CFunctionHook > svc_brake_chain_hook = nullptr; // unused: +0x730 is a dead demand mirror
+    inline std::shared_ptr< CFunctionHook > svc_brake_chain_hook = nullptr;
     inline std::shared_ptr< CFunctionHook > svc_brake_hook = nullptr;
     inline std::shared_ptr< CFunctionHook > forced_chain_setter_hook = nullptr;
     inline std::shared_ptr< CFunctionHook > forced_setter_hook = nullptr;
@@ -256,15 +255,10 @@ namespace br_carretas
     inline std::shared_ptr< CFunctionHook > trailer_connect_hook = nullptr;
     inline std::shared_ptr< CFunctionHook > trailer_connect_hook2 = nullptr;
 
-    //========================================================================
-    // Runtime state
-    //========================================================================
-
-    // the current trailer chain, refreshed by update() every frame on the
-    // render thread
     inline void* trailers[ max_trailers ] = {};
     inline uint32_t trailer_count = 0;
 
+    // 040 - posição da carreta na lista atual
     inline int index_of( const void* trailer )
     {
         for ( uint32_t i = 0; i < trailer_count; ++i )
@@ -272,57 +266,49 @@ namespace br_carretas
         return -1;
     }
 
-    //========================================================================
-    // Detached tracking
-    //========================================================================
-
-    // trailers intentionally detached through this plugin. The game's own
-    // attach/detach flows call connect_slave on the parent, which would
-    // re-attach them right back - so the hook stays active and skips only
-    // those trailers
     inline void* detached_trailers[ max_trailers ] = {};
 
+    // 041 - carreta tem marca de desatrelada
     inline bool is_detached( const void* trailer )
     {
         for ( const void* d : detached_trailers ) if ( d == trailer ) return true;
         return false;
     }
 
+    // 042 - marca a carreta como desatrelada
     inline void mark_detached( void* trailer )
     {
         for ( void*& d : detached_trailers ) if ( d == nullptr ) { d = trailer; return; }
     }
 
+    // 043 - tira a marca de desatrelada
     inline void unmark_detached( const void* trailer )
     {
         for ( void*& d : detached_trailers ) if ( d == trailer ) d = nullptr;
     }
 
-    // trailers detached through the PLUGIN's own controls - a stricter set
-    // than detached_trailers (which also holds natively detached heads so
-    // connect_slave won't slam them back). These must survive cargo
-    // load/unload untouched: no teleporting to the dock, no re-joining -
-    // wherever the player left them is where they stay
     inline void* plugin_detached[ max_trailers ] = {};
 
+    // 044 - desatrelada pelos controles do plugin
     inline bool is_plugin_detached( const void* trailer )
     {
         for ( const void* d : plugin_detached ) if ( d == trailer ) return true;
         return false;
     }
 
+    // 045 - marca desatrelada pelo plugin
     inline void mark_plugin_detached( void* trailer )
     {
         for ( void*& d : plugin_detached ) if ( d == nullptr ) { d = trailer; return; }
     }
 
+    // 046 - tira a marca do plugin
     inline void unmark_plugin_detached( const void* trailer )
     {
         for ( void*& d : plugin_detached ) if ( d == trailer ) d = nullptr;
     }
 
-    // any trailer object this plugin is tracking - needed before touching
-    // trailer-specific fields like the physics joint on an unknown pointer
+    // 047 - o ponteiro é uma carreta rastreada
     inline bool is_tracked_trailer( const void* p )
     {
         for ( uint32_t i = 0; i < trailer_count; ++i )
@@ -330,66 +316,27 @@ namespace br_carretas
         return is_detached( p ) || is_plugin_detached( p );
     }
 
-    // trailer currently jointed straight to the truck through "connect to
-    // truck"; used to refuse a second trailer on the fifth wheel
     inline void* truck_towed = nullptr;
-    // a trailer whose native detach dispatcher ran but whose joint is still
-    // alive - the async gear-crank sequence drops it seconds later. The
-    // lines refresh must not rebuild the truck edge on it meanwhile
+
     inline void* pending_native_detach = nullptr;
     inline uint32_t pending_native_age = 0;
-    // previous joint state per canon slot - the joint->null transition is
-    // the physical moment the hook broke; hose teardown runs there, not at
-    // dispatch time (the async crank drops the joint seconds after)
+
     inline bool canon_was_jointed[ max_trailers ] = {};
-    // teardown de mangueiras da peça estacionada já rodou neste slot do
-    // canon - set_lines(state=0) só ESCONDE entidades sem removê-las do
-    // vetor, então chamar por frame nunca termina; rearma quando a carreta
-    // engata de novo
+
     inline bool lines_torn[ max_trailers ] = {};
 
-    // a native call that walks trailer_slave / lamp ctx (disconnect/connect
-    // vfuncs, attach/detach dispatchers) is running on the sim thread - the
-    // render-thread maintenance must not write those fields mid-call or it
-    // can hand the native walker a recycled pointer (the KERNELBASE src AV
-    // at the disconnect teardown)
     inline std::atomic< bool > native_chain_call_active{ false };
-    // set right after a native attach/detach dispatch: the next update()
-    // runs the convoy pass immediately instead of waiting out the 10Hz
-    // throttle - a stale claim surviving the whole 100ms gap is what let
-    // the cyclic phys graph exist at attach time
+
     inline std::atomic< bool > convoy_refresh_requested{ false };
 
-    // frames each canon slot has been continuously jointless while not live
-    // to the truck - a settled parked trailer gets auto-marked past the
-    // threshold so the record factory / parked pin / anchor lock keep it
-    // alive, registered and attachable; a trailer mid-attach only reads
-    // jointless for a few frames and never reaches it
     inline uint32_t canon_jointless_frames[ max_trailers ] = {};
 
-    // g_traffic value saved before a forced "g_traffic 0" detach; restored once
-    // the whole trailer set is jointed again. < 0 means nothing saved
     inline float saved_traffic = -1.f;
-    // trailers the set had when traffic suppression started. The chain shrinks
-    // when links leave it, so "all coupled" must compare against this - a
-    // partially rebuilt set (e.g. just the dolly on the truck) must not count
+
     inline uint32_t expected_trailers = 0;
-    // set only after disconnect_now actually dropped a joint. The detach waits
-    // ~30 sim ticks after g_traffic 0, and during that window every trailer
-    // still reads as coupled - without this flag the restore fires mid-delay
-    // and the joint lands with live traffic again
+
     inline std::atomic< bool > traffic_detach_done{ false };
 
-    //========================================================================
-    // Sim-thread operation queue
-    //
-    // Connect/disconnect calls the game's own vfuncs and execute_line, which
-    // must run on the simulation thread - but update()/the UI run on the
-    // render thread, where calling them races the physics update (purecall
-    // crashes). The buttons/keys only queue the operation; it executes inside
-    // the hooked per-frame trailer call, which the game itself runs on the
-    // sim thread.
-    //========================================================================
     enum class pending_kind { none, connect, disconnect, restore };
 
     struct pending_op
@@ -398,8 +345,7 @@ namespace br_carretas
         void* trailer = nullptr;
         void* parent = nullptr;
         bool parent_is_truck = false;
-        // sim ticks to wait before executing - used to let AI traffic despawn
-        // after g_traffic 0 before dropping the joint
+
         uint32_t delay = 0;
     };
 
@@ -408,6 +354,7 @@ namespace br_carretas
     inline char pending_cmd[ 64 ] = {};
     inline std::atomic< bool > pending_cmd_queued{ false };
 
+    // 048 - enfileira um comando de console
     inline void queue_cmd( const char* text )
     {
         std::strncpy( pending_cmd, text, sizeof( pending_cmd ) - 1 );
@@ -415,6 +362,7 @@ namespace br_carretas
         pending_cmd_queued.store( true, std::memory_order_release );
     }
 
+    // 049 - enfileira engate/desengate pro thread de física
     inline bool queue_op( const pending_kind kind, void* trailer, void* parent,
         const bool parent_is_truck, const uint32_t delay = 0 )
     {
@@ -427,23 +375,19 @@ namespace br_carretas
         return true;
     }
 
-    // Sim heartbeat: hk_crashes_when_disconnected bumps this every trailer
-    // tick it runs. During the cargo cinematic the sim side is suspended
-    // while update() keeps ticking - a stalled heartbeat is the signal that
-    // queued work may safely run inline on the render thread instead of
-    // waiting seconds for the sim to resume (hiding the respawned set's
-    // brief re-assembly at the dock)
     inline uint64_t sim_heartbeat = 0;
     inline uint64_t sim_heartbeat_seen = 0;
     inline uint32_t sim_dead_frames = 0;
     inline uint64_t sim_thread_id = 0;
 
+    // 050 - batimento do thread de física
     inline void pump_sim_heartbeat()
     {
         sim_thread_id = GetCurrentThreadId();
         ++sim_heartbeat;
     }
 
+    // 051 - vigia se o sim continua rodando
     inline void watch_sim_heartbeat()
     {
         const uint64_t hb = sim_heartbeat;
@@ -451,20 +395,12 @@ namespace br_carretas
         sim_heartbeat_seen = hb;
     }
 
-    // true when the sim side is demonstrably not running - either update()
-    // itself is the thread that calls the trailer tick (single-threaded
-    // engine), or it has been silent for a sustained stretch of frames
+    // 052 - sim está parado - seguro executar inline
     inline bool sim_is_quiet()
     {
         return GetCurrentThreadId() == sim_thread_id || sim_dead_frames >= 30;
     }
 
-    //========================================================================
-    // World-space helpers - hook transforms, attach geometry
-    //========================================================================
-
-    // prism placement-ish { pos@0, pad, quat@0x10 } - what the 32-byte
-    // transform getter (vfunc+0xF8) returns for a vehicle in world space
     struct hook_xform_t
     {
         float3_t pos;
@@ -472,13 +408,11 @@ namespace br_carretas
         quat_t quat;
     };
 
-    // world transform of a vehicle through the same getter the native
-    // coupling flows use (vfunc+0xF8)
+    // 053 - transform do veículo no mundo (vfunc 0xF8)
     inline bool hook_world( void* vehicle, hook_xform_t& out )
     {
         alignas( 16 ) uint8_t buf[ 0x20 ]{};
-        // a cached trailer pointer can outlive its object (native attach /
-        // respawn): its "vtable" then points at freed memory
+
         if ( !plausible_vfunc( vehicle, 0xF8 / 8 ) ) return false;
         void* p = nullptr;
         __try { p = vcall< prism::vehicle_get_transform_fn >( vehicle, 0xF8 / 8, buf ); }
@@ -489,7 +423,7 @@ namespace br_carretas
             std::fabs( out.pos.x ) < 1e6f && std::fabs( out.pos.z ) < 1e6f;
     }
 
-    // the truck's transform, the way the native coupling paths read it
+    // 054 - transform do cavalo
     inline bool truck_xform( void* game_actor, uint8_t* out32 )
     {
         void* truck = game_actor != nullptr
@@ -498,63 +432,39 @@ namespace br_carretas
         return vcall< prism::vehicle_get_transform_fn >( truck, 0xF8 / 8, out32 ) != nullptr;
     }
 
-    //========================================================================
-    // Detached-by-index state (respawn-proof)
-    //
-    // Cargo load/unload does not just move trailers - it DESTROYS the trailer
-    // objects and spawns a fresh, already-attached set at the dock slots
-    // (verified: the towed trailer's pointer changes across a load). Every
-    // pointer-based mark dies with the destroyed object. The chain slot does
-    // not: trailers[i] is rebuilt in the same order, so a slot-level mark can
-    // detect the respawn - the fresh object shows up jointed without the
-    // player ever asking for a connect - and restore_parked() then detaches
-    // it again and teleports it back to the transform it was parked at.
-    //========================================================================
     inline bool detached_idx[ max_trailers ] = {};
     inline hook_xform_t parked_xform[ max_trailers ] = {};
     inline bool parked_xform_valid[ max_trailers ] = {};
-    // frames the marked slot has spent jointed - the restore only fires after
-    // the cargo cinematic's own writes settle (~half a second)
+
     inline uint32_t rejoined_frames[ max_trailers ] = {};
-    // a blocked cargo/delivery teleport arms this (GetTickCount64): the world
-    // respawn that follows wipes the tracker, so reset_trailer_state carries
-    // the detached slots + parked poses over to the fresh objects, and
-    // carry_hold keeps maintenance from treating the respawned (jointed)
-    // piece as a stale mark until restore_parked puts it back
+
     inline uint64_t carry_arm_tick = 0;
     inline bool carry_hold[ max_trailers ] = {};
-    // a marked slot that was jointless by itself (parked on its own) - two
-    // adjacent marked slots are separate parked pieces, not one section, and
-    // the restore must split them again when the respawn joins them
+
     inline bool own_head[ max_trailers ] = {};
     inline uint32_t carry_brake_frames = 0;
     inline uint32_t carry_frames = 0;
-    // frames until a carried trailer gets the real park sequence (landing
-    // gear body + brake + registration) - a respawned piece comes back
-    // marked but never parked, so it sags on its own nose and the emulated
-    // anchor fights it every frame (the wobble)
+
     inline int carry_park[ max_trailers ] = {};
-    // truck.brake.parking telemetry - manual connects need the handbrake on
+
     inline std::atomic< bool > parking_brake_on{ false };
     inline std::atomic< bool > parking_brake_known{ false };
     inline uint64_t cargo_seq_ms = 0;
-    // last actor teleport - a canon swap soon after it is a world reload
-    // (load/cargo dock), never a workshop rebuild: the shop never teleports
-    // the truck. The respawn hold must yield to this flag
+
     inline uint64_t actor_tp_ms = 0;
+    // 055 - relógio em milissegundos
     inline uint64_t steady_ms()
     {
         return static_cast< uint64_t >( std::chrono::duration_cast< std::chrono::milliseconds >(
             std::chrono::steady_clock::now().time_since_epoch() ).count() );
     }
-    // every attach/detach - plugin buttons and the game's own T key - only
-    // happens with the handbrake pulled, so a stray key press can never drop
-    // a trailer on the road. The game's own cargo/delivery sequence (an actor
-    // teleport within the last 20 s) is exempt: it detaches by itself
+
+    // 056 - janela de carga/descarga (20s após teleporte)
     inline bool in_cargo_window()
     {
         return cargo_seq_ms != 0 && steady_ms() - cargo_seq_ms < 20000;
     }
+    // 057 - regra do engate: freio de mão puxado
     inline bool handbrake_ok( const bool cargo_exempt = true )
     {
         if ( !parking_brake_known.load( std::memory_order_relaxed ) ||
@@ -562,25 +472,14 @@ namespace br_carretas
         return cargo_exempt && in_cargo_window();
     }
 
-    // chase camera (vehicle_behind_rotation_camera) - resolved once from the
-    // camera manager. +0x3F0 is its anchor target; the native resolver stores
-    // to it directly every frame, so we never write it - only read for the
-    // change log below
     inline void* chase_camera = nullptr;
 
-    // attach geometry (trailer_coupling.cpp) - the shell's "connect" actions
-    // gate on the real hook-to-hook distance like the native T
     float hook_gap( void* trailer, void* parent, bool parent_is_truck );
     bool hook_far( void* trailer, void* parent, bool parent_is_truck );
 
-    //========================================================================
-    // Input helpers - keybind polling shared by the hotkey loops of every
-    // feature file
-    //========================================================================
-
-    // key state for edge detection, shared with key_down below
     inline bool held[ settings::action_count ] = {};
 
+    // 058 - o jogo está em primeiro plano
     inline bool game_has_focus()
     {
         DWORD pid = 0;
@@ -588,7 +487,7 @@ namespace br_carretas
         return pid == GetCurrentProcessId();
     }
 
-    // true while the bound key is down; first_press only on the frame it went down
+    // 059 - a tecla configurada está pressionada
     inline bool key_down( const settings::Action action, bool* first_press = nullptr )
     {
         const UINT packed = settings::key( action );
@@ -616,15 +515,10 @@ namespace br_carretas
         return down;
     }
 
-    //========================================================================
-    // UI helpers shared by the per-feature renderers
-    //========================================================================
     namespace ui
     {
-        // The game's framebuffer is sRGB-encoded: a style color is treated as
-        // linear by the pipeline and gamma-encoded on the way out, which washes
-        // every color toward white. Feeding colors already linearized
-        // (srgb^2.2) makes them land on screen at the intended hex value.
+
+        // 060 - cor hex linearizada pra UI
         inline ImVec4 pdv( const uint32_t hex )
         {
             const auto lin = []( const uint32_t c )
@@ -634,6 +528,7 @@ namespace br_carretas
             return ImVec4( lin( hex >> 16 ), lin( hex >> 8 ), lin( hex ), 1.f );
         }
 
+        // 061 - cor hex convertida pra ImU32
         inline ImU32 pdv32( const uint32_t hex )
         {
             const auto lin = []( const uint32_t c )
@@ -643,7 +538,7 @@ namespace br_carretas
             return IM_COL32( lin( hex >> 16 ), lin( hex >> 8 ), lin( hex ), 255 );
         }
 
-        // On/off pill switch drawn with the draw list (ImGui has no native one).
+        // 062 - botão liga/desliga da UI
         inline bool toggle_switch( const char* id, bool* v )
         {
             const float h = ImGui::GetFrameHeight();
@@ -661,15 +556,14 @@ namespace br_carretas
             return changed;
         }
 
-        // Moves the cursor so the next widget of `width` hugs the row's right edge.
+        // 063 - alinha o próximo widget à direita
         inline void right_side( const float width )
         {
             ImGui::SameLine( 0.f, 0.f );
             ImGui::SetCursorPosX( ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - width );
         }
 
-        // Disabled-colored paragraph that re-wraps to the window width every
-        // frame - ImGui::TextDisabled renders a single clipped line
+        // 064 - texto cinza com quebra de linha
         inline void text_disabled_wrapped( const char* text )
         {
             ImGui::PushStyleColor( ImGuiCol_Text,
@@ -679,34 +573,69 @@ namespace br_carretas
         }
     }
 
-    //========================================================================
-    // Feature entry points - defined in their own files, called by the
-    // window shell's init()/update()/dtor
-    //========================================================================
-    void lift_register_channels();               // trailer_axles.cpp - reverse/gear telemetry
-    void lift_axles_update( void* game_actor );  // trailer_axles.cpp - reverse assist + mask loop
-    void release_all_axles();                    // trailer_axles.cpp - restores native flags (dtor)
-    void brake_register_hooks();                 // trailer_brake.cpp - setter + wheel-solver hooks
-    void brake_boost_update();                   // trailer_brake.cpp - +0x760 boost write + mask
-    void steering_install();                     // trailer_steering.cpp - pattern + hook
-    void steering_reset();                       // trailer_steering.cpp - clears lock state (dtor)
-    void air_register_channels();                // trailer_air.cpp - psi/rpm telemetry channels
-    void update_air( float dt );                 // trailer_air.cpp - closed-loop fill boost
-    bool coupling_install();                     // trailer_coupling.cpp - hooks + native fns; false = indisponível
-    void coupling_register_channels();           // trailer_coupling.cpp - handbrake telemetry for the attach/detach rule
-    void coupling_parked_update();               // trailer_loadstate.cpp - cargo respawn watch + rig restore
-    void render_cargo_restore_option();          // trailer_loadstate.cpp - checkbox + setting persistence
-    bool block_camera_zero_teleport( void* arg );// trailer_camera_zero.cpp - Ctrl+F9 teleport block
-    void workshop_respawn_update();              // trailer_oficina.cpp - workshop destroy/rebuild hold
-    void workshop_respawn_discard();             // trailer_oficina.cpp - drop old-world hold after a load
-    bool load_game_active();                     // trailer_loadgame.cpp - save load in progress
-    void load_game_update();                     // trailer_loadgame.cpp - drop old-world marks after load
-    void garage_update();                         // trailer_garage.cpp - dead trailer marks cleanup
-    extern void* attach_target;                  // trailer_coupling.cpp - trailer picked for the native T attach
-    extern void* canon[ max_trailers ];          // trailer_coupling.cpp - stable canonical trailer order
-    int canon_index_of( const void* t );         // trailer_coupling.cpp - stable canon slot of a trailer (-1)
-    void release_detach_marks( void* t );        // trailer_coupling.cpp - clear detached/plugin-detached/idx marks
-    void* canon_coupled_predecessor( void* t);   // trailer_coupling.cpp - canonical predecessor if it is coupled
-    bool trailer_is_live( const void* t );       // trailer_coupling.cpp - joint chain bottoms out at the truck
-    void light_watch_tick();                     // trailer_lines.cpp - parked-trailer lamp mask/source pin
+    // declarações das funções que vivem nos outros arquivos
+    void lift_register_channels();
+    void lift_axles_update( void* game_actor );
+    void release_all_axles();
+    void brake_register_hooks();
+    void brake_boost_update();
+    void steering_install();
+    void steering_reset();
+    void air_register_channels();
+    void update_air( float dt );
+    bool coupling_install();
+    void coupling_register_channels();
+    void coupling_parked_update();
+    void render_cargo_restore_option();
+    bool block_camera_zero_teleport( void* arg );
+    void workshop_respawn_update();
+    void workshop_respawn_discard();
+    bool load_game_active();
+    void load_game_update();
+    void garage_update();
+    extern void* attach_target;
+    extern void* canon[ max_trailers ];
+    int canon_index_of( const void* t );
+    void release_detach_marks( void* t );
+    void* canon_coupled_predecessor( void* t);
+    bool trailer_is_live( const void* t );
+    void light_watch_tick();
+
+    // 236 - tabela global função↔número (registro estático por arquivo)
+    struct fn_index_entry { uintptr_t addr; uint16_t num; const char* name; };
+    inline std::vector< fn_index_entry >& fn_index_table()
+    {
+        static std::vector< fn_index_entry > v;
+        return v;
+    }
+
+    // 237 - endereço de qualquer função (livre ou membro)
+    template< typename F >
+    inline uintptr_t fn_addr_of( F f )
+    {
+        uintptr_t v = 0;
+        static_assert( sizeof( v ) >= sizeof( f ) );
+        std::memcpy( &v, &f, sizeof( f ) );
+        return v;
+    }
+
+    // 238 - registra uma função no índice
+    inline void fn_index_add( const uintptr_t a, const uint16_t n, const char* s )
+    {
+        fn_index_table().push_back( { a, n, s } );
+    }
+
+    // 239 - RIP -> função registrada mais próxima
+    inline const fn_index_entry* fn_index_lookup( const uint64_t rip )
+    {
+        const fn_index_entry* best = nullptr;
+        for ( const auto& e : fn_index_table() )
+        {
+            if ( e.addr <= rip && ( best == nullptr || e.addr > best->addr ) )
+            {
+                best = &e;
+            }
+        }
+        return best != nullptr && rip - best->addr < 0x10000 ? best : nullptr;
+    }
 }

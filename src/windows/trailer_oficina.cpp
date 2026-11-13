@@ -1,9 +1,3 @@
-// Workshop (oficina) respawn hold - keeps trailers exactly where the player
-// left them when the game destroys and rebuilds the set for a config change.
-// With the checkbox on, a canon pointer swap inside a live session is read as
-// a workshop rebuild: saved poses are reapplied and the set is not moved.
-// World reloads (loading/menu) are discarded and stay native.
-
 #include "trailer_shared.hpp"
 #include "trailer_coupling_internal.hpp"
 
@@ -13,19 +7,7 @@
 
 namespace br_carretas
 {
-    //========================================================================
-    // Hold de respawn por destruição (oficina)
-    //
-    // A oficina não teleporta o conjunto - ela DESTRÓI e recria as carretas,
-    // então nenhum hook de teleport arma o carry e a remontagem deixa tudo na
-    // pose nativa, puxado pro cavalo. O reset e a repopulação do canon acontecem
-    // dentro da mesma passada do refresh, então "canon vazio" nunca é
-    // observável - o sinal do respawn é o canon mudar de PONTEIROS com as
-    // marcas espelhadas ainda no hold. Oficina x load separam por dois sinais
-    // medidos todo tick: o estado de jogo sair do 2 (loading/menu - a oficina
-    // nunca sai) e o nosso próprio heartbeat ficar suspenso (render thread
-    // congelada na tela de loading).
-    //========================================================================
+
     bool hold_jointed[ max_trailers ] = {};
     bool hold_ok[ max_trailers ] = {};
     hook_xform_t hold_xf[ max_trailers ] = {};
@@ -39,8 +21,7 @@ namespace br_carretas
     uint64_t last_tick_ms = 0;
     uint64_t canon_dead_since = 0;
 
-    // a finished load wins over the respawn hold - drop the old-world mirror
-    // so the canon pointer swap after reload reads as world reload, not workshop
+    // 144 - descarta o espelho do mundo antigo após um load
     void workshop_respawn_discard()
     {
         const uint64_t now_ms = GetTickCount64();
@@ -59,6 +40,7 @@ namespace br_carretas
         }
     }
 
+    // 145 - por tick: detecta destruição/recriação da oficina e devolve as poses
     void workshop_respawn_update()
     {
         const uint64_t now_ms = GetTickCount64();
@@ -78,9 +60,7 @@ namespace br_carretas
         }
         if ( canon_any )
         {
-            // canon voltou trocado = destruição+recriação. Oficina: estado 2
-            // contínuo, heartbeat vivo, morte (se vista) curta. Load: um dos
-            // três falha e o hold morre sem ser aplicado
+
             const bool in_session =
                 ( state_bad_ms == 0 || now_ms - state_bad_ms > 5000 ) &&
                 ( tick_gap < 4000 ) &&
@@ -88,10 +68,7 @@ namespace br_carretas
                 ( actor_tp_ms == 0 || steady_ms() - actor_tp_ms > 8000 );
             if ( canon_changed && hold_had_poses && in_session )
             {
-                // o caminhão foi junto pro slot da oficina? ele não passa por
-                // actor-teleport - se a pose dele mudou, o conjunto engatado
-                // volta pelo replay do rig (move caminhão+membros juntos);
-                // se ficou, basta re-teleportar as peças pras poses salvas
+
                 bool truck_moved = false;
                 if ( hold_truck_ok )
                 {
@@ -111,8 +88,7 @@ namespace br_carretas
                 for ( uint32_t i = 0; i < max_trailers; ++i )
                 {
                     if ( !hold_ok[ i ] ) continue;
-                    // peça sem junta no espelho volta a ser head estacionada -
-                    // restore_parked re-separa o que a oficina remontou engatado
+
                     if ( !hold_jointed[ i ] )
                     {
                         detached_idx[ i ] = true;
@@ -148,8 +124,7 @@ namespace br_carretas
                 CCore::g_instance->info( "respawn discarded - world reload stays native" );
             }
             canon_dead_since = 0;
-            // espelha ponteiros + pose viva de cada slot e do caminhão - é a
-            // cópia que sobrevive à destruição (o reset zera canon e as poses)
+
             hold_truck_ok = false;
             if ( auto* ga = CCore::g_instance->get_game_actor() )
             {
@@ -189,11 +164,7 @@ namespace br_carretas
         {
             canon_dead_since = now_ms;
         }
-        // depois da remontagem assentar (canon estável), devolve cada peça à
-        // pose que tinha antes da destruição - cauda primeiro, como o restore
-        // de carga. Teleport direto pelo original: peças engatadas voltam pra
-        // mesma formação relativa (as juntas continuam consistentes), peças
-        // desacopladas voltam pros pontos estacionados
+
         if ( respawn_pose_due > 0 && canon_age >= 90 && --respawn_pose_due == 0 )
         {
             if ( trailer_teleport_hook != nullptr )
@@ -215,5 +186,14 @@ namespace br_carretas
                 for ( auto& p : pose_pending ) p = false;
             }
         }
+    }
+    namespace
+    {
+        const bool fn_idx_reg = []()
+        {
+            fn_index_add( fn_addr_of( &workshop_respawn_discard ), 144, "workshop_respawn_discard" );
+            fn_index_add( fn_addr_of( &workshop_respawn_update ), 145, "workshop_respawn_update" );
+            return true;
+        }();
     }
 }

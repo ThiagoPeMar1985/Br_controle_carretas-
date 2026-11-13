@@ -1,8 +1,3 @@
-// Load Game flow - while a save is loading (game state outside 2 = in-world)
-// the plugin stays fully passive: hooks pass through natively and, once the
-// new world is ready, every mark kept from the previous world is dropped.
-// The save is authoritative for trailer positions and coupling state.
-
 #include "trailer_shared.hpp"
 #include "trailer_coupling_internal.hpp"
 
@@ -14,17 +9,17 @@ namespace br_carretas
     namespace
     {
         bool was_loading = false;
-        // the truck object is only recreated on a world (re)load - workshop
-        // and cargo respawns keep it, so a swap means a load happened even
-        // when the game-state field never left "in-world"
+
         void* last_truck = nullptr;
     }
 
+    // 146 - jogo está carregando (fora do mundo)
     bool load_game_active()
     {
         return traffic_game_state == nullptr || *traffic_game_state != 2;
     }
 
+    // 147 - por tick: detecta fim de load e zera o estado do mundo antigo
     void load_game_update()
     {
         void* truck = nullptr;
@@ -42,10 +37,17 @@ namespace br_carretas
         if ( truck != nullptr ) last_truck = truck;
         if ( !was_loading && !truck_swapped ) return;
         was_loading = false;
-        // world finished loading: nothing from the old world may replay -
-        // canon/marks/anchors rebuild from the freshly loaded save and the
-        // workshop hold follows the load, not the old-world pointers
+
         reset_trailer_state();
         workshop_respawn_discard();
+    }
+    namespace
+    {
+        const bool fn_idx_reg = []()
+        {
+            fn_index_add( fn_addr_of( &load_game_active ), 146, "load_game_active" );
+            fn_index_add( fn_addr_of( &load_game_update ), 147, "load_game_update" );
+            return true;
+        }();
     }
 }

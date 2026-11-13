@@ -1,7 +1,3 @@
-// Cargo load/unload flow - everything the plugin does while the game's
-// cargo sequence respawns or relocates the set lives here, so fixes to load/
-// unload never touch the other flows (camera-zero, workshop, garage, load).
-
 #include "trailer_shared.hpp"
 #include "trailer_coupling_internal.hpp"
 
@@ -12,26 +8,20 @@
 namespace br_carretas
 {
 
+    // 115 - chama o restore só se a opção "restaurar carga" estiver ligada
     void restore_parked_if_enabled()
     {
         if ( settings::g_settings.cargo_restore ) restore_parked();
     }
 
+    // 116 - recoloca o conjunto após respawn de carga: re-detacha seções e teleporta pras poses salvas
     void restore_parked()
     {
-        // put the rig itself back first - replay the game's own actor teleport
-        // with the pre-load transform and the original flags. The truck goes
-        // through its proper path (vfunc +0x2A8), attached trailers follow the
-        // actor-relative formation, and plugin-detached trailers are skipped
-        // by our own per-trailer teleport hook. Then the detach pass below
-        // re-parks the respawned sections
+
         if ( rig_armed )
         {
             rig_armed = false;
-            // replaying the rig teleport with the snapshot transform yanks a
-            // settled jointed combination across the map mid-solve - only do
-            // it while a detached trailer still needs re-parking; if its
-            // marks were cleared since the arm there is nothing to restore
+
             bool any_detached = false;
             for ( int i = 0; i < max_trailers; ++i )
             {
@@ -53,14 +43,11 @@ namespace br_carretas
         for ( int i = static_cast< int >( max_trailers ) - 1; i >= 0; --i )
         {
             if ( !detached_idx[ i ] ) continue;
-            // a marked slot whose previous slot is also marked belongs to the
-            // same parked section - the section head's walk below covers it;
-            // disconnecting it here would split the parked combination apart
+
             if ( i > 0 && detached_idx[ i - 1 ] && canon[ i - 1 ] != nullptr && !own_head[ i ] ) continue;
             void* t = canon[ i ];
             if ( t == nullptr || !readable_ptr( t ) || joint( t ) == nullptr ) continue;
 
-            // the parent it was respawned under - canon order is preserved
             void* parent = nullptr;
             bool parent_is_truck = false;
             if ( auto* game_actor = CCore::g_instance->get_game_actor() )
@@ -71,19 +58,16 @@ namespace br_carretas
                 parent_is_truck = ( i == 0 || t == truck_towed );
             }
             CCore::g_instance->info( "Restoring detached trailer {} after cargo respawn", i );
-            // a dead or recycled parent kills the native disconnect walk mid-teardown
+
             if ( parent != nullptr && readable_ptr( parent )
                 && ( parent_is_truck || is_trailer_obj( parent ) ) )
             {
                 disconnect_now( t, parent, parent_is_truck );
             }
 
-            // teleport the head and every member still jointed to it back to
-            // its saved parked transform - straight through the original, so
-            // the pointer marks guarding the hook don't block the restore
             for ( void* m = t; m != nullptr; )
             {
-                // a respawn may leave the slave link pointing at a dead/recycled object
+
                 if ( !readable_ptr( m ) || !is_trailer_obj( m ) ) break;
                 const int mi = canon_index_of( m );
                 if ( mi >= 0 && parked_xform_valid[ mi ] && trailer_teleport_hook != nullptr )
@@ -101,6 +85,7 @@ namespace br_carretas
         }
     }
 
+    // 117 - desce o apoio da carreta pela vfunc nativa (protegido)
     void carry_set_brace( void* t )
     {
         __try
@@ -109,10 +94,11 @@ namespace br_carretas
         }
         __except ( EXCEPTION_EXECUTE_HANDLER )
         {
-            CCore::g_instance->warning( "set_brace faulted on {:p}", t );
+            CCore::g_instance->warning( "set_brace faulted on {:p} (função 117)", t );
         }
     }
 
+    // 118 - por frame: vigia o respawn de carga e enfileira o restore
     void coupling_parked_update()
     {
         if ( load_game_active() ) return;
@@ -132,10 +118,7 @@ namespace br_carretas
                 CCore::g_instance->info( "carried slot {} parked natively (landing gear + brake)", i );
             }
         }
-        // a trailer the truck does not reach is parked: hold the spring brake
-        // every frame (same fields the manual detach writes once) so a
-        // respawned or game-reattached piece never rolls off its spot. Section
-        // members jointed behind a loose head are not live either
+
         if ( carry_brake_frames > 0 && canon_age >= 10 )
         {
             --carry_brake_frames;
@@ -250,4 +233,15 @@ namespace br_carretas
                 }
             }
         }
-    }}
+    }    namespace
+    {
+        const bool fn_idx_reg = []()
+        {
+            fn_index_add( fn_addr_of( &restore_parked_if_enabled ), 115, "restore_parked_if_enabled" );
+            fn_index_add( fn_addr_of( &restore_parked ), 116, "restore_parked" );
+            fn_index_add( fn_addr_of( &carry_set_brace ), 117, "carry_set_brace" );
+            fn_index_add( fn_addr_of( &coupling_parked_update ), 118, "coupling_parked_update" );
+            return true;
+        }();
+    }
+}

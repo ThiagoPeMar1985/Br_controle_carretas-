@@ -1,6 +1,3 @@
-// Air compressor boost (o slider "Compressor") - split out of
-// trailer_manipulation.cpp.
-
 #include "trailer_manipulation.hpp"
 #include "trailer_shared.hpp"
 
@@ -27,76 +24,59 @@
 
 namespace br_carretas
 {
-    //========================================================================
-    // Air compressor diagnostics (temporary - collecting the native refill
-    // rate and the truck-object field holding the tank pressure)
-    //========================================================================
+
     std::atomic< float > air_psi{ 0.f };
     std::atomic< float > engine_rpm{ 0.f };
     std::atomic< uint32_t > game_minutes{ 0 };
     std::atomic< bool > engine_on{ true };
     std::atomic< bool > engine_known{ false };
 
+    // 224 - callback de telemetria: pressão do ar
     SCSAPI_VOID on_air_pressure( const scs_string_t, const scs_u32_t, const scs_value_t* const value, const scs_context_t )
     {
         air_psi.store( value != nullptr ? value->value_float.value : 0.f, std::memory_order_relaxed );
     }
 
+    // 225 - callback de telemetria: tempo do jogo
     SCSAPI_VOID on_game_time( const scs_string_t, const scs_u32_t, const scs_value_t* const value, const scs_context_t )
     {
         if ( value != nullptr ) game_minutes.store( value->value_u32.value, std::memory_order_relaxed );
     }
 
+    // 226 - callback de telemetria: motor ligado
     SCSAPI_VOID on_engine_enabled( const scs_string_t, const scs_u32_t, const scs_value_t* const value, const scs_context_t )
     {
         engine_on.store( value != nullptr && value->value_bool.value != 0, std::memory_order_relaxed );
         engine_known.store( value != nullptr, std::memory_order_relaxed );
     }
 
+    // 227 - callback de telemetria: rotação do motor
     SCSAPI_VOID on_engine_rpm( const scs_string_t, const scs_u32_t, const scs_value_t* const value, const scs_context_t )
     {
         engine_rpm.store( value != nullptr ? value->value_float.value : 0.f, std::memory_order_relaxed );
     }
 
-    //========================================================================
-    // Air compressor boost ("Compressor" slider)
-    //
-    // Reverse-engineered from the telemetry channel registration (1.61):
-    // the truck.brake.air.pressure getter callback at 0x14064B850 reads
-    //   psi = [[truck+0x200] + 0x458] * [truck+0x1120] * 14.5
-    // +0x458 on the air sub-object is the tank MAX pressure (~10 bar - a
-    // constant, do NOT write); the live fill is the fraction at
-    // truck+0x1120 (0..~0.93 cutout). The boost adds
-    // `native_rate * air_boost` psi/s to that fraction.
-    // (The +0xA8/+0xD0 float arrays with cached means belong to a different
-    // subsystem - per-axle brake air, always 0 when unbraked - and the
-    // singleton chain [[[exe+0x3046780]+0x18]+0xA0]+0x10 resolves a dead
-    // template instance; neither is the player telemetry source.)
-    //========================================================================
-    constexpr uint32_t air_sub_ptr    = 0x200;  // truck -> air/brake object
-    constexpr uint32_t air_press_off  = 0x458;  // tank MAX pressure (~10 bar)
-    constexpr uint32_t air_scale_off  = 0x1120; // fill fraction 0..~0.93
-    constexpr float    air_psi_const  = 14.5f;  // getter's bar->psi factor
+    constexpr uint32_t air_sub_ptr    = 0x200;
+    constexpr uint32_t air_press_off  = 0x458;
+    constexpr uint32_t air_scale_off  = 0x1120;
+    constexpr float    air_psi_const  = 14.5f;
 
-    float air_win_t = 0.f;                 // rate-window accumulator (s)
-    float air_win_last_psi = -1.f;         // last psi seen in the window
-    float air_win_dpsi = 0.f;              // psi gained inside the window
-    float air_win_ours = 0.f;              // psi we wrote inside the window
-    float air_meas_rate = 0.f;             // achieved total fill rate psi/s
-    float air_inject = 0.f;                // integral term: psi/s we inject
-    float air_rate_est = 0.f;              // EMA of the native refill slope
-    float air_units = 0.f;                 // psi per internal unit
+    float air_win_t = 0.f;
+    float air_win_last_psi = -1.f;
+    float air_win_dpsi = 0.f;
+    float air_win_ours = 0.f;
+    float air_meas_rate = 0.f;
+    float air_inject = 0.f;
+    float air_rate_est = 0.f;
+    float air_units = 0.f;
     bool air_tanks_seen = false;
-    bool air_diag_dumped = false;          // one-shot layout dump on failure
-    float air_field_base = 0.f;            // locked tank max pressure (bar)
-    void* air_obj = nullptr;               // resolved air/brake sub-object
-    void* air_truck = nullptr;             // truck physics object (scale owner)
-    float air_recheck_t = 0.f;             // 0.5 s verify throttle
+    bool air_diag_dumped = false;
+    float air_field_base = 0.f;
+    void* air_obj = nullptr;
+    void* air_truck = nullptr;
+    float air_recheck_t = 0.f;
 
-
-    // guarded reads/writes - the arrays live on the truck object; kept apart
-    // because __try cannot live in a function with C++ objects that need
-    // unwinding
+    // 228 - leitura segura de float (protegida)
     bool air_safe_read_f( const void* addr, float& out )
     {
         __try
@@ -108,6 +88,7 @@ namespace br_carretas
         return false;
     }
 
+    // 229 - leitura segura de uint64 (protegida)
     bool air_safe_read_q( const void* addr, uint64_t& out )
     {
         __try
@@ -119,6 +100,7 @@ namespace br_carretas
         return false;
     }
 
+    // 230 - escrita segura de float (protegida)
     bool air_safe_write_f( void* addr, const float v )
     {
         __try
@@ -130,10 +112,7 @@ namespace br_carretas
         return false;
     }
 
-    // the live pressure field is on the truck's air/brake sub-object:
-    // game_actor -> +0x18 (truck physics) -> +0x200 (air object) -> +0x458,
-    // exactly what the telemetry getter 0x14064B850 reads. The scale factor
-    // the getter applies sits on the truck object itself at +0x1120.
+    // 231 - resolve o objeto de ar do cavalo
     void* air_object()
     {
         auto* game_actor = CCore::g_instance->get_game_actor();
@@ -150,9 +129,7 @@ namespace br_carretas
         return reinterpret_cast< void* >( sub );
     }
 
-    // engine off: the tank bleeds through the usual small leaks. Driven by GAME
-    // minutes (telemetry game.time), so a sleep or a time skip drains the whole
-    // span at once - wake up and the pressure is lower than when you parked
+    // 232 - por frame: vazamento de ar com o motor desligado
     void update_air_leak()
     {
         static uint32_t last_min = 0;
@@ -177,6 +154,7 @@ namespace br_carretas
         }
     }
 
+    // 233 - por frame: boost do compressor (malha fechada)
     void update_air( const float dt )
     {
         update_air_leak();
@@ -184,9 +162,6 @@ namespace br_carretas
         const float rpm = engine_rpm.load();
         const int boost = settings::g_settings.air_boost;
 
-        // achieved fill rate over a 0.25 s window - the telemetry channel
-        // is quantized so per-frame dpsi/dt is meaningless; native rate =
-        // measured total minus what we injected ourselves
         if ( dt > 0.f )
         {
             air_win_t += dt;
@@ -204,13 +179,7 @@ namespace br_carretas
                     air_rate_est = air_rate_est == 0.f ? native_obs
                         : air_rate_est * 0.8f + native_obs * 0.2f;
                 }
-                // integral: nudge the injected rate toward the target - a
-                // pure proportional push converges to only half the goal.
-                // Same gates as production or the term winds up at the cap
-                // while the tank is full and bursts on the next drain. The
-                // frac check also covers the compressor cutout - past
-                // ~0.93 the displayed psi saturates so the controller would
-                // keep pumping a fraction the sim no longer uses
+
                 float frac_now = 0.f;
                 if ( boost > 0 && air_tanks_seen && rpm > 0.f && psi < 133.f &&
                      air_truck != nullptr &&
@@ -234,8 +203,6 @@ namespace br_carretas
             }
         }
 
-        // resolve + verify at ~2 Hz: the air object hangs right off the
-        // truck; the sanity check confirms the getter contract still holds
         air_recheck_t -= dt;
         if ( air_recheck_t <= 0.f && psi > 5.f )
         {
@@ -248,7 +215,7 @@ namespace br_carretas
                      air_safe_read_f( static_cast< uint8_t* >( air_truck ) + air_scale_off, frac ) &&
                      field > 0.f && frac > 0.f )
                 {
-                    // getter contract: psi = field(max bar) * frac * 14.5
+
                     const float predicted = field * frac * air_psi_const;
                     if ( predicted > psi * 0.7f && predicted < psi * 1.3f )
                     {
@@ -256,12 +223,11 @@ namespace br_carretas
                         {
                             air_tanks_seen = true;
                             air_field_base = field;
-                            air_units = field * air_psi_const; // psi per fraction
+                            air_units = field * air_psi_const;
                             CCore::g_instance->info( "air: pressure locked max={:.3f} frac={:.4f} -> {:.1f} vs psi {:.1f}",
                                 field, frac, predicted, psi );
                         }
-                        // heal +0x458 - earlier builds wrote into it; it is
-                        // the tank's MAX pressure, not the live value
+
                         if ( field < air_field_base * 0.9f || field > air_field_base * 1.1f )
                         {
                             air_safe_write_f( static_cast< uint8_t* >( air_obj ) + air_press_off,
@@ -284,9 +250,6 @@ namespace br_carretas
             }
         }
 
-        // production: inject air_inject psi/s into the fill fraction - the
-        // integral term has already sized it so the achieved rate lands on
-        // native*(boost+1)
         if ( boost > 0 && air_tanks_seen && air_truck != nullptr && rpm > 0.f &&
              psi < 133.f && dt > 0.f && air_units > 0.f && air_inject > 0.f )
         {
@@ -295,9 +258,7 @@ namespace br_carretas
                  frac < 0.95f )
             {
                 const float add_psi = air_inject * dt;
-                // hard cap at the physical fill range - the sim saturates
-                // the effective pressure at the cutout, anything above just
-                // accumulates an invisible overshoot in the fraction
+
                 air_safe_write_f( static_cast< uint8_t* >( air_truck ) + air_scale_off,
                     ( std::min )( frac + add_psi / air_units, 0.95f ) );
                 air_win_ours += add_psi;
@@ -305,6 +266,7 @@ namespace br_carretas
         }
     }
 
+    // 234 - registra os canais de telemetria de ar
     void air_register_channels()
     {
         const auto* init_params = CCore::g_instance->get_init_params();
@@ -332,5 +294,23 @@ namespace br_carretas
         {
             CCore::g_instance->warning( "Could not register 'truck.engine.rpm'" );
         }
+    }
+    namespace
+    {
+        const bool fn_idx_reg = []()
+        {
+            fn_index_add( fn_addr_of( &on_air_pressure ), 224, "on_air_pressure" );
+            fn_index_add( fn_addr_of( &on_game_time ), 225, "on_game_time" );
+            fn_index_add( fn_addr_of( &on_engine_enabled ), 226, "on_engine_enabled" );
+            fn_index_add( fn_addr_of( &on_engine_rpm ), 227, "on_engine_rpm" );
+            fn_index_add( fn_addr_of( &air_safe_read_f ), 228, "air_safe_read_f" );
+            fn_index_add( fn_addr_of( &air_safe_read_q ), 229, "air_safe_read_q" );
+            fn_index_add( fn_addr_of( &air_safe_write_f ), 230, "air_safe_write_f" );
+            fn_index_add( fn_addr_of( &air_object ), 231, "air_object" );
+            fn_index_add( fn_addr_of( &update_air_leak ), 232, "update_air_leak" );
+            fn_index_add( fn_addr_of( &update_air ), 233, "update_air" );
+            fn_index_add( fn_addr_of( &air_register_channels ), 234, "air_register_channels" );
+            return true;
+        }();
     }
 }

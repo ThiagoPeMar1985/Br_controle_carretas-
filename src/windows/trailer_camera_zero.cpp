@@ -1,8 +1,3 @@
-// Camera-zero teleport block (Ctrl+F9): refuses the actor teleport when the
-// coupling checkbox is on, so the rig and detached trailers stay in place.
-// Self-contained: owns its own detection, decision and logging - no state
-// borrowed from the cargo, workshop or load flows.
-
 #include "trailer_shared.hpp"
 
 #include "core.hpp"
@@ -16,8 +11,7 @@ namespace br_carretas
         uint64_t last_block_log_ms = 0;
     }
 
-    // returns true when the actor teleport is a camera-zero (Ctrl+F9) jump
-    // and the checkbox says it must be blocked
+    // 203 - bloqueia o teleporte do zerar-câmera (Ctrl+F9) com a opção ligada
     bool block_camera_zero_teleport( void* arg )
     {
         if ( !settings::g_settings.cargo_restore ||
@@ -45,5 +39,13 @@ namespace br_carretas
                                      std::sqrt( dist_sq ) );
         }
         return true;
+    }
+    namespace
+    {
+        const bool fn_idx_reg = []()
+        {
+            fn_index_add( fn_addr_of( &block_camera_zero_teleport ), 203, "block_camera_zero_teleport" );
+            return true;
+        }();
     }
 }
