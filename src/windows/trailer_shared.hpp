@@ -98,6 +98,30 @@ namespace br_carretas
         { 0x1436AF830, 0x143714FB8, nullptr, 0 },
         // 245 - vtable da câmera 2 vehicle_behind_rotation_camera (dado)
         { 0x1423126F0, 0x1423552A8, nullptr, 0 },
+        // 246 - despachante de desengate nativo
+        { 0x1405DD410, 0x1405DBCE0, ( const uint8_t* )"\x48\x89\x6c\x24\x18\x48\x89\x74\x24\x20\x57\x48\x81\xec\xa0\x00\x00\x00\x41\x0f", 20 },
+        // 247 - correção de flags do ator (anda cadeia, eixo levantado)
+        { 0x1405DCBC0, 0x1405DB490, ( const uint8_t* )"\x48\x8b\x91\xc8\x00\x00\x00\x45\x32\xc0\x48\x85\xd2\x74\x2c\x4c\x8b\x8a\xc8\x06", 20 },
+        // 248 - teleporte do ator (hook: bloqueia com carreta solta)
+        { 0x1405DE1E0, 0x1405DCAB0, ( const uint8_t* )"\x44\x88\x4c\x24\x20\x44\x88\x44\x24\x18\x55\x53\x41\x54\x41\x55\x41\x56\x48\x8d", 20 },
+        // 249 - teleporte por carreta
+        { 0x140786320, 0x1407864A0, ( const uint8_t* )"\x48\x89\x5c\x24\x08\x48\x89\x6c\x24\x10\x48\x89\x74\x24\x18\x48\x89\x7c\x24\x20", 20 },
+        // 250 - trailer_state_apply - reaplica estado salvo no load
+        { 0x1405E14D1, 0x1405DFDE0, ( const uint8_t* )"\x48\x89\x74\x24\x18\x48\x89\x7c\x24\x20\x55\x48\x8d\x6c\x24\xa9\x48\x81\xec\x90", 20 },
+        // 251 - fábrica de registro de carreta estacionada
+        { 0x1407B69E0, 0x14070A130, ( const uint8_t* )"\x48\x89\x5c\x24\x08\x48\x89\x74\x24\x18\x57\x48\x83\xec\x20\x48\x8b\x35\x6a\xae", 20 },
+        // 252 - gerenciador de registros estacionados (dado)
+        { 0x1436AF828, 0x143714FB0, nullptr, 0 },
+        // 253 - purecall do CRT - alvo do crash tracer
+        { 0x141D23610, 0x141D571D0, ( const uint8_t* )"\x48\x83\xec\x28\x48\x8b\x05\xdd\xf1\x33\x01\x48\x85\xc0\x74\x06\xff\x15\xd2\xc6", 20 },
+        // 254 - RIP da leitura de curva de navegação (emula xmm5=0)
+        { 0x141BEA1C5, 0x141A959DB, ( const uint8_t* )"\xf3\x0f\x10\x2c\x8f\xf3\x0f\x10\x74\x8f\x08\x41\x0f\xb6\x04\x00\xf3\x0f\x59\xdd", 20 },
+        // 255 - retorno do broadcast de freio real (+0x180)
+        { 0x14064B7EF, 0x14064037F, ( const uint8_t* )"\x48\x8b\x8b\x80\x15\x00\x00\x0f\xb6\x93\x64\x07\x00\x00\x48\x8b\x01\xff\x90\x88", 20 },
+        // 256 - retorno do broadcast de freio forçado (+0x188)
+        { 0x14064B806, 0x140640396, ( const uint8_t* )"\x0f\x28\x7c\x24\x50\x44\x0f\x28\x44\x24\x40\x48\x83\xc4\x70\x5b\xc3\xcc\xcc\xcc", 20 },
+        // 257 - cvar g_traffic (dado - candidato, sem nome confirmado)
+        { 0x142D45500, 0x142DA6EE0, nullptr, 0 },
     };
 
     // 030 - confere o endereço fixo contra a assinatura (cache por chamada)

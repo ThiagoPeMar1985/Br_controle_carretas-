@@ -5,7 +5,7 @@ crashar ou falhar, o número diz exatamente qual função é, sem ambiguidade.
 
 | Arquivo | Faixa |
 |---------|-------|
-| src/windows/trailer_shared.hpp | 001–064, 236–245 |
+| src/windows/trailer_shared.hpp | 001–064, 236–257 |
 | src/windows/trailer_manipulation.cpp | 065–107 |
 | src/windows/trailer_steering.cpp | 108–114 |
 | src/windows/trailer_loadunload.cpp | 115–118 |
@@ -348,3 +348,15 @@ de bytes; se não bater no exe, aquele recurso desliga sozinho:
 | 243 | combo pos | trailer_shared.hpp | posição de engate usada pelo combo_length |
 | 244 | camera manager | trailer_shared.hpp | gerenciador de câmeras (dado) |
 | 245 | chase vtable | trailer_shared.hpp | vtable vehicle_behind_rotation_camera (dado) |
+| 246 | detach dispatch | trailer_shared.hpp | despachante de desengate nativo |
+| 247 | actor flag fixup | trailer_shared.hpp | correção de flags do ator (eixo levantado na cadeia) |
+| 248 | actor teleport | trailer_shared.hpp | teleporte do ator (hook: bloqueia com carreta solta) |
+| 249 | trailer teleport | trailer_shared.hpp | teleporte por carreta |
+| 250 | trailer state apply | trailer_shared.hpp | reaplica estado salvo no load |
+| 251 | parked record factory | trailer_shared.hpp | fábrica de registro de carreta estacionada |
+| 252 | parked record manager | trailer_shared.hpp | gerenciador de registros estacionados (dado) |
+| 253 | purecall | trailer_shared.hpp | thunk CRT de chamada virtual pura (crash tracer) |
+| 254 | nav curve RIP | trailer_shared.hpp | leitura de curva de navegação (emula xmm5=0) |
+| 255 | brake broadcast ret | trailer_shared.hpp | retorno do broadcast de freio real (+0x180) |
+| 256 | forced broadcast ret | trailer_shared.hpp | retorno do broadcast de freio forçado (+0x188) |
+| 257 | g_traffic cvar | trailer_shared.hpp | cvar de tráfego (dado — candidato, sem nome confirmado) |
