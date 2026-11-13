@@ -661,6 +661,7 @@ namespace br_carretas
     // 087 - ATRELAMENTO em cadeia: T(i) no antecessor - T1 em T0, T2 em T1
     void CTrailerManipulation::connect_trailer( const uint32_t i ) const
     {
+        CCore::g_instance->info( "fn087 atrelar-cadeia pedido: T{}", i );
 
         void* trailer = i < max_trailers ? canon[ i ] : nullptr;
         if ( trailer == nullptr || !readable_ptr( trailer ) || joint( trailer ) != nullptr ) return;
@@ -702,6 +703,7 @@ namespace br_carretas
     // 088 - ATRELAMENTO direto: T(i) na quinta roda do cavalo
     void CTrailerManipulation::connect_trailer_to_truck( const uint32_t i ) const
     {
+        CCore::g_instance->info( "fn088 atrelar-cavalo pedido: T{}", i );
         if ( !this->connect_valid_ || i >= max_trailers ) return;
         void* trailer = canon[ i ];
         if ( trailer == nullptr || !readable_ptr( trailer ) || joint( trailer ) != nullptr ) return;
@@ -1623,12 +1625,6 @@ namespace br_carretas
                 __try
                 {
                     if ( set_lines_fn != nullptr ) set_lines_fn( sl, 0, 1 );
-                    void* behind = readable_ptr( static_cast< uint8_t* >( sl ) + prism::offsets::trailer_slave )
-                        ? prism::offsets::field< void* >( sl, prism::offsets::trailer_slave ) : nullptr;
-                    const bool section_behind = behind != nullptr && readable_ptr( behind ) &&
-                        readable_ptr( static_cast< uint8_t* >( behind ) + prism::offsets::trailer_physics_joint ) &&
-                        joint( behind ) != nullptr;
-                    if ( pair_vehicles_fn != nullptr && !section_behind ) pair_vehicles_fn( p, sl );
                 }
                 __except ( EXCEPTION_EXECUTE_HANDLER )
                 {
@@ -1665,12 +1661,9 @@ namespace br_carretas
                             {
                                 set_lines_fn( live[ i ], 0, 1 );
                             }
-                            if ( truck != nullptr && pair_vehicles_fn != nullptr )
-                            {
-                                pair_vehicles_fn( truck, live[ i ] );
-                            }
                             if ( truck != nullptr && apply_cables_fn != nullptr )
                             {
+                                CCore::g_instance->info( "fn102 cabo: apply_cables(cavalo,null)" );
                                 apply_cables_fn( truck, nullptr, 0, 0, 0 );
                             }
                         }
@@ -1969,8 +1962,8 @@ namespace br_carretas
             if ( ad2 ) this->toggle_attach( 1 );
             if ( ad3 ) this->toggle_attach( 2 );
 
-            if ( tk2 ) this->connect_to_truck( canon[ 1 ] );
-            if ( tk3 ) this->connect_to_truck( canon[ 2 ] );
+            if ( tk2 ) this->connect_trailer_to_truck( 1 );
+            if ( tk3 ) this->connect_trailer_to_truck( 2 );
         }
         bool slp = false;
         key_down( settings::Action::SLEEP_PARK, &slp );

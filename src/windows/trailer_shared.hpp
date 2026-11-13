@@ -372,6 +372,9 @@ namespace br_carretas
             return false;
         }
         pending = { kind, trailer, parent, parent_is_truck, delay };
+        CCore::g_instance->info( "fn049 fila+ kind={} trailer={:p} parent={:p} truck={} delay={}",
+                                 static_cast< int >( kind ), trailer, parent,
+                                 parent_is_truck ? 1 : 0, delay );
         return true;
     }
 

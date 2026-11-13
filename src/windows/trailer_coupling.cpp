@@ -165,6 +165,7 @@ namespace br_carretas
         }
         void* prev = prism::offsets::field< void* >( game_actor, prism::offsets::game_actor_trailer );
         prism::offsets::field< void* >( game_actor, prism::offsets::game_actor_trailer ) = trailer;
+        CCore::g_instance->info( "fn171 detach-via-slot trailer={:p}", trailer );
 
         using detach_fn_t = void __fastcall( void*, uint8_t, uint64_t );
         repair_lamp_ctx_all();
@@ -191,6 +192,7 @@ namespace br_carretas
             set_towed_trailer_fn( truck, true, prev_towed );
         }
         if ( joint( trailer ) == nullptr ) return true;
+        CCore::g_instance->info( "fn171 detach-via-slot falhou: junta viva" );
         prism::offsets::field< void* >( game_actor, prism::offsets::game_actor_trailer ) = prev;
         return false;
     }
@@ -202,6 +204,7 @@ namespace br_carretas
         if ( game_actor == nullptr || attach_dispatch_hook == nullptr ) return false;
         void* prev = prism::offsets::field< void* >( game_actor, prism::offsets::game_actor_trailer );
         prism::offsets::field< void* >( game_actor, prism::offsets::game_actor_trailer ) = trailer;
+        CCore::g_instance->info( "fn172 attach-via-slot trailer={:p}", trailer );
 
         void* claim = readable_ptr( trailer )
             ? prism::offsets::field< void* >( trailer, prism::offsets::trailer_slave ) : nullptr;
@@ -222,12 +225,15 @@ namespace br_carretas
         }
         restore_parked_claims();
         prism::offsets::field< void* >( game_actor, prism::offsets::game_actor_trailer ) = prev;
+        CCore::g_instance->info( "fn172 attach-via-slot resultado: junta={:p}", joint( trailer ) );
         return joint( trailer ) != nullptr;
     }
 
     // 173 - executa o desatrelamento na thread de física
     void disconnect_now( void* trailer, void* parent, const bool parent_is_truck )
     {
+        CCore::g_instance->info( "fn173 disconnect_now trailer={:p} parent={:p} truck={} junta={:p}",
+                                 trailer, parent, parent_is_truck ? 1 : 0, joint( trailer ) );
 
         if ( parent_is_truck && joint( trailer ) != nullptr && detach_dispatch_hook != nullptr )
         {
@@ -314,6 +320,7 @@ namespace br_carretas
 
         if ( set_lines_fn != nullptr )
         {
+            CCore::g_instance->info( "fn173 cabo: set_lines({:p},0,1)", trailer );
             set_lines_fn( trailer, 0, 1 );
         }
 
@@ -365,10 +372,7 @@ namespace br_carretas
             traffic_detach_tail();
         }
 
-        if ( parent != nullptr && pair_vehicles_fn != nullptr && !section_behind )
-        {
-            pair_vehicles_fn( parent, trailer );
-        }
+        
         if ( auto* game_actor = CCore::g_instance->get_game_actor() )
         {
             void* truck = prism::offsets::field< void* >( game_actor, prism::offsets::game_actor_truck );
@@ -387,6 +391,7 @@ namespace br_carretas
                 get_cvar_int_fn != nullptr && truck != nullptr )
             {
                 const int mode = get_cvar_int_fn( cables_mode_cvar );
+                CCore::g_instance->info( "fn173 cabo: apply_cables(cavalo,null) mode={}", mode );
                 apply_cables_fn( truck, nullptr, 0, mode > 4 ? 4 : mode < 0 ? 0 : mode, 0 );
             }
         }
@@ -413,6 +418,8 @@ namespace br_carretas
     // 174 - executa o atrelamento na thread de física
     void connect_now( void* trailer, void* parent, const bool parent_is_truck )
     {
+        CCore::g_instance->info( "fn174 connect_now trailer={:p} parent={:p} truck={} junta={:p}",
+                                 trailer, parent, parent_is_truck ? 1 : 0, joint( trailer ) );
 
         if ( hook_far( trailer, parent, parent_is_truck ) )
         {
@@ -641,6 +648,8 @@ namespace br_carretas
             {
                 const pending_op op = pending;
                 pending = {};
+                CCore::g_instance->info( "fn175 executa op kind={} trailer={:p} parent={:p}",
+                                         static_cast< int >( op.kind ), op.trailer, op.parent );
 
                 __try
                 {
@@ -868,6 +877,7 @@ namespace br_carretas
             return;
         }
         if ( trailer == nullptr || !is_trailer_obj( trailer ) ) return;
+        CCore::g_instance->info( "fn182 vfunc99 trailer={:p} junta={:p}", trailer, joint( trailer ) );
 
         const auto repair_ctx = []( void* m ) { repair_lamp_ctx( m ); };
         repair_ctx( trailer );
@@ -878,9 +888,6 @@ namespace br_carretas
             prism::offsets::field< void* >( trailer, prism::offsets::trailer_parent ) = nullptr;
             return;
         }
-
-        void* chain_members[ max_trailers * 2 ] = {};
-        uint32_t chain_n = 0;
 
         uint32_t depth = 0;
         for ( void* t = trailer; t != nullptr && readable_ptr( t ); )
@@ -897,9 +904,13 @@ namespace br_carretas
                 break;
             }
             repair_ctx( slave );
-            if ( chain_n < max_trailers * 2 ) chain_members[ chain_n++ ] = slave;
             t = slave;
         }
+        void* const kept_slave = prism::offsets::field< void* >( trailer, prism::offsets::trailer_slave );
+        void* const detach_parent = readable_ptr( static_cast< uint8_t* >( trailer ) + prism::offsets::trailer_parent )
+            ? prism::offsets::field< void* >( trailer, prism::offsets::trailer_parent ) : nullptr;
+        prism::offsets::field< void* >( trailer, prism::offsets::trailer_slave ) = nullptr;
+        CCore::g_instance->info( "fn182 corrente escondida: {:p}", kept_slave );
         sanitize_phys_walk( trailer );
         native_chain_call_active.store( true, std::memory_order_release );
         __try
@@ -915,24 +926,50 @@ namespace br_carretas
             if ( !canon_alive ) reset_trailer_state();
             if ( readable_ptr( trailer ) )
             {
-
-                void* keep = nullptr;
-                for ( uint32_t k = 0; k < chain_n; ++k )
-                {
-                    if ( is_trailer_obj( chain_members[ k ] ) )
-                    {
-                        keep = chain_members[ k ];
-                        break;
-                    }
-                }
-                prism::offsets::field< void* >( trailer, prism::offsets::trailer_slave ) = keep;
-
                 mark_detached( trailer );
                 mark_plugin_detached( trailer );
             }
             clear_claim_edge( trailer );
         }
         native_chain_call_active.store( false, std::memory_order_release );
+        if ( readable_ptr( trailer ) &&
+             prism::offsets::field< void* >( trailer, prism::offsets::trailer_slave ) == nullptr )
+        {
+            prism::offsets::field< void* >( trailer, prism::offsets::trailer_slave ) = kept_slave;
+        }
+
+        if ( set_lines_fn != nullptr )
+        {
+            CCore::g_instance->info( "fn182 cabo: set_lines({:p},0,1)", trailer );
+            set_lines_fn( trailer, 0, 1 );
+        }
+        if ( rebuild_lines_fn != nullptr && detach_parent != nullptr && readable_ptr( trailer ) )
+        {
+            void* slave = prism::offsets::field< void* >( trailer, prism::offsets::trailer_slave );
+            prism::offsets::field< void* >( trailer, prism::offsets::trailer_slave ) = nullptr;
+            rebuild_lines_fn( detach_parent, trailer );
+            prism::offsets::field< void* >( trailer, prism::offsets::trailer_slave ) = slave;
+        }
+        if ( auto* game_actor = CCore::g_instance->get_game_actor() )
+        {
+            void* truck = prism::offsets::field< void* >( game_actor, prism::offsets::game_actor_truck );
+            void* towed = truck != nullptr && readable_ptr( truck )
+                ? prism::offsets::field< void* >( truck, 0x1580 ) : nullptr;
+            if ( truck != nullptr && ( detach_parent == truck || towed == trailer ) )
+            {
+                if ( set_towed_trailer_fn != nullptr && towed == trailer )
+                {
+                    set_towed_trailer_fn( truck, true, nullptr );
+                }
+                prism::offsets::field< uint32_t >( truck, prism::offsets::truck_coupling_state ) = 0;
+                prism::offsets::field< float >( truck, 0x4C4 ) = 0.f;
+                if ( apply_cables_fn != nullptr )
+                {
+                    CCore::g_instance->info( "fn182 cabo: apply_cables(cavalo,null)" );
+                    apply_cables_fn( truck, nullptr, 0, 0, 0 );
+                }
+            }
+        }
     }
 
     struct severed_edge_t { void* parent; void* child; };
@@ -1073,6 +1110,7 @@ namespace br_carretas
         {
             return;
         }
+        CCore::g_instance->info( "fn189 pre-detach trailer={:p}", trailer );
         pre_detach_hook->get_original< prism::vehicle_pre_detach_fn >()( self, trailer );
     }
 
@@ -1130,6 +1168,7 @@ namespace br_carretas
             ? prism::offsets::field< void* >( self, prism::offsets::game_actor_truck ) : nullptr;
         void* towed = truck != nullptr && readable_ptr( truck )
             ? prism::offsets::field< void* >( truck, 0x1580 ) : nullptr;
+        CCore::g_instance->info( "fn191 inicio: self={:p} truck={:p} towed={:p}", self, truck, towed );
         if ( towed != nullptr && joint( towed ) != nullptr )
         {
             prism::offsets::field< void* >( self, prism::offsets::game_actor_trailer ) = towed;
@@ -1154,6 +1193,8 @@ namespace br_carretas
         for ( auto& torn : lines_torn ) torn = false;
         if ( self == nullptr ) return;
         void* t = prism::offsets::field< void* >( self, prism::offsets::game_actor_trailer );
+        CCore::g_instance->info( "fn191 pós-dispatcher: trailer={:p} junta={:p}",
+                                 t, t != nullptr ? joint( t ) : nullptr );
         if ( t != nullptr && joint( t ) == nullptr )
         {
             pending_native_detach = nullptr;
@@ -1163,15 +1204,13 @@ namespace br_carretas
             {
                 if ( set_lines_fn != nullptr )
                 {
+                    CCore::g_instance->info( "fn191 cabo: set_lines({:p},0,1)", t );
                     set_lines_fn( t, 0, 1 );
                 }
-                if ( truck != nullptr && pair_vehicles_fn != nullptr )
-                {
-                    pair_vehicles_fn( truck, t );
-                }
+                
                 if ( truck != nullptr && apply_cables_fn != nullptr )
                 {
-
+                    CCore::g_instance->info( "fn191 cabo: apply_cables(cavalo,null)" );
                     apply_cables_fn( truck, nullptr, 0, 0, 0 );
                 }
             }
@@ -1186,6 +1225,7 @@ namespace br_carretas
 
             pending_native_detach = t;
             pending_native_age = 0;
+            CCore::g_instance->info( "fn191: junta ainda viva - desengate nativo pendente {:p}", t );
         }
 
         if ( truck != nullptr && readable_ptr( truck ) &&

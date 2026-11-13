@@ -134,6 +134,7 @@ namespace br_carretas
     void rebuild_one_edge( void* front, void* trailer )
     {
         if ( rebuild_lines_fn == nullptr || front == nullptr || trailer == nullptr ) return;
+        CCore::g_instance->info( "fn152 cabo: rebuild_lines({:p},{:p})", front, trailer );
         void* slave = prism::offsets::field< void* >( trailer, prism::offsets::trailer_slave );
         prism::offsets::field< void* >( trailer, prism::offsets::trailer_slave ) = nullptr;
         rebuild_lines_fn( front, trailer );
@@ -144,6 +145,7 @@ namespace br_carretas
     void rebuild_parked_edge( void* front, void* trailer )
     {
         if ( rebuild_lines_hook == nullptr || front == nullptr || trailer == nullptr ) return;
+        CCore::g_instance->info( "fn153 cabo: rebuild_parked({:p},{:p})", front, trailer );
         void* slave = prism::offsets::field< void* >( trailer, prism::offsets::trailer_slave );
         prism::offsets::field< void* >( trailer, prism::offsets::trailer_slave ) = nullptr;
         rebuild_lines_hook->get_original< prism::vehicle_rebuild_lines_fn >()( front, trailer );
@@ -178,6 +180,7 @@ namespace br_carretas
         if ( truck != nullptr && towed != nullptr && joint( towed ) != nullptr &&
              towed != pending_native_detach )
         {
+            CCore::g_instance->info( "fn154 cabo: aresta cavalo->towed {:p}", towed );
             rebuild_one_edge( truck, towed );
         }
         for ( uint32_t i = 0; i < trailer_count; ++i )
@@ -203,6 +206,8 @@ namespace br_carretas
         {
             const bool tows = towed != nullptr && joint( towed ) != nullptr;
             const int mode = tows ? get_cvar_int_fn( cables_mode_cvar ) : 0;
+            CCore::g_instance->info( "fn154 cabo: apply_cables(cavalo,{:p}) mode={}",
+                                     tows ? towed : nullptr, mode );
             apply_cables_fn( truck, tows ? towed : nullptr,
                 0, mode > 4 ? 4 : mode < 0 ? 0 : mode, 0 );
         }
