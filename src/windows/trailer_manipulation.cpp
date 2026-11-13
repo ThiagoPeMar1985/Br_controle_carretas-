@@ -161,22 +161,26 @@ namespace br_carretas
     // 073 - corta todos os links slave escritos pelo plugin
     void sever_all_claims()
     {
-        __try
+        std::lock_guard< std::recursive_mutex > claim_lk( claim_write_mutex );
+        []()
         {
-            for ( auto& edge : synthetic_edges )
+            __try
             {
-                void* owner = edge.owner.load( std::memory_order_acquire );
-                void* child = edge.child.load( std::memory_order_acquire );
-                if ( is_trailer_obj( owner ) )
+                for ( auto& edge : synthetic_edges )
                 {
-                    void** sl = &prism::offsets::field< void* >( owner, prism::offsets::trailer_slave );
-                    if ( *sl == child ) *sl = nullptr;
+                    void* owner = edge.owner.load( std::memory_order_acquire );
+                    void* child = edge.child.load( std::memory_order_acquire );
+                    if ( is_trailer_obj( owner ) && !cargo_freeze() )
+                    {
+                        void** sl = &prism::offsets::field< void* >( owner, prism::offsets::trailer_slave );
+                        if ( *sl == child ) *sl = nullptr;
+                    }
+                    edge.owner.store( nullptr, std::memory_order_release );
+                    edge.child.store( nullptr, std::memory_order_release );
                 }
-                edge.owner.store( nullptr, std::memory_order_release );
-                edge.child.store( nullptr, std::memory_order_release );
             }
-        }
-        __except ( EXCEPTION_EXECUTE_HANDLER ) {}
+            __except ( EXCEPTION_EXECUTE_HANDLER ) {}
+        }();
     }
 
     // 074 - zera todo o rastreio após reload ou falha
@@ -238,6 +242,7 @@ namespace br_carretas
             parked_xform_valid[ i ] = true;
             CCore::g_instance->info( "carrying detached slot {} across the respawn", i );
         }
+        cargo_respawn_done = true;
         CCore::g_instance->info( "trailer state reset" );
     }
 
@@ -564,17 +569,20 @@ namespace br_carretas
 
         auto* game_actor = CCore::g_instance->get_game_actor();
 
-        lift_axles_update( game_actor );
+        if ( !cargo_freeze() ) lift_axles_update( game_actor );
         pt[ 5 ] = __rdtsc();
 
         if ( wake && coupling_on && this->connect_valid_ ) coupling_parked_update();
         pt[ 6 ] = __rdtsc();
         update_hotkeys();
-        update_steering( ImGui::GetIO().DeltaTime );
+        if ( !cargo_freeze() )
+        {
+            update_steering( ImGui::GetIO().DeltaTime );
+            update_air( ImGui::GetIO().DeltaTime );
+            brake_boost_update();
+        }
         pt[ 7 ] = __rdtsc();
-        update_air( ImGui::GetIO().DeltaTime );
         pt[ 8 ] = __rdtsc();
-        brake_boost_update();
         pt[ 9 ] = __rdtsc();
 
         static uint64_t acc[ 9 ] = {};
@@ -1276,14 +1284,38 @@ namespace br_carretas
             "errado: reproduza o problema e envie ao desenvolvedor o arquivo "
             "br_carretas_debug.log em Documentos\\Euro Truck Simulator 2" );
 
+        if ( settings::g_settings.debug_logs )
+        {
+            ImGui::SeparatorText( "Seções" );
+            struct { const char* label; bool* flag; } cats[] = {
+                { "Eixos (levantar/baixar)", &settings::g_settings.log_axles },
+                { "Direção de eixos", &settings::g_settings.log_steering },
+                { "Cavalo (ar, freios)", &settings::g_settings.log_truck },
+                { "Acoplamento", &settings::g_settings.log_coupling },
+                { "Teleporte", &settings::g_settings.log_teleport },
+                { "Carga (carregar/descarregar)", &settings::g_settings.log_cargo },
+            };
+            for ( int i = 0; i < 6; ++i )
+            {
+                ImGui::PushID( i );
+                if ( ui::toggle_switch( "##logcat", cats[ i ].flag ) ) settings::save();
+                ImGui::SameLine();
+                ImGui::TextWrapped( "%s", cats[ i ].label );
+                ImGui::PopID();
+            }
+            ui::text_disabled_wrapped(
+                "liga o diagnóstico pesado só da parte que está dando problema" );
+        }
+
         ImGui::EndChild();
     }
 
     // 101 - reescreve os links slave das peças estacionadas
     void rebuild_parked_claim_links()
     {
+        std::lock_guard< std::recursive_mutex > claim_lk( claim_write_mutex );
         if ( native_chain_call_active.load( std::memory_order_acquire ) ||
-             !canon_all_trailer_objs() )
+             canon_age < 90 || !canon_all_trailer_objs() || cargo_freeze() )
         {
             return;
         }
@@ -1302,7 +1334,8 @@ namespace br_carretas
             live[ ln ] = t;
 
             bool live_to_truck = false;
-            for ( void* cur = t; cur != nullptr && joint( cur ) != nullptr; )
+            uint32_t pd = 0;
+            for ( void* cur = t; cur != nullptr && joint( cur ) != nullptr && pd++ < max_trailers * 4; )
             {
                 void* p = prism::offsets::field< void* >( cur, prism::offsets::trailer_parent );
                 if ( p == truck ) { live_to_truck = true; break; }
@@ -1322,7 +1355,7 @@ namespace br_carretas
             if ( towing ) continue;
             void** slave = &prism::offsets::field< void* >( live[ i ], prism::offsets::trailer_slave );
             void* want = ( i + 1 < ln ) ? live[ i + 1 ] : nullptr;
-            if ( *slave != want ) *slave = want;
+            if ( *slave != want ) slave_link_write( live[ i ], want );
             if ( parkedish[ i ] ) set_claim_edge( live[ i ], want );
             else clear_claim_edge( live[ i ] );
         }
@@ -1347,7 +1380,7 @@ namespace br_carretas
                     clear_claim_edge( t );
                     continue;
                 }
-                if ( *sl != next ) *sl = next;
+                if ( *sl != next ) slave_link_write( t, next );
                 set_claim_edge( t, next );
                 next = t;
             }
@@ -1364,7 +1397,7 @@ namespace br_carretas
                 anchor = s;
             }
             void** sl = &prism::offsets::field< void* >( anchor, prism::offsets::trailer_slave );
-            if ( *sl != next ) *sl = next;
+            if ( *sl != next ) slave_link_write( anchor, next );
             set_claim_edge( anchor, next );
         }
 
@@ -1378,7 +1411,7 @@ namespace br_carretas
     // 102 - reescan da cadeia + manutenção (links, linhas, marcas)
     void CTrailerManipulation::refresh_trailer_chain()
     {
-
+        std::lock_guard< std::recursive_mutex > claim_lk( claim_write_mutex );
         if ( canon_dead() ) reset_trailer_state();
 
         if ( lane_prune_frames > 0 )
@@ -1428,7 +1461,7 @@ namespace br_carretas
 
         canon_age = canon[ 0 ] != nullptr ? canon_age + 6 : 0;
 
-        if ( truck_towed != nullptr && joint( truck_towed ) == nullptr &&
+        if ( !cargo_freeze() && truck_towed != nullptr && joint( truck_towed ) == nullptr &&
             !( pending.kind == pending_kind::connect && pending.trailer == truck_towed ) )
         {
             if ( auto* game_actor = CCore::g_instance->get_game_actor() )
@@ -1487,6 +1520,7 @@ namespace br_carretas
             attach_target = nullptr;
         }
 
+        if ( !cargo_freeze() )
         {
             void* live[ max_trailers ] = {}; uint32_t ln = 0;
             bool jl[ max_trailers ] = {}, parkedish[ max_trailers ] = {};
@@ -1504,7 +1538,8 @@ namespace br_carretas
                     jl[ ln ] = joint( t ) == nullptr;
 
                     bool live_to_truck = false;
-                    for ( void* cur = t; cur != nullptr && joint( cur ) != nullptr; )
+                    uint32_t pd = 0;
+                    for ( void* cur = t; cur != nullptr && joint( cur ) != nullptr && pd++ < max_trailers * 4; )
                     {
                         void* p = prism::offsets::field< void* >( cur, prism::offsets::trailer_parent );
                         if ( p == truck ) { live_to_truck = true; break; }
@@ -1560,7 +1595,7 @@ namespace br_carretas
                             continue;
                         }
                         if ( cur != nullptr && is_trailer_obj( cur ) && joint( cur ) != nullptr ) continue;
-                        *psl = live[ i ];
+                        slave_link_write( p, live[ i ] );
                         clear_claim_edge( p );
                     }
                 }
@@ -1627,13 +1662,16 @@ namespace br_carretas
                     CCore::g_instance->info( "uncoupled edge c{} -> c{}: hiding its cables", canon_index_of( p ), si );
                 }
 
-                __try
+                [&]()
                 {
-                    if ( set_lines_fn != nullptr ) set_lines_fn( sl, 0, 1 );
-                }
-                __except ( EXCEPTION_EXECUTE_HANDLER )
-                {
-                }
+                    __try
+                    {
+                        if ( set_lines_fn != nullptr ) set_lines_fn( sl, 0, 1 );
+                    }
+                    __except ( EXCEPTION_EXECUTE_HANDLER )
+                    {
+                    }
+                }();
             }
             bool any_parked = false;
             for ( uint32_t i = 0; i < ln; ++i ) any_parked |= parkedish[ i ];
@@ -1660,22 +1698,25 @@ namespace br_carretas
 
                         lane_prune_frames = 40;
 
-                        __try
+                        [&]()
                         {
-                            if ( set_lines_fn != nullptr )
+                            __try
                             {
-                                set_lines_fn( live[ i ], 0, 1 );
+                                if ( set_lines_fn != nullptr )
+                                {
+                                    set_lines_fn( live[ i ], 0, 1 );
+                                }
+                                if ( truck != nullptr && apply_cables_fn != nullptr )
+                                {
+                                    CCore::g_instance->info( "fn102 cabo: apply_cables(cavalo,null)" );
+                                    apply_cables_fn( truck, nullptr, 0, 0, 0 );
+                                }
                             }
-                            if ( truck != nullptr && apply_cables_fn != nullptr )
+                            __except ( EXCEPTION_EXECUTE_HANDLER )
                             {
-                                CCore::g_instance->info( "fn102 cabo: apply_cables(cavalo,null)" );
-                                apply_cables_fn( truck, nullptr, 0, 0, 0 );
+                                CCore::g_instance->warning( "hose teardown faulted (função 102) on c{} - skipped", i );
                             }
-                        }
-                        __except ( EXCEPTION_EXECUTE_HANDLER )
-                        {
-                            CCore::g_instance->warning( "hose teardown faulted (função 102) on c{} - skipped", i );
-                        }
+                        }();
                     }
                     canon_was_jointed[ i ] = jointed;
 
@@ -1746,7 +1787,7 @@ namespace br_carretas
                         for ( uint32_t k = 0; k < vn; ++k ) seen |= vis[ k ] == live[ i ];
                         if ( seen || !is_trailer_obj( live[ i ] ) ) continue;
                         CCore::g_instance->info( "visibility pin: re-chained unreachable trailer {:p}", live[ i ] );
-                        prism::offsets::field< void* >( tail, prism::offsets::trailer_slave ) = live[ i ];
+                        slave_link_write( tail, live[ i ] );
                         set_claim_edge( tail, live[ i ] );
                         tail = live[ i ];
                     }
@@ -1794,7 +1835,7 @@ namespace br_carretas
     void CTrailerManipulation::update_convoy_state()
     {
 
-        if ( !trailer_maintenance_ready() ) return;
+        if ( cargo_freeze() || !trailer_maintenance_ready() ) return;
         bool in_convoy[ max_trailers ] = {};
         bool parent_in_convoy = true;
         for ( uint32_t i = 0; i < trailer_count; ++i )

@@ -24,7 +24,7 @@
 #include "prism/functions.hpp"
 #include "settings/settings.hpp"
 
-namespace ts_extra_utilities
+namespace br_carretas
 {
     //========================================================================
     // Air compressor diagnostics (temporary — collecting the native refill
@@ -46,7 +46,7 @@ namespace ts_extra_utilities
     //========================================================================
     // Air compressor boost ("Compressor" slider)
     //
-    // Reverse-engineered from the telemetry channel registration (1.61):
+    // Reverse-engineered from the telemetry channel registration:
     // the truck.brake.air.pressure getter callback at 0x14064B850 reads
     //   psi = [[truck+0x200] + 0x458] * [truck+0x1148] * 14.5
     // +0x458 on the air sub-object is the tank MAX pressure (~10 bar — a

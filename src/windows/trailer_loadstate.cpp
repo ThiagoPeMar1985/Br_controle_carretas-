@@ -124,7 +124,7 @@ namespace br_carretas
 
         if ( !settings::g_settings.cargo_restore || load_game_active() )
         {
-            trailer_teleport_hook->get_original< trailer_teleport_fn >()( self, transform );
+            teleport_safe( self, transform );
             return;
         }
 
@@ -155,7 +155,7 @@ namespace br_carretas
 
         if ( canon_age < 90 )
         {
-            trailer_teleport_hook->get_original< trailer_teleport_fn >()( self, transform );
+            teleport_safe( self, transform );
             return;
         }
         const float* dst = static_cast< const float* >( transform );
@@ -223,12 +223,12 @@ namespace br_carretas
         {
             hook_xform_t fix = *static_cast< const hook_xform_t* >( transform );
             fix.pos = corrected;
-            trailer_teleport_hook->get_original< trailer_teleport_fn >()( self, &fix );
+            teleport_safe( self, &fix );
             CCore::g_instance->info( "trailer teleport {:p}: re-seated at corrected slot "
                 "({:.1f},{:.1f},{:.1f})", self, corrected.x, corrected.y, corrected.z );
             return;
         }
-        trailer_teleport_hook->get_original< trailer_teleport_fn >()( self, transform );
+        teleport_safe( self, transform );
     }
 
     using actor_teleport_fn = void __fastcall( void* /*actor*/, void* /*arg*/, uint8_t, uint8_t );
@@ -268,7 +268,7 @@ namespace br_carretas
             fix.pos.y = pt.pos.y;
             fix.pos.z = wz;
             using teleport_fn_t = void __fastcall( void*, void* );
-            trailer_teleport_hook->get_original< teleport_fn_t >()( t, &fix );
+            teleport_safe( t, &fix );
             CCore::g_instance->info(
                 "teleport settle: {:p} re-seated at formation slot ({:.1f}m off)",
                 t, std::sqrt( ex * ex + ez * ez ) );
@@ -314,7 +314,11 @@ namespace br_carretas
                     for ( void* d : plugin_detached )
                         if ( d != nullptr ) { any_detached = true; break; }
                     for ( bool f : detached_idx ) any_detached |= f;
-                    if ( any_detached ) cargo_seq_ms = steady_ms();
+                    if ( any_detached )
+                    {
+                        cargo_seq_ms = steady_ms();
+                        cargo_respawn_done = false;
+                    }
                 }
                 const bool block = settings::g_settings.cargo_restore && dist < 3000.f;
                 CCore::g_instance->info(
@@ -906,13 +910,16 @@ namespace br_carretas
             ep->ExceptionRecord->NumberParameters > 1
                 ? reinterpret_cast< void* >( ep->ExceptionRecord->ExceptionInformation[ 1 ] ) : nullptr );
 
+        static uint64_t stack_rips[ 8 ] = {};
         static int stack_dumps = 0;
         const auto* dos = reinterpret_cast< const IMAGE_DOS_HEADER* >( base );
         const auto* nt = reinterpret_cast< const IMAGE_NT_HEADERS64* >( base + dos->e_lfanew );
         const uint64_t image_end = base + nt->OptionalHeader.SizeOfImage;
-        if ( ep->ContextRecord != nullptr && ( rip < base || rip >= image_end ) && stack_dumps < 4 )
+        bool seen_rip = false;
+        for ( int i = 0; i < stack_dumps; ++i ) if ( stack_rips[ i ] == rip ) seen_rip = true;
+        if ( ep->ContextRecord != nullptr && !seen_rip && stack_dumps < 8 )
         {
-            ++stack_dumps;
+            stack_rips[ stack_dumps++ ] = rip;
             const auto* sp = reinterpret_cast< const uint64_t* >( ep->ContextRecord->Rsp );
             std::string found;
             int n = 0;
@@ -986,11 +993,12 @@ namespace br_carretas
     void unhide_detached()
     {
 
-        if ( tp_cooldown > 0 ) return;
+        if ( cargo_freeze() || tp_cooldown > 0 || canon_age < 90 ||
+             !canon_all_trailer_objs() ) return;
         for ( uint32_t i = 0; i < max_trailers && canon[ i ] != nullptr; ++i )
         {
             void* t = canon[ i ];
-            if ( !readable_ptr( t ) || joint( t ) != nullptr ) continue;
+            if ( !is_trailer_obj( t ) || joint( t ) != nullptr ) continue;
             if ( !is_detached( t ) && !is_plugin_detached( t ) ) continue;
             if ( prism::offsets::field< void* >( t, prism::offsets::trailer_parked_state ) != nullptr )
             {
@@ -1004,7 +1012,7 @@ namespace br_carretas
                 if ( hook_world( t, xf ) )
                 {
                     using teleport_fn_t = void __fastcall( void*, void* );
-                    trailer_teleport_hook->get_original< teleport_fn_t >()( t, &xf );
+                    teleport_safe( t, &xf );
                 }
             }
         }
@@ -1014,6 +1022,7 @@ namespace br_carretas
     void update_parked_locks()
     {
         if ( tp_cooldown > 0 ) --tp_cooldown;
+        if ( cargo_freeze() ) return;
         for ( uint32_t i = 0; i < max_trailers && canon[ i ] != nullptr; ++i )
         {
             if ( tp_cooldown > 0 )
@@ -1176,7 +1185,7 @@ namespace br_carretas
                      trailer_teleport_hook != nullptr )
                 {
                     using teleport_fn_t = void __fastcall( void* /*trailer*/, void* /*transform*/ );
-                    trailer_teleport_hook->get_original< teleport_fn_t >()( t, &anchor_home[ i ] );
+                    teleport_safe( t, &anchor_home[ i ] );
                     anchor_xform[ i ] = anchor_home[ i ];
                     anchor_settle[ i ] = 0;
                     continue;
@@ -1209,7 +1218,7 @@ namespace br_carretas
             {
 
                 using teleport_fn_t = void __fastcall( void* /*trailer*/, void* /*transform*/ );
-                trailer_teleport_hook->get_original< teleport_fn_t >()( t, &anchor_xform[ i ] );
+                teleport_safe( t, &anchor_xform[ i ] );
 
                 if ( ++anchor_fixes[ i ] >= 30 )
                 {

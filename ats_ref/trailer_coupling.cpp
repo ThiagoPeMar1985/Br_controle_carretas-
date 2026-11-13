@@ -24,7 +24,7 @@
 #include "prism/functions.hpp"
 #include "settings/settings.hpp"
 
-namespace ts_extra_utilities
+namespace br_carretas
 {
     // crash->dump plumbing: the VEH records the exception into statics and
     // signals the watchdog thread, which has a healthy stack and writes the
@@ -1799,7 +1799,7 @@ namespace ts_extra_utilities
         return lane_obstacle_insert_hook->get_original< lane_obstacle_insert_fn >()( node, link, pos );
     }
 
-    // pure virtual call handler (0x141D24910 on ATS 1.61.3.18, twin of ETS2
+    // pure virtual call handler (0x141D24910 on the ATS build, twin of ETS2
     // 0x1D23610): a mid-chain detached trailer leaves listener nodes whose
     // vfunc slots point here — every per-frame consumer that walks them
     // (node dispatch, parked machine, obstacle lists) would die on a
@@ -3441,8 +3441,7 @@ namespace ts_extra_utilities
     }
 
     // the chase camera object lives in the camera-manager slot array; find it
-    // by its vehicle_behind_rotation_camera vtable (exe+0x2314B60 on ATS
-    // 1.61.3.18). The object is NOT stable across cinematics — the delivery
+    // by its vehicle_behind_rotation_camera vtable (exe+0x2314B60 on the ATS build). The object is NOT stable across cinematics — the delivery
     // cutscene rebuilds the camera list, and a pointer cached mid-cutscene
     // is freed memory a second later — so a cached hit still re-validates
     // the vtable before use and falls through to a fresh scan on mismatch.

@@ -24,7 +24,7 @@
 #include "prism/functions.hpp"
 #include "settings/settings.hpp"
 
-namespace ts_extra_utilities
+namespace br_carretas
 {
     //========================================================================
     // Steering lock state (oversize / steerable-axle trailers)

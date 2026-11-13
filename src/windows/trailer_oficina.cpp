@@ -20,6 +20,9 @@ namespace br_carretas
     uint64_t state_bad_ms = 0;
     uint64_t last_tick_ms = 0;
     uint64_t canon_dead_since = 0;
+    bool reload_detached[ max_trailers ] = {};
+    hook_xform_t reload_xf[ max_trailers ] = {};
+    uint64_t reload_pending_ms = 0;
 
     // 144 - descarta o espelho do mundo antigo após um load
     void workshop_respawn_discard()
@@ -121,7 +124,20 @@ namespace br_carretas
             }
             else if ( canon_changed && hold_had_poses )
             {
-                CCore::g_instance->info( "respawn discarded - world reload stays native" );
+                if ( in_cargo_window() && reload_pending_ms == 0 )
+                {
+                    reload_pending_ms = now_ms;
+                    for ( uint32_t i = 0; i < max_trailers; ++i )
+                    {
+                        reload_detached[ i ] = hold_ok[ i ] && !hold_jointed[ i ];
+                        if ( reload_detached[ i ] ) reload_xf[ i ] = hold_xf[ i ];
+                    }
+                    CCore::g_instance->info( "cargo respawn: parked layout held across world reload" );
+                }
+                else if ( !in_cargo_window() )
+                {
+                    CCore::g_instance->info( "respawn discarded - world reload stays native" );
+                }
             }
             canon_dead_since = 0;
 
@@ -176,7 +192,7 @@ namespace br_carretas
                     pose_pending[ i ] = false;
                     void* t = canon[ i ];
                     if ( t == nullptr || !is_trailer_obj( t ) ) continue;
-                    trailer_teleport_hook->get_original< teleport_fn_t >()( t, &hold_xf[ i ] );
+                    teleport_safe( t, &hold_xf[ i ] );
                     anchor_valid[ i ] = false;
                 }
                 CCore::g_instance->info( "workshop respawn: rig re-seated at pre-rebuild poses" );
@@ -184,6 +200,32 @@ namespace br_carretas
             else
             {
                 for ( auto& p : pose_pending ) p = false;
+            }
+        }
+
+        if ( reload_pending_ms != 0 )
+        {
+            if ( !in_cargo_window() || !canon_any )
+            {
+                reload_pending_ms = 0;
+                for ( auto& f : reload_detached ) f = false;
+            }
+            else if ( canon_age >= 90 )
+            {
+                reload_pending_ms = 0;
+                for ( uint32_t i = 0; i < max_trailers; ++i )
+                {
+                    if ( !reload_detached[ i ] ) continue;
+                    reload_detached[ i ] = false;
+                    void* t = canon[ i ];
+                    if ( t == nullptr || !is_trailer_obj( t ) ) continue;
+                    detached_idx[ i ] = true;
+                    parked_xform[ i ] = reload_xf[ i ];
+                    parked_xform_valid[ i ] = true;
+                    carry_hold[ i ] = true;
+                    carry_brake_frames = 900;
+                }
+                CCore::g_instance->info( "cargo respawn: parked slots re-marked after world reload" );
             }
         }
     }

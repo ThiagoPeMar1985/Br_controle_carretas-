@@ -56,6 +56,14 @@ namespace br_carretas::settings
         // Off by default: logging then costs one flag check - turn on only
         // when collecting data for the developer
         bool debug_logs = false;
+        // [logs] section: per-subsystem diagnostic switches - each gates the
+        // heavy traces of that area, all still require debug_logs on
+        bool log_axles = false;
+        bool log_steering = false;
+        bool log_truck = false;
+        bool log_coupling = false;
+        bool log_teleport = false;
+        bool log_cargo = false;
         // extra brake factor forwarded to coupled trailers, in percent of the
         // truck's value (0 = native balance): the trailers brake proportionally
         // harder so they take the load first on slippery surfaces
@@ -66,6 +74,9 @@ namespace br_carretas::settings
         // air lost per game hour while the engine is off (bar/h, 0 = none)
         float air_leak = 0.f;
     };
+
+    // diagnostic section for CCore::dlog - one flag per subsystem
+    enum class logcat { axles, steering, truck, coupling, teleport, cargo };
 
     extern Settings g_settings;
 

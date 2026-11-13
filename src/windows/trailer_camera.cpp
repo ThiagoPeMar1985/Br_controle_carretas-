@@ -46,10 +46,14 @@ namespace br_carretas
     // 199 - hook: update da câmera 2 (esconde links mortos na medida)
     void __fastcall hk_cam_update( void* cam, float dt )
     {
-
+        std::lock_guard< std::recursive_mutex > claim_lk( claim_write_mutex );
         if ( canon_age < 90 )
         {
-            cam_update_hook->get_original< cam_update_fn >()( cam, dt );
+            [&]()
+            {
+                __try { cam_update_hook->get_original< cam_update_fn >()( cam, dt ); }
+                __except ( EXCEPTION_EXECUTE_HANDLER ) {}
+            }();
             return;
         }
         const bool force_anchor = camera_anchor_override.load( std::memory_order_acquire );
@@ -98,20 +102,21 @@ namespace br_carretas
         {
             vcall< cam_recompute_fn >( cam, 14, uint8_t( 1 ) );
         }
+        if ( anchor != nullptr && !is_trailer_obj( anchor ) ) anchor = nullptr;
         struct hidden_link { void* owner; void* slave; };
         hidden_link hidden[ max_trailers ];
         uint32_t hidden_n = 0;
         for ( uint32_t i = 0; i < trailer_count && hidden_n < max_trailers; ++i )
         {
             void* t = trailers[ i ];
-            if ( t == nullptr || !readable_ptr( t ) ||
+            if ( !is_trailer_obj( t ) ||
                  !readable_ptr( static_cast< uint8_t* >( t ) + prism::offsets::trailer_physics_joint ) ||
                  joint( t ) == nullptr )
             {
                 continue;
             }
             void* slave = prism::offsets::field< void* >( t, prism::offsets::trailer_slave );
-            if ( slave != nullptr && readable_ptr( slave ) &&
+            if ( slave != nullptr && is_trailer_obj( slave ) &&
                  readable_ptr( static_cast< uint8_t* >( slave ) + prism::offsets::trailer_physics_joint ) &&
                  joint( slave ) == nullptr )
             {
@@ -119,13 +124,16 @@ namespace br_carretas
                 prism::offsets::field< void* >( t, prism::offsets::trailer_slave ) = nullptr;
             }
         }
-        cam_update_hook->get_original< cam_update_fn >()( cam, dt );
+        [&]()
+        {
+            __try { cam_update_hook->get_original< cam_update_fn >()( cam, dt ); }
+            __except ( EXCEPTION_EXECUTE_HANDLER ) {}
+        }();
         for ( uint32_t i = 0; i < hidden_n; ++i )
         {
             if ( readable_ptr( hidden[ i ].owner ) )
             {
-                prism::offsets::field< void* >( hidden[ i ].owner, prism::offsets::trailer_slave ) =
-                    hidden[ i ].slave;
+                slave_link_write( hidden[ i ].owner, hidden[ i ].slave );
             }
         }
 
@@ -168,10 +176,17 @@ namespace br_carretas
             if ( dup || seen_n >= max_trailers * 2 + 1 ) break;
             seen[ seen_n++ ] = t;
             float vec[ 4 ] = {};
-            combo_hook_pos_fn_ptr( prev, vec );
+            bool pos_ok = true;
+            [&]()
+            {
+                __try { combo_hook_pos_fn_ptr( prev, vec ); }
+                __except ( EXCEPTION_EXECUTE_HANDLER ) { pos_ok = false; }
+            }();
+            if ( !pos_ok ) break;
             const float gap = f( prev, 0x2C ) - vec[ 2 ];
             void* chassis = prism::offsets::field< void* >( t, 0x200 );
-            const float over = ( chassis != nullptr ? f( chassis, 0x748 ) : 0.f ) - f( t, 0x20 );
+            const float over = ( chassis != nullptr && readable_ptr( chassis )
+                ? f( chassis, 0x748 ) : 0.f ) - f( t, 0x20 );
             acc += ( f( t, 0x2C ) - f( t, 0x20 ) ) - gap - over;
         }
         return acc;

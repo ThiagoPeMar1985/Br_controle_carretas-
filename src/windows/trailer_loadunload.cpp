@@ -18,6 +18,7 @@ namespace br_carretas
     void restore_parked()
     {
 
+        if ( cargo_freeze() ) return;
         if ( rig_armed )
         {
             rig_armed = false;
@@ -72,8 +73,7 @@ namespace br_carretas
                 const int mi = canon_index_of( m );
                 if ( mi >= 0 && parked_xform_valid[ mi ] && trailer_teleport_hook != nullptr )
                 {
-                    using teleport_fn_t = void __fastcall( void* /*trailer*/, void* /*transform*/ );
-                    trailer_teleport_hook->get_original< teleport_fn_t >()( m, &parked_xform[ mi ] );
+                    teleport_safe( m, &parked_xform[ mi ] );
                     anchor_valid[ mi ] = false;
                     if ( carry_hold[ mi ] ) carry_park[ mi ] = 20;
                     carry_hold[ mi ] = false;
@@ -111,7 +111,7 @@ namespace br_carretas
         {
             if ( carry_park[ i ] <= 0 || --carry_park[ i ] != 0 ) continue;
             void* t = canon[ i ];
-            if ( t != nullptr && readable_ptr( t ) && joint( t ) == nullptr )
+            if ( !cargo_freeze() && t != nullptr && readable_ptr( t ) && joint( t ) == nullptr )
             {
                 carry_set_brace( t );
                 native_park_detached( t );
@@ -119,7 +119,7 @@ namespace br_carretas
             }
         }
 
-        if ( carry_brake_frames > 0 && canon_age >= 10 )
+        if ( carry_brake_frames > 0 && canon_age >= 10 && !cargo_freeze() )
         {
             --carry_brake_frames;
             for ( uint32_t i = 0; i < max_trailers && canon[ i ] != nullptr; ++i )
@@ -138,7 +138,7 @@ namespace br_carretas
             for ( auto& h : carry_hold ) h = false;
             any_hold = false;
         }
-        if ( any_hold && canon_age >= 120 )
+        if ( any_hold && canon_age >= 120 && !cargo_freeze() )
         {
             for ( uint32_t i = 0; i < max_trailers && canon[ i ] != nullptr; ++i )
             {
@@ -146,8 +146,7 @@ namespace br_carretas
                 if ( !carry_hold[ i ] || !readable_ptr( t ) || joint( t ) != nullptr ) continue;
                 if ( parked_xform_valid[ i ] && trailer_teleport_hook != nullptr )
                 {
-                    using teleport_fn_t = void __fastcall( void*, void* );
-                    trailer_teleport_hook->get_original< teleport_fn_t >()( t, &parked_xform[ i ] );
+                    teleport_safe( t, &parked_xform[ i ] );
                     anchor_valid[ i ] = false;
                 }
                 mark_detached( t );

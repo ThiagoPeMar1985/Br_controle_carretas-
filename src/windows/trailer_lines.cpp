@@ -133,23 +133,25 @@ namespace br_carretas
     // 152 - reconstrói as mangueiras de uma aresta (link escondido na chamada)
     void rebuild_one_edge( void* front, void* trailer )
     {
+        std::lock_guard< std::recursive_mutex > claim_lk( claim_write_mutex );
         if ( rebuild_lines_fn == nullptr || front == nullptr || trailer == nullptr ) return;
         CCore::g_instance->info( "fn152 cabo: rebuild_lines({:p},{:p})", front, trailer );
         void* slave = prism::offsets::field< void* >( trailer, prism::offsets::trailer_slave );
         prism::offsets::field< void* >( trailer, prism::offsets::trailer_slave ) = nullptr;
         rebuild_lines_fn( front, trailer );
-        prism::offsets::field< void* >( trailer, prism::offsets::trailer_slave ) = slave;
+        slave_link_write( trailer, slave );
     }
 
     // 153 - redesenha a aresta real atrás de uma cabeça estacionada
     void rebuild_parked_edge( void* front, void* trailer )
     {
+        std::lock_guard< std::recursive_mutex > claim_lk( claim_write_mutex );
         if ( rebuild_lines_hook == nullptr || front == nullptr || trailer == nullptr ) return;
         CCore::g_instance->info( "fn153 cabo: rebuild_parked({:p},{:p})", front, trailer );
         void* slave = prism::offsets::field< void* >( trailer, prism::offsets::trailer_slave );
         prism::offsets::field< void* >( trailer, prism::offsets::trailer_slave ) = nullptr;
         rebuild_lines_hook->get_original< prism::vehicle_rebuild_lines_fn >()( front, trailer );
-        prism::offsets::field< void* >( trailer, prism::offsets::trailer_slave ) = slave;
+        slave_link_write( trailer, slave );
 
         if ( set_lines_fn != nullptr )
         {
@@ -365,7 +367,7 @@ namespace br_carretas
     // 159 - vigia de lâmpadas por tick
     void light_watch_tick()
     {
-        if ( canon_age < 90 ) return;
+        if ( canon_age < 90 || cargo_freeze() ) return;
         for ( uint32_t i = 0; i < max_trailers && canon[ i ] != nullptr; ++i )
         {
             void* t = canon[ i ];
@@ -481,7 +483,7 @@ namespace br_carretas
     // 162 - hook: cabos/mangueiras do engate
     void __fastcall hk_apply_cables( void* truck, void* trailer, int unused, int mode, int zero )
     {
-
+        std::lock_guard< std::recursive_mutex > claim_lk( claim_write_mutex );
         if ( !settings::g_settings.cargo_restore )
         {
             apply_cables_hook->get_original< vehicle_cables_fn >()( truck, trailer, unused, mode, zero );
@@ -579,7 +581,7 @@ namespace br_carretas
         native_chain_call_active.store( false, std::memory_order_release );
         for ( uint32_t i = 0; i < hidden; ++i )
         {
-            prism::offsets::field< void* >( hidden_from[ i ], prism::offsets::trailer_slave ) = hidden_link[ i ];
+            slave_link_write( hidden_from[ i ], hidden_link[ i ] );
         }
     }
 
@@ -612,6 +614,7 @@ namespace br_carretas
     // 164 - hook: atualização de mangueiras por aresta
     void __fastcall hk_hose_update( void* front, void* trailer )
     {
+        std::lock_guard< std::recursive_mutex > claim_lk( claim_write_mutex );
         if ( !settings::g_settings.cargo_restore || canon_age < 90 )
         {
             hose_update_hook->get_original< hose_update_fn >()( front, trailer );
@@ -654,8 +657,7 @@ namespace br_carretas
         {
             if ( readable_ptr( hidden[ i ].owner ) )
             {
-                prism::offsets::field< void* >( hidden[ i ].owner, prism::offsets::trailer_slave ) =
-                    hidden[ i ].slave;
+                slave_link_write( hidden[ i ].owner, hidden[ i ].slave );
             }
         }
     }
@@ -663,7 +665,7 @@ namespace br_carretas
     // 165 - hook: cascata de desengate das linhas
     void __fastcall hk_rebuild_lines( void* front, void* trailer )
     {
-
+        std::lock_guard< std::recursive_mutex > claim_lk( claim_write_mutex );
         if ( !settings::g_settings.cargo_restore )
         {
             rebuild_lines_hook->get_original< prism::vehicle_rebuild_lines_fn >()( front, trailer );
@@ -745,7 +747,7 @@ namespace br_carretas
             rebuild_lines_hook->get_original< prism::vehicle_rebuild_lines_fn >()( front, nullptr );
             if ( hidden_link != nullptr )
             {
-                prism::offsets::field< void* >( front, prism::offsets::trailer_slave ) = hidden_link;
+                slave_link_write( front, hidden_link );
             }
             return;
         }

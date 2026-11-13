@@ -268,6 +268,12 @@ namespace br_carretas::settings
             g_settings.license_key, sizeof( g_settings.license_key ), nullptr, nullptr );
         g_settings.license_seen = GetPrivateProfileIntW( L"license", L"seen", 0, path.c_str() );
         g_settings.debug_logs = GetPrivateProfileIntW( L"debug", L"logs", 0, path.c_str() ) != 0;
+        g_settings.log_axles = GetPrivateProfileIntW( L"logs", L"axles", 0, path.c_str() ) != 0;
+        g_settings.log_steering = GetPrivateProfileIntW( L"logs", L"steering", 0, path.c_str() ) != 0;
+        g_settings.log_truck = GetPrivateProfileIntW( L"logs", L"truck", 0, path.c_str() ) != 0;
+        g_settings.log_coupling = GetPrivateProfileIntW( L"logs", L"coupling", 0, path.c_str() ) != 0;
+        g_settings.log_teleport = GetPrivateProfileIntW( L"logs", L"teleport", 0, path.c_str() ) != 0;
+        g_settings.log_cargo = GetPrivateProfileIntW( L"logs", L"cargo", 0, path.c_str() ) != 0;
 
         wchar_t value[ 32 ] = {};
         GetPrivateProfileStringW( L"steering", L"speed", L"", value, 32, path.c_str() );
@@ -325,6 +331,12 @@ namespace br_carretas::settings
             std::to_wstring( g_settings.license_seen ).c_str(), path.c_str() );
         WritePrivateProfileStringW( L"debug", L"logs",
             g_settings.debug_logs ? L"1" : L"0", path.c_str() );
+        WritePrivateProfileStringW( L"logs", L"axles", g_settings.log_axles ? L"1" : L"0", path.c_str() );
+        WritePrivateProfileStringW( L"logs", L"steering", g_settings.log_steering ? L"1" : L"0", path.c_str() );
+        WritePrivateProfileStringW( L"logs", L"truck", g_settings.log_truck ? L"1" : L"0", path.c_str() );
+        WritePrivateProfileStringW( L"logs", L"coupling", g_settings.log_coupling ? L"1" : L"0", path.c_str() );
+        WritePrivateProfileStringW( L"logs", L"teleport", g_settings.log_teleport ? L"1" : L"0", path.c_str() );
+        WritePrivateProfileStringW( L"logs", L"cargo", g_settings.log_cargo ? L"1" : L"0", path.c_str() );
         wchar_t buf[ 32 ] = {};
         swprintf_s( buf, L"%.2f", static_cast< double >( g_settings.steering_speed ) );
         WritePrivateProfileStringW( L"steering", L"speed", buf, path.c_str() );

@@ -1,15 +1,14 @@
-# BR Controle de Carretas (ETS2/ATS 1.61)
+# BR Controle de Carretas (ETS2/ATS 1.62)
 
 > [!WARNING]
 > Plugin experimental / em desenvolvimento. Pode causar crashes,
-> principalmente após atualizações do jogo. Somente singleplayer — **NÃO**
-> recomendado para multiplayer (TruckersMP).
+> principalmente após atualizações do jogo. Funciona em multiplayer
+> (TruckersMP).
 
-Plugin criado por **ThiagoPeMar1985**, baseado em
-[dariowouters/ts-extra-utilities](https://github.com/dariowouters/ts-extra-utilities)
-(MIT), que unifica em um plugin só o **engate/desengate individual de
-carretas**, **eixos eleváveis** e **eixos direcionais** — ideal para rodotrem,
-bitrem, dolly e carretas especiais (oversize/carga indivisível) no Brasil.
+Plugin criado por **ThiagoPeMar1985** que unifica em um plugin só o
+**engate/desengate individual de carretas**, **eixos eleváveis** e
+**eixos direcionais** — ideal para rodotrem, bitrem, dolly e carretas
+especiais (oversize/carga indivisível) no Brasil.
 
 ## Recursos
 
@@ -69,7 +68,7 @@ bitrem, dolly e carretas especiais (oversize/carga indivisível) no Brasil.
      o painel **Oversize** recolhe numa faixa fina quando não estiver em uso
 
 > [!NOTE]
-> O engate/desengate é singleplayer apenas e assume que o cavalo já está
+> O engate/desengate é multiplayer apenas e assume que o cavalo já está
 > posicionado sob o ponto de engate da carreta — o joint é criado no gancho
 > fixo, então alinhe primeiro (limite de ~7 m, como no engate nativo).
 
@@ -138,6 +137,4 @@ rodar liso, sem crashes. O histórico completo está no `CHANGELOG.md`.
 
 ## Créditos
 
-- Autor: [ThiagoPeMar1985](https://github.com/ThiagoPeMar1985) — adaptação PT-BR,
-  bitrem/rodotrem, câmera 2 customizada e demais recursos novos
-- Código-base (MIT): [dariowouters/ts-extra-utilities](https://github.com/dariowouters/ts-extra-utilities)
+- Autor: [ThiagoPeMar1985](https://github.com/ThiagoPeMar1985)

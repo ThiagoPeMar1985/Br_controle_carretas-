@@ -16,7 +16,7 @@ namespace br_carretas
     // 146 - jogo está carregando (fora do mundo)
     bool load_game_active()
     {
-        return traffic_game_state == nullptr || *traffic_game_state != 2;
+        return traffic_game_state == nullptr || *traffic_game_state < 2;
     }
 
     // 147 - por tick: detecta fim de load e zera o estado do mundo antigo

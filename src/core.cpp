@@ -277,7 +277,7 @@ namespace br_carretas
         if ( this->base_ctrl_instance_ptr_address != 0 ) return *reinterpret_cast< prism::base_ctrl_u** >( this->base_ctrl_instance_ptr_address );
         if ( this->base_ctrl_scan_failed_ ) return nullptr;
 
-        // 1.61: the `cheat repair` handler loads the game singleton and its game_actor back to back
+        // the `cheat repair` handler loads the game singleton and its game_actor back to back
         const auto addr = memory::get_address_for_pattern( "48 8b 3d ? ? ? ? 48 8b bf ? ? ? ? 48 8b 5f 18 48 8b 9b" );
 
         if ( addr == 0 )

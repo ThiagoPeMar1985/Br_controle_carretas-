@@ -6,11 +6,9 @@
 // the 1.53-era layout and are NOT valid for these fields anymore, so read them
 // through here instead.
 //
-// 1.62 moved the tail of the trailer object 0x30 bytes DOWN from the 1.61.1.9
-// values (slave 0x1088 -> 0x1058); every field below +0xE5D kept its 1.61.1.9
-// offset. The truck physics object tail moved 0x28 down (towed 0x15A8 -> 0x1580)
-// and game_actor gained 4 bytes ahead of the lift-state byte (0x248 -> 0x24C).
-// game_actor truck/trailer pointers (0x18/0xC8) are unchanged.
+// The 1.62 trailer layout: slave at +0x1058, fields below +0xE5D kept their
+// offsets. Truck physics object: towed trailer at +0x1580; game_actor lift-state
+// byte at +0x24C. game_actor truck/trailer pointers at +0x18/+0xC8.
 //
 // How each was found (offline, from the exe):
 //  - slave trailer: physics_trailer_u::connect_slave (1.62: 0x140775000) tests
@@ -25,14 +23,14 @@ namespace br_carretas::prism::offsets
     constexpr uint32_t trailer_parent = 0x1050; // game_trailer_actor_u*, previous trailer in the chain
     constexpr uint32_t trailer_slave = 0x1058; // game_trailer_actor_u*, next trailer in the chain
 
-    // Trailer steering (1.61.1.9): physics_trailer_u::steering_advance stores the
+    // Trailer steering: physics_trailer_u::steering_advance stores the
     // computed angle to +0x6B8 and passes the pointer at +0x6C0 to
     // set_individual_steering; the data object is null on trailers without
     // steerable wheels
     constexpr uint32_t trailer_steering = 0x06B8; // float, -1..1, written by the game every advance
     constexpr uint32_t trailer_steering_data = 0x06C0; // vehicle_wheel_steering_data_t*, null when not steerable
 
-    // Trailer connect/disconnect (1.61.1.9). physics_joint is null while a trailer is
+    // Trailer connect/disconnect. physics_joint is null while a trailer is
     // detached; the game's own detach path checks it before calling disconnect and then
     // lowering the brace. hook_locator is the vehicle's own coupling point in local
     // space; chassis+0x740 is the rear hook position on the chassis data object
@@ -72,7 +70,7 @@ namespace br_carretas::prism::offsets
     constexpr uint32_t chassis_slave_hook_type = 0x0628; // dword on chassis data, == 2 marks a slave/dolly hook
     constexpr uint32_t trailer_total_mass = 0x04B8; // float, passed to the parent's wheel-load distribution
 
-    // Trailer brake channels (1.61.1.9): the game's per-frame trailer update writes
+    // Trailer brake channels: the game's per-frame trailer update writes
     // trailer_brake = 1.0 and trailer_service_brake = 0 while the physics joint is
     // missing (the spring brake a detached trailer sits on), and the byte at +0x764
     // forces full brake regardless of the float. Nothing zeroes them on a manual
@@ -99,7 +97,7 @@ namespace br_carretas::prism::offsets
     constexpr uint32_t vfunc_disconnect = 99; // +0x318, disconnect()
     constexpr uint32_t vfunc_set_brace = 101; // +0x328, set_trailer_brace(bool lowered)
 
-    // Axle lift (1.61.1.9). Each trailer owns a lift controller (only created
+    // Axle lift. Each trailer owns a lift controller (only created
     // when the chassis data marks at least one axle liftable). The controller's
     // init builds a per-axle bitmask at +0x38 from the axle flags; its per-frame
     // update only animates the lift progress of masked axles, and the
@@ -109,7 +107,7 @@ namespace br_carretas::prism::offsets
     // may be selected: forcing a non-liftable axle crashes the wheel/suspension
     // update, so the selection is always masked to the original flag set, and
     // nothing is written while the controller state is not "down".
-    // Field is +0x6C8 in 1.61.1.9s (was +0x6A0 in 1.61) - verified via the
+    // Field is +0x6C8 - verified via the
     // trailer init storing the controller and the set_state wrapper reading it.
     constexpr uint32_t trailer_lift_controller = 0x06C8; // axle lift controller
     constexpr uint32_t lift_controller_state = 0x003C; // byte: 0 down, 1 lowering, 2 raising, 3 up

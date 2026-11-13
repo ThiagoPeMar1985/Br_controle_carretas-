@@ -24,7 +24,7 @@ BEGIN
             VALUE "FileDescription", "Plugin para ATS/ETS2: engate e desengate individual de carretas (rodotrem/bitrem)."
             VALUE "FileVersion", PLUGIN_VERSION_STR
             VALUE "InternalName", "br_controle_de_carretas"
-            VALUE "LegalCopyright", "(c) 2025 ThiagoPeMar1985 - baseado em ts-extra-utilities (Dario Wouters, MIT)"
+            VALUE "LegalCopyright", "(c) 2026 ThiagoPeMar1985"
             VALUE "OriginalFilename", "br_controle_de_carretas.dll"
             VALUE "ProductName", "BR Controle de Carretas"
             VALUE "ProductVersion", PLUGIN_VERSION_STR

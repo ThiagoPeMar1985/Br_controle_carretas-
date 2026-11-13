@@ -27,12 +27,12 @@
 #include <winver.h>
 #pragma comment( lib, "version.lib" )
 
-namespace ts_extra_utilities
+namespace br_carretas
 {
     constexpr uint32_t max_trailers = 20;
 
     // Every get_address_from_offset / base+RVA constant in this plugin was
-    // derived for amtrucks.exe 1.61.3.18 — on any other build a wrong VA
+    // derived for the reference amtrucks.exe build — on any other build a wrong VA
     // hooks random code, so the fixed-offset paths stay off unless the exe
     // file version matches exactly.
     inline bool expected_build()
@@ -55,7 +55,7 @@ namespace ts_extra_utilities
                 ( uint64_t( 1 ) << 48 ) | ( uint64_t( 61 ) << 32 ) | ( uint64_t( 3 ) << 16 ) | 18;
             if ( v != want && CCore::g_instance != nullptr )
             {
-                CCore::g_instance->error( "Unsupported ATS build (expected 1.61.3.18) — fixed-offset features disabled" );
+                CCore::g_instance->error( "Unsupported ATS build — fixed-offset features disabled" );
             }
             return v == want ? 1 : 0;
         }();

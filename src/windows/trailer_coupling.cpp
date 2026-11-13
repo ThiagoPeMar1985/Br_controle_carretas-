@@ -158,6 +158,7 @@ namespace br_carretas
     // 171 - desatrelamento pela via nativa (slot do ator)
     bool native_detach_via_slot( void* trailer )
     {
+        std::lock_guard< std::recursive_mutex > claim_lk( claim_write_mutex );
         auto* game_actor = CCore::g_instance->get_game_actor();
         if ( game_actor == nullptr || detach_dispatch_hook == nullptr || trailer == nullptr )
         {
@@ -200,6 +201,7 @@ namespace br_carretas
     // 172 - atrelamento pela via nativa (slot do ator)
     bool native_attach_via_slot( void* trailer )
     {
+        std::lock_guard< std::recursive_mutex > claim_lk( claim_write_mutex );
         auto* game_actor = CCore::g_instance->get_game_actor();
         if ( game_actor == nullptr || attach_dispatch_hook == nullptr ) return false;
         void* prev = prism::offsets::field< void* >( game_actor, prism::offsets::game_actor_trailer );
@@ -221,7 +223,7 @@ namespace br_carretas
         native_chain_call_active.store( false, std::memory_order_release );
         if ( severed && readable_ptr( trailer ) )
         {
-            prism::offsets::field< void* >( trailer, prism::offsets::trailer_slave ) = claim;
+            slave_link_write( trailer, claim );
         }
         restore_parked_claims();
         prism::offsets::field< void* >( game_actor, prism::offsets::game_actor_trailer ) = prev;
@@ -232,6 +234,7 @@ namespace br_carretas
     // 173 - executa o desatrelamento na thread de física
     void disconnect_now( void* trailer, void* parent, const bool parent_is_truck )
     {
+        std::lock_guard< std::recursive_mutex > claim_lk( claim_write_mutex );
         CCore::g_instance->info( "fn173 disconnect_now trailer={:p} parent={:p} truck={} junta={:p}",
                                  trailer, parent, parent_is_truck ? 1 : 0, joint( trailer ) );
 
@@ -245,22 +248,14 @@ namespace br_carretas
                     mark_detached( t );
                     mark_plugin_detached( t );
                     void* next = prism::offsets::field< void* >( t, prism::offsets::trailer_slave );
-                    t = ( next != t && next != nullptr && joint( next ) != nullptr ) ? next : nullptr;
+                    if ( next == t || next == trailer ) break;
+                    t = ( next != nullptr && joint( next ) != nullptr ) ? next : nullptr;
                 }
                 const int di = canon_index_of( trailer );
                 if ( di >= 0 ) detached_idx[ di ] = true;
                 if ( trailer == truck_towed ) truck_towed = nullptr;
 
                 unhide_detached();
-                if ( trailer_teleport_hook != nullptr )
-                {
-                    hook_xform_t xf{};
-                    if ( hook_world( trailer, xf ) )
-                    {
-                        using teleport_fn_t = void __fastcall( void*, void* );
-                        trailer_teleport_hook->get_original< teleport_fn_t >()( trailer, &xf );
-                    }
-                }
 
                 play_brace_sound( trailer, false );
 
@@ -292,7 +287,7 @@ namespace br_carretas
         const bool section_behind = kept_slave != nullptr && joint( kept_slave ) != nullptr;
         if ( kept_slave != nullptr && readable_ptr( trailer ) )
         {
-            prism::offsets::field< void* >( trailer, prism::offsets::trailer_slave ) = kept_slave;
+            slave_link_write( trailer, kept_slave );
         }
 
         if ( notify_decoupled_fn != nullptr )
@@ -312,7 +307,8 @@ namespace br_carretas
             mark_plugin_detached( t );
 
             void* next = prism::offsets::field< void* >( t, prism::offsets::trailer_slave );
-            t = ( next != t && next != nullptr && joint( next ) != nullptr ) ? next : nullptr;
+            if ( next == t || next == trailer ) break;
+            t = ( next != nullptr && joint( next ) != nullptr ) ? next : nullptr;
         }
 
         const int di = canon_index_of( trailer );
@@ -361,7 +357,7 @@ namespace br_carretas
                 void* slave = prism::offsets::field< void* >( trailer, prism::offsets::trailer_slave );
                 prism::offsets::field< void* >( trailer, prism::offsets::trailer_slave ) = nullptr;
                 rebuild_lines_fn( parent, trailer );
-                prism::offsets::field< void* >( trailer, prism::offsets::trailer_slave ) = slave;
+                slave_link_write( trailer, slave );
             }
 
             if ( refresh_accessories_fn != nullptr )
@@ -403,7 +399,7 @@ namespace br_carretas
             brace_anim_fn( trailer, 1, 1.f / 3.f );
         }
 
-        if ( joint( trailer ) == nullptr )
+        if ( parent_is_truck && joint( trailer ) == nullptr )
         {
             native_detach_via_slot( trailer );
         }
@@ -418,6 +414,7 @@ namespace br_carretas
     // 174 - executa o atrelamento na thread de física
     void connect_now( void* trailer, void* parent, const bool parent_is_truck )
     {
+        std::lock_guard< std::recursive_mutex > claim_lk( claim_write_mutex );
         CCore::g_instance->info( "fn174 connect_now trailer={:p} parent={:p} truck={} junta={:p}",
                                  trailer, parent, parent_is_truck ? 1 : 0, joint( trailer ) );
 
@@ -437,7 +434,7 @@ namespace br_carretas
             vcall< prism::physics_trailer_u_disconnect_fn >( trailer, prism::offsets::vfunc_disconnect );
             if ( kept_slave != nullptr && readable_ptr( trailer ) )
             {
-                prism::offsets::field< void* >( trailer, prism::offsets::trailer_slave ) = kept_slave;
+                slave_link_write( trailer, kept_slave );
             }
         }
 
@@ -459,7 +456,8 @@ namespace br_carretas
                 const int ti = canon_index_of( t );
                 if ( ti >= 0 ) detached_idx[ ti ] = false;
                 void* next = prism::offsets::field< void* >( t, prism::offsets::trailer_slave );
-                t = ( next != t && next != nullptr && joint( next ) != nullptr ) ? next : nullptr;
+                if ( next == t || next == trailer ) break;
+                t = ( next != nullptr && joint( next ) != nullptr ) ? next : nullptr;
             }
             if ( truck_towed == trailer )
             {
@@ -496,7 +494,8 @@ namespace br_carretas
             const int ti = canon_index_of( t );
             if ( ti >= 0 ) detached_idx[ ti ] = false;
             void* next = prism::offsets::field< void* >( t, prism::offsets::trailer_slave );
-            t = ( next != t && next != nullptr && joint( next ) != nullptr ) ? next : nullptr;
+            if ( next == t || next == trailer ) break;
+            t = ( next != nullptr && joint( next ) != nullptr ) ? next : nullptr;
         }
 
         if ( parent_is_truck && trailer_settle_fn_ptr != nullptr &&
@@ -527,9 +526,9 @@ namespace br_carretas
             void** pslave = &prism::offsets::field< void* >( parent, prism::offsets::trailer_slave );
             void* cur = *pslave;
             if ( cur != trailer &&
-                 ( cur == nullptr || !readable_ptr( cur ) || joint( cur ) == nullptr ) )
+                 ( cur == nullptr || !readable_ptr( cur ) || joint( cur ) == nullptr ) &&
+                 slave_link_write( parent, trailer ) )
             {
-                *pslave = trailer;
                 clear_claim_edge( parent );
             }
         }
@@ -571,7 +570,7 @@ namespace br_carretas
             void* slave = prism::offsets::field< void* >( trailer, prism::offsets::trailer_slave );
             prism::offsets::field< void* >( trailer, prism::offsets::trailer_slave ) = nullptr;
             rebuild_lines_fn( parent, trailer );
-            prism::offsets::field< void* >( trailer, prism::offsets::trailer_slave ) = slave;
+            slave_link_write( trailer, slave );
         }
 
         if ( set_lines_fn != nullptr )
@@ -624,6 +623,17 @@ namespace br_carretas
     // 175 - hook por-frame do sim: consome a fila de operações
     void hk_crashes_when_disconnected( prism::physics_trailer_u* self, prism::game_trailer_actor_u* trailer )
     {
+        static uint32_t dbg_state = 0xFFFFFFFF;
+        static int dbg_ticks = 0;
+        const uint32_t st = traffic_game_state != nullptr ? *traffic_game_state : 0xDEADBEEF;
+        if ( st != dbg_state )
+        {
+            dbg_state = st;
+            CCore::g_instance->info( "fn175 estado-jogo -> {}", st );
+        }
+        if ( dbg_ticks < 5 || dbg_ticks % 600 == 0 )
+            CCore::g_instance->info( "fn175 tick self={:p} trailer={:p}", ( void* )self, ( void* )trailer );
+        ++dbg_ticks;
 
         if ( !settings::g_settings.cargo_restore || load_game_active() )
         {
@@ -706,6 +716,11 @@ namespace br_carretas
     // 177 - hook: auto-engate de slave (recusa claims falsos)
     void hk_connect_slave( prism::physics_trailer_u* self )
     {
+        std::lock_guard< std::recursive_mutex > claim_lk( claim_write_mutex );
+        static int dbg_cs = 0;
+        if ( dbg_cs < 5 ) CCore::g_instance->info( "fn177 tick self={:p}", ( void* )self );
+        ++dbg_cs;
+
         if ( !settings::g_settings.cargo_restore || load_game_active() )
         {
             connect_slave_hook->get_original< prism::physics_trailer_u_connect_slave_fn >()( self );
@@ -814,6 +829,7 @@ namespace br_carretas
     // 180 - saneia a cadeia slave antes do teardown nativo
     void sanitize_slave_walk( void* head )
     {
+        std::lock_guard< std::recursive_mutex > claim_lk( claim_write_mutex );
         for ( uint32_t depth = 0; head != nullptr && depth < max_trailers * 4; ++depth )
         {
             if ( !is_trailer_obj( head ) ) return;
@@ -834,6 +850,7 @@ namespace br_carretas
     // 181 - saneia a cadeia física (corta arestas mortas)
     void sanitize_phys_walk( void* trailer )
     {
+        std::lock_guard< std::recursive_mutex > claim_lk( claim_write_mutex );
         if ( trailer == nullptr || !readable_ptr( trailer ) ) return;
         void* truck = nullptr;
         if ( auto* game_actor = CCore::g_instance->get_game_actor() )
@@ -862,18 +879,22 @@ namespace br_carretas
     // 182 - hook: desengate vfunc 99 (saneia antes do teardown)
     void __fastcall hk_trailer_disconnect( void* trailer )
     {
-
+        std::lock_guard< std::recursive_mutex > claim_lk( claim_write_mutex );
         if ( !settings::g_settings.cargo_restore || load_game_active() )
         {
             sever_parked_claims();
-            __try
+            sanitize_slave_walk( trailer );
+            [&]()
             {
-                trailer_disconnect_hook->get_original< prism::physics_trailer_u_disconnect_fn >()( trailer );
-            }
-            __except ( EXCEPTION_EXECUTE_HANDLER )
-            {
-                CCore::g_instance->warning( "disconnect walk faulted on {:p} (função 182, checkbox off)", trailer );
-            }
+                __try
+                {
+                    trailer_disconnect_hook->get_original< prism::physics_trailer_u_disconnect_fn >()( trailer );
+                }
+                __except ( EXCEPTION_EXECUTE_HANDLER )
+                {
+                    CCore::g_instance->warning( "disconnect walk faulted on {:p} (função 182, checkbox off)", trailer );
+                }
+            }();
             return;
         }
         if ( trailer == nullptr || !is_trailer_obj( trailer ) ) return;
@@ -913,29 +934,32 @@ namespace br_carretas
         CCore::g_instance->info( "fn182 corrente escondida: {:p}", kept_slave );
         sanitize_phys_walk( trailer );
         native_chain_call_active.store( true, std::memory_order_release );
-        __try
+        [&]()
         {
-            trailer_disconnect_hook->get_original< prism::physics_trailer_u_disconnect_fn >()( trailer );
-        }
-        __except ( EXCEPTION_EXECUTE_HANDLER )
-        {
-
-            const bool canon_alive = !canon_dead();
-            CCore::g_instance->warning( "disconnect walk faulted on {:p} (função 182) - canon {}", trailer,
-                                        canon_alive ? "kept" : "reset" );
-            if ( !canon_alive ) reset_trailer_state();
-            if ( readable_ptr( trailer ) )
+            __try
             {
-                mark_detached( trailer );
-                mark_plugin_detached( trailer );
+                trailer_disconnect_hook->get_original< prism::physics_trailer_u_disconnect_fn >()( trailer );
             }
-            clear_claim_edge( trailer );
-        }
+            __except ( EXCEPTION_EXECUTE_HANDLER )
+            {
+
+                const bool canon_alive = !canon_dead();
+                CCore::g_instance->warning( "disconnect walk faulted on {:p} (função 182) - canon {}", trailer,
+                                            canon_alive ? "kept" : "reset" );
+                if ( !canon_alive ) reset_trailer_state();
+                if ( readable_ptr( trailer ) )
+                {
+                    mark_detached( trailer );
+                    mark_plugin_detached( trailer );
+                }
+                clear_claim_edge( trailer );
+            }
+        }();
         native_chain_call_active.store( false, std::memory_order_release );
         if ( readable_ptr( trailer ) &&
              prism::offsets::field< void* >( trailer, prism::offsets::trailer_slave ) == nullptr )
         {
-            prism::offsets::field< void* >( trailer, prism::offsets::trailer_slave ) = kept_slave;
+            slave_link_write( trailer, kept_slave );
         }
 
         if ( set_lines_fn != nullptr )
@@ -948,7 +972,7 @@ namespace br_carretas
             void* slave = prism::offsets::field< void* >( trailer, prism::offsets::trailer_slave );
             prism::offsets::field< void* >( trailer, prism::offsets::trailer_slave ) = nullptr;
             rebuild_lines_fn( detach_parent, trailer );
-            prism::offsets::field< void* >( trailer, prism::offsets::trailer_slave ) = slave;
+            slave_link_write( trailer, slave );
         }
         if ( auto* game_actor = CCore::g_instance->get_game_actor() )
         {
@@ -979,6 +1003,7 @@ namespace br_carretas
     // 183 - corta os links-claim estacionados antes da chamada nativa
     void sever_parked_claims()
     {
+        std::lock_guard< std::recursive_mutex > claim_lk( claim_write_mutex );
         severed_edge_count = 0;
 
         if ( !trailer_maintenance_ready() ) return;
@@ -1008,6 +1033,7 @@ namespace br_carretas
     // 184 - corta arestas físicas que tocam peça sem junta
     void sever_phys_claims()
     {
+        std::lock_guard< std::recursive_mutex > claim_lk( claim_write_mutex );
         if ( !trailer_maintenance_ready() ) return;
         for ( uint32_t i = 0; i < max_trailers && canon[ i ] != nullptr; ++i )
         {
@@ -1029,14 +1055,20 @@ namespace br_carretas
     // 185 - religa os claims cortados após a chamada nativa
     void restore_parked_claims()
     {
+        std::lock_guard< std::recursive_mutex > claim_lk( claim_write_mutex );
+        if ( cargo_freeze() )
+        {
+            severed_edge_count = 0;
+            return;
+        }
         for ( int i = 0; i < severed_edge_count; ++i )
         {
             void* p = severed_edges[ i ].parent;
             void* c = severed_edges[ i ].child;
             if ( readable_ptr( p ) && readable_ptr( c ) && joint( c ) == nullptr &&
-                 prism::offsets::field< void* >( p, prism::offsets::trailer_slave ) == nullptr )
+                 prism::offsets::field< void* >( p, prism::offsets::trailer_slave ) == nullptr &&
+                 slave_link_write( p, c ) )
             {
-                prism::offsets::field< void* >( p, prism::offsets::trailer_slave ) = c;
                 set_claim_edge( p, c );
             }
         }
@@ -1048,25 +1080,29 @@ namespace br_carretas
                              int state, bool slave_hook, bool is_slave,
                              prism::physics_trailer_u_connect_fn* orig )
     {
+        std::lock_guard< std::recursive_mutex > claim_lk( claim_write_mutex );
         if ( trailer == nullptr || !is_trailer_obj( trailer ) || orig == nullptr ) return;
         native_chain_call_active.store( true, std::memory_order_release );
         sever_parked_claims();
         sever_phys_claims();
-        __try
+        [&]()
         {
-            orig( trailer, parent, vec, state, slave_hook, is_slave );
-        }
-        __except ( EXCEPTION_EXECUTE_HANDLER )
-        {
+            __try
+            {
+                orig( trailer, parent, vec, state, slave_hook, is_slave );
+            }
+            __except ( EXCEPTION_EXECUTE_HANDLER )
+            {
 
-            const bool canon_alive = !canon_dead();
-            CCore::g_instance->warning( "connect walk faulted on {:p} (função 186) - canon {}", trailer,
-                                        canon_alive ? "kept" : "reset" );
-            if ( readable_ptr( trailer ) )
-                prism::offsets::field< void* >( trailer, prism::offsets::trailer_slave ) = nullptr;
-            clear_claim_edge( trailer );
-            if ( !canon_alive ) reset_trailer_state();
-        }
+                const bool canon_alive = !canon_dead();
+                CCore::g_instance->warning( "connect walk faulted on {:p} (função 186) - canon {}", trailer,
+                                            canon_alive ? "kept" : "reset" );
+                if ( readable_ptr( trailer ) )
+                    prism::offsets::field< void* >( trailer, prism::offsets::trailer_slave ) = nullptr;
+                clear_claim_edge( trailer );
+                if ( !canon_alive ) reset_trailer_state();
+            }
+        }();
         restore_parked_claims();
         native_chain_call_active.store( false, std::memory_order_release );
     }
@@ -1161,7 +1197,7 @@ namespace br_carretas
     // 191 - hook: miolo do desengate (marca a cabeça)
     void __fastcall hk_detach_dispatch_raw( void* self, uint8_t dl, uint64_t r8 )
     {
-
+        std::lock_guard< std::recursive_mutex > claim_lk( claim_write_mutex );
         if ( canon_dead() ) reset_trailer_state();
 
         void* truck = self != nullptr
@@ -1200,24 +1236,27 @@ namespace br_carretas
             pending_native_detach = nullptr;
             mark_detached( t );
 
-            __try
+            [&]()
             {
-                if ( set_lines_fn != nullptr )
+                __try
                 {
-                    CCore::g_instance->info( "fn191 cabo: set_lines({:p},0,1)", t );
-                    set_lines_fn( t, 0, 1 );
+                    if ( set_lines_fn != nullptr )
+                    {
+                        CCore::g_instance->info( "fn191 cabo: set_lines({:p},0,1)", t );
+                        set_lines_fn( t, 0, 1 );
+                    }
+
+                    if ( truck != nullptr && apply_cables_fn != nullptr )
+                    {
+                        CCore::g_instance->info( "fn191 cabo: apply_cables(cavalo,null)" );
+                        apply_cables_fn( truck, nullptr, 0, 0, 0 );
+                    }
                 }
-                
-                if ( truck != nullptr && apply_cables_fn != nullptr )
+                __except ( EXCEPTION_EXECUTE_HANDLER )
                 {
-                    CCore::g_instance->info( "fn191 cabo: apply_cables(cavalo,null)" );
-                    apply_cables_fn( truck, nullptr, 0, 0, 0 );
+                    CCore::g_instance->warning( "hose teardown faulted (função 191) - skipped" );
                 }
-            }
-            __except ( EXCEPTION_EXECUTE_HANDLER )
-            {
-                CCore::g_instance->warning( "hose teardown faulted (função 191) - skipped" );
-            }
+            }();
 
         }
         else if ( t != nullptr )
@@ -1280,6 +1319,7 @@ namespace br_carretas
     void __fastcall hk_attach_dispatch_raw( void* self, uint8_t dl, uint64_t r8, uint64_t r9,
         uint64_t arg5, const float* settle_override )
     {
+        std::lock_guard< std::recursive_mutex > claim_lk( claim_write_mutex );
         if ( canon_dead() ) reset_trailer_state();
 
         if ( attach_target != nullptr && self != nullptr )
@@ -1372,7 +1412,7 @@ namespace br_carretas
         convoy_refresh_requested.store( true, std::memory_order_release );
         if ( severed_slave != nullptr && readable_ptr( head ) )
         {
-            prism::offsets::field< void* >( head, prism::offsets::trailer_slave ) = severed_slave;
+            slave_link_write( head, severed_slave );
         }
         restore_parked_claims();
         if ( released_marks && joint( head ) == nullptr )
@@ -1716,7 +1756,9 @@ namespace br_carretas
     // 195 - hook: destrutor de carreta (limpa registros)
     void* __fastcall hk_trailer_dtor( void* self, uint64_t flags )
     {
-        if ( self != nullptr && canon_age >= 90 && canon_index_of( self ) >= 0 && is_trailer_obj( self ) )
+        std::lock_guard< std::recursive_mutex > claim_lk( claim_write_mutex );
+        if ( !cargo_freeze() && self != nullptr && canon_age >= 90 &&
+             canon_index_of( self ) >= 0 && is_trailer_obj( self ) )
         {
             int cut = 0;
             for ( uint32_t i = 0; i < max_trailers && canon[ i ] != nullptr; ++i )
@@ -1748,7 +1790,21 @@ namespace br_carretas
             }
             CCore::g_instance->info( "trailer destructor on c{}: {} claim link(s) cut", canon_index_of( self ), cut );
         }
-        return trailer_dtor_hook->get_original< trailer_dtor_fn >()( self, flags );
+        if ( readable_ptr( self ) ) repair_node_lists( self );
+        void* ret = nullptr;
+        [&]()
+        {
+            __try
+            {
+                ret = trailer_dtor_hook->get_original< trailer_dtor_fn >()( self, flags );
+            }
+            __except ( EXCEPTION_EXECUTE_HANDLER )
+            {
+                CCore::g_instance->warning(
+                    "trailer dtor faulted on {:p} (função 195) - teardown skipped", self );
+            }
+        }();
+        return ret;
     }
 
     SCSAPI_VOID on_parking_brake( const scs_string_t, const scs_u32_t, const scs_value_t* const value, const scs_context_t )
@@ -1773,7 +1829,7 @@ namespace br_carretas
     bool coupling_install()
     {
         const auto crash_address = memory::get_address_for_pattern( "48 85 d2 0f 84 ? ? ? ? 48 89 74 24 18 57 48 83 ec 40" );
-        const auto connect_slave_address = memory::get_address_for_pattern( "40 53 48 83 ec 60 48 83 b9 ? ? ? ? 00 48 8b d9 0f 84 ? ? ? ? 48 8d 54 24 ? e8" );
+        const auto connect_slave_address = memory::get_address_for_pattern( "40 53 48 83 ec 60 48 83 b9 58 10 00 00 00 48 8b d9 0f 84 ? ? ? ? 48 8d 54 24 ? e8" );
 
         if ( crash_address == 0 || connect_slave_address == 0 )
         {

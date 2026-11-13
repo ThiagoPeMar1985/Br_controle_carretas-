@@ -131,7 +131,7 @@ namespace br_carretas
             }
         }
 
-        if ( settings::g_settings.debug_logs && trailer_count > 0 )
+        if ( CCore::g_instance->log_enabled( settings::logcat::steering ) && trailer_count > 0 )
         {
             static float probe_t = 0.f;
             probe_t += dt;

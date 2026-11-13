@@ -5,7 +5,7 @@ crashar ou falhar, o número diz exatamente qual função é, sem ambiguidade.
 
 | Arquivo | Faixa |
 |---------|-------|
-| src/windows/trailer_shared.hpp | 001–064, 236–257 |
+| src/windows/trailer_shared.hpp | 001–064, 236–271 |
 | src/windows/trailer_manipulation.cpp | 065–107 |
 | src/windows/trailer_steering.cpp | 108–114 |
 | src/windows/trailer_loadunload.cpp | 115–118 |
@@ -51,7 +51,7 @@ de bytes; se não bater no exe, aquele recurso desliga sozinho:
 | 021 | execute_line | execute_line do console |
 | 022 | hose geometry | geometria de mangueira (por frame) |
 | 023 | traffic manager | gerenciador de tráfego (dado) |
-| 024 | traffic game state | estado do jogo (dado: 2 = no mundo) |
+| 024 | traffic game state | estado do jogo (enum: `<2` = fora do mundo / `>=2` = no mundo) |
 | 025 | cables mode cvar | cvar g_trailer_cables_mode (dado) |
 | 026 | attach settle cvar | cvar de settle do engate (dado) |
 | 027 | event param block | bloco de parâmetros de evento (dado) |
@@ -360,3 +360,18 @@ de bytes; se não bater no exe, aquele recurso desliga sozinho:
 | 255 | brake broadcast ret | trailer_shared.hpp | retorno do broadcast de freio real (+0x180) |
 | 256 | forced broadcast ret | trailer_shared.hpp | retorno do broadcast de freio forçado (+0x188) |
 | 257 | g_traffic cvar | trailer_shared.hpp | cvar de tráfego (dado — candidato, sem nome confirmado) |
+| 258 | node reposition | trailer_shared.hpp | reposição de nó-filho/locator — endereço do hook 259 |
+| 259 | `hk_node_reposition` | trailer_coupling.cpp | hook: pula reposição quando o nó-filho está nulo (locator morto) |
+| 260 | `teleport_safe` | trailer_shared.hpp | teleporte por-carreta protegido por SEH (restore pós-rebuild) |
+| 261 | `repair_node_lists` | trailer_shared.hpp | remove nós-filhos mortos das listas internas da carreta |
+| 262 | `dump_node_lists` | trailer_shared.hpp | despeja campos crus das listas internas (diagnóstico) |
+| 263 | `log_enabled` | core.hpp | testa se uma seção de diagnóstico `[logs]` está ativa |
+| 264 | `dlog` | core.hpp | escreve diagnóstico de uma seção (seção + chave mestra ligadas) |
+| 265 | `node_lists_sane` | trailer_shared.hpp | confere se as listas internas da carreta estão prontas pro teleporte |
+| 266 | phys_link | trailer_shared.hpp | liga no-filho na arvore fisica (+0x60/+0x68 + vfunc walk) |
+| 267 | joint_walk | trailer_shared.hpp | acumulador recursivo da arvore de juntas (vfunc +0x18 no filho +0x68) |
+| 268 | `make_preserve_thunk` | trailer_coupling.cpp | capa que devolve os regs volateis como a original preservava |
+| 269 | lane_obstacle_insert | trailer_shared.hpp | inserção ordenada de obstáculo na malha de faixas |
+| 270 | `slave_link_write` | trailer_shared.hpp | escreve link slave só se a cadeia resultante não fechar ciclo |
+| 271 | `claim_write_mutex` | trailer_shared.hpp | trava recursiva que serializa toda escrita na cadeia slave |
+| 272 | `cargo_freeze` | trailer_shared.hpp | congela escritas do plugin enquanto o jogo refaz as carretas na carga |

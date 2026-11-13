@@ -1,6 +1,6 @@
-# br_controle_de_carretas (ETS2 1.61.1.9s)
+# br_controle_de_carretas (ETS2 1.62.x)
 
-Fork brasileiro de ts-extra-utilities / trailer axles control. Singleplayer.
+Plugin de controle de carretas para ETS2. Multiplayer.
 
 ## Build
 
@@ -16,12 +16,11 @@ Game log: `C:\Users\PC\Documents\Euro Truck Simulator 2\game.log.txt`.
 
 Caution: `build/` keeps absolute paths in CMakeCache — after copying/moving the
 project folder, delete `build/` and reconfigure or it compiles the old tree.
-Runtime offsets live in `src/prism/offsets.hpp` (exe 1.61.1.9s — `.pdata` at
-VA `0x1436e3000`; re-derive function ranges from the PE headers if it changes).
+Runtime offsets live in `src/prism/offsets.hpp` (`.pdata` at VA `0x143749000` in the current exe; re-derive function ranges from the PE headers if it changes).
 
 ## Chase camera (camera 2) — vehicle_behind_rotation_camera
 
-Reverse-engineered in eurotrucks2.exe 1.61.1.9s:
+Reverse-engineered in eurotrucks2.exe 1.62:
 
 - Camera manager global: `exe+0x36AF830` (plain struct). The chase camera
   (vtable `exe+0x23126F0`) is found at `manager+0x38` -> slot array `[1]`.

@@ -118,5 +118,27 @@ namespace br_carretas
             if ( !settings::g_settings.debug_logs ) return;
             diag_log( "[br_carretas] ERROR " + fmt::vformat( fmt_s, fmt::make_format_args( args... ) ) );
         }
+
+        bool log_enabled( settings::logcat cat ) const
+        {
+            if ( !settings::g_settings.debug_logs ) return false;
+            switch ( cat )
+            {
+            case settings::logcat::axles:    return settings::g_settings.log_axles;
+            case settings::logcat::steering: return settings::g_settings.log_steering;
+            case settings::logcat::truck:    return settings::g_settings.log_truck;
+            case settings::logcat::coupling: return settings::g_settings.log_coupling;
+            case settings::logcat::teleport: return settings::g_settings.log_teleport;
+            case settings::logcat::cargo:    return settings::g_settings.log_cargo;
+            }
+            return false;
+        }
+
+        template < class... T >
+        void dlog( settings::logcat cat, const char* fmt_s, T&&... args ) const
+        {
+            if ( !log_enabled( cat ) ) return;
+            diag_log( "[br_carretas] " + fmt::vformat( fmt_s, fmt::make_format_args( args... ) ) );
+        }
     };
 }
