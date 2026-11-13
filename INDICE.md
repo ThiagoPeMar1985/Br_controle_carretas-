@@ -5,7 +5,7 @@ crashar ou falhar, o número diz exatamente qual função é, sem ambiguidade.
 
 | Arquivo | Faixa |
 |---------|-------|
-| src/windows/trailer_shared.hpp | 001–064, 236–239 |
+| src/windows/trailer_shared.hpp | 001–064, 236–245 |
 | src/windows/trailer_manipulation.cpp | 065–107 |
 | src/windows/trailer_steering.cpp | 108–114 |
 | src/windows/trailer_loadunload.cpp | 115–118 |
@@ -342,3 +342,9 @@ de bytes; se não bater no exe, aquele recurso desliga sozinho:
 | 237 | `fn_addr_of` | trailer_shared.hpp | endereço de qualquer função (livre ou membro) |
 | 238 | `fn_index_add` | trailer_shared.hpp | registra uma função no índice |
 | 239 | `fn_index_lookup` | trailer_shared.hpp | RIP → função registrada mais próxima |
+| 240 | cam_set_target | trailer_shared.hpp | setter real da âncora da câmera 2 (vfunc 31) |
+| 241 | cam_update | trailer_shared.hpp | update por frame da câmera 2 (vfunc 32) |
+| 242 | combo_length | trailer_shared.hpp | comprimento do comboio (anda cadeia slave) |
+| 243 | combo pos | trailer_shared.hpp | posição de engate usada pelo combo_length |
+| 244 | camera manager | trailer_shared.hpp | gerenciador de câmeras (dado) |
+| 245 | chase vtable | trailer_shared.hpp | vtable vehicle_behind_rotation_camera (dado) |

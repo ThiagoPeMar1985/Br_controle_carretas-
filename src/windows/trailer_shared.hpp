@@ -86,6 +86,18 @@ namespace br_carretas
         { 0x14226E368, 0x1422BCCB8, ( const uint8_t* )"\x40\x40\x74\x72\x61\x69\x6c\x65\x72\x5f\x63\x6f\x75\x70\x6c\x69\x6e\x67\x40\x40\x00", 21 },
         // 029 - string "@@trailer_decoupling@@"
         { 0x14226E4B0, 0x1422BC710, ( const uint8_t* )"\x40\x40\x74\x72\x61\x69\x6c\x65\x72\x5f\x64\x65\x63\x6f\x75\x70\x6c\x69\x6e\x67\x40\x40", 22 },
+        // 240 - cam_set_target - setter real da âncora (vfunc 31)
+        { 0x14063C2D0, 0x140630D50, ( const uint8_t* )"\x4c\x8b\xc1\x48\x8b\x89\xf0\x03\x00\x00\x48\x85\xd2\x74\x18\x8b\x42\x08\xc1\xe8", 20 },
+        // 241 - cam_update - update por frame da câmera 2 (vfunc 32)
+        { 0x140AC75A0, 0x140A411E0, ( const uint8_t* )"\x48\x8b\xc4\x55\x53\x41\x57\x48\x8d\x6c\x24\x80\x48\x81\xec\x80\x01\x00\x00\x0f", 20 },
+        // 242 - combo_length - comprimento do comboio (anda cadeia slave)
+        { 0x140789AB0, 0x1407750F0, ( const uint8_t* )"\x48\x89\x5c\x24\x08\x57\x48\x83\xec\x70\x48\x8b\x99\x58\x10\x00\x00\x48\x8b\xf9", 20 },
+        // 243 - posição de engate usada pelo combo_length
+        { 0x140789880, 0x140774EC0, ( const uint8_t* )"\x4c\x8b\xdc\x49\x89\x5b\x10\x49\x89\x73\x18\x57\x48\x81\xec\xb0\x00\x00\x00\x0f", 20 },
+        // 244 - gerenciador de câmeras (dado)
+        { 0x1436AF830, 0x143714FB8, nullptr, 0 },
+        // 245 - vtable da câmera 2 vehicle_behind_rotation_camera (dado)
+        { 0x1423126F0, 0x1423552A8, nullptr, 0 },
     };
 
     // 030 - confere o endereço fixo contra a assinatura (cache por chamada)

@@ -1610,6 +1610,7 @@ namespace br_carretas
             }
 
             static bool edge_done[ max_trailers ] = {};
+            static bool edge_logged[ max_trailers ] = {};
             if ( torn_tick == 0 ) for ( auto& d : edge_done ) d = false;
             for ( uint32_t i = 0; i < ln && tp_cooldown <= 0; ++i )
             {
@@ -1620,7 +1621,11 @@ namespace br_carretas
                 const int si = canon_index_of( sl );
                 if ( si < 0 || edge_done[ si ] ) continue;
                 edge_done[ si ] = true;
-                CCore::g_instance->info( "uncoupled edge c{} -> c{}: hiding its cables", canon_index_of( p ), si );
+                if ( !edge_logged[ si ] )
+                {
+                    edge_logged[ si ] = true;
+                    CCore::g_instance->info( "uncoupled edge c{} -> c{}: hiding its cables", canon_index_of( p ), si );
+                }
 
                 __try
                 {
@@ -1674,7 +1679,11 @@ namespace br_carretas
                     }
                     canon_was_jointed[ i ] = jointed;
 
-                    if ( jointed ) lines_torn[ i ] = false;
+                    if ( jointed )
+                    {
+                        lines_torn[ i ] = false;
+                        edge_logged[ i ] = false;
+                    }
                 }
 
                 rebuild_parked_claim_links();

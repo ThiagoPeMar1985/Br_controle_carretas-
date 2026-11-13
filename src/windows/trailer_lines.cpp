@@ -177,7 +177,7 @@ namespace br_carretas
         {
             pending_native_detach = nullptr;
         }
-        if ( truck != nullptr && towed != nullptr && joint( towed ) != nullptr &&
+        if ( truck != nullptr && is_trailer_obj( towed ) && joint( towed ) != nullptr &&
              towed != pending_native_detach )
         {
             CCore::g_instance->info( "fn154 cabo: aresta cavalo->towed {:p}", towed );
@@ -186,9 +186,9 @@ namespace br_carretas
         for ( uint32_t i = 0; i < trailer_count; ++i )
         {
             void* t = trailers[ i ];
-            if ( t == nullptr || !readable_ptr( t ) ) continue;
+            if ( !is_trailer_obj( t ) ) continue;
             void* slave = prism::offsets::field< void* >( t, prism::offsets::trailer_slave );
-            if ( slave == nullptr || !readable_ptr( slave ) || joint( slave ) == nullptr ) continue;
+            if ( slave == nullptr || !is_trailer_obj( slave ) || joint( slave ) == nullptr ) continue;
 
             if ( joint( t ) != nullptr )
             {
