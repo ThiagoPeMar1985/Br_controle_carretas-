@@ -585,6 +585,7 @@ namespace br_carretas
 
     inline void* tp_wait_trailer = nullptr;
     inline uint64_t tp_wait_ms = 0;
+    struct tp_wait_ent { void* t; uint64_t ms; };
 
     // 265 - confere se as listas de nós internas da carreta estão prontas pro teleporte
     inline bool node_lists_sane( void* trailer )
@@ -615,51 +616,136 @@ namespace br_carretas
 
     inline bool cargo_freeze();
 
-    // 260 - teleporte por-carreta protegido: espera as listas internas estarem prontas, repara e tenta de novo se falhar
+    using teleport_write_fn = void __fastcall( void* /*trailer*/, void* /*transform*/, uint8_t );
+
+    // 263 - a carreta terminou de ser reconstruída? confere tudo que a
+    // vfunc+0x2A8 toca: nó raiz, chassis e os elementos dos três arrays internos
+    inline bool teleport_ready( void* trailer )
+    {
+        __try
+        {
+            if ( !readable_ptr( prism::offsets::field< void* >( trailer, 0x200 ) ) ) return false;
+            if ( !plausible_object( prism::offsets::field< void* >( trailer, 0x30 ) ) ) return false;
+            void* second = prism::offsets::field< void* >( trailer, 0x478 );
+            if ( second != nullptr && !plausible_object( second ) ) return false;
+            const uint32_t lists[ 3 ][ 2 ] = { { 0x218, 0x220 }, { 0x530, 0x538 }, { 0x1020, 0x1028 } };
+            for ( uint32_t k = 0; k < 3; ++k )
+            {
+                void** begin = prism::offsets::field< void** >( trailer, lists[ k ][ 0 ] );
+                const uint64_t count = prism::offsets::field< uint64_t >( trailer, lists[ k ][ 1 ] );
+                if ( count == 0 ) continue;
+                if ( count > 0x100 || begin == nullptr ||
+                     readable_span( begin, count * sizeof( void* ) ) < count * sizeof( void* ) )
+                    return false;
+                for ( uint64_t i = 0; i < count; ++i )
+                {
+                    void* e = begin[ i ];
+                    if ( k == 0 )
+                    {
+                        if ( readable_span( e, 0x68 ) < 0x68 ||
+                             !plausible_object( *static_cast< void** >( e ) ) ) return false;
+                    }
+                    else if ( k == 1 )
+                    {
+                        if ( !readable_ptr( e ) ||
+                             readable_span( static_cast< uint8_t* >( e ) + 0x30, 4 ) < 4 ) return false;
+                    }
+                    else if ( !plausible_object( e ) ) return false;
+                }
+            }
+            return true;
+        }
+        __except ( EXCEPTION_EXECUTE_HANDLER ) { return false; }
+    }
+
+    // 264 - diagnóstico: mostra qual campo do portão de reconstrução reprova
+    inline void dump_teleport_ready( void* trailer )
+    {
+        __try
+        {
+            void* chassis = prism::offsets::field< void* >( trailer, 0x200 );
+            void* root = prism::offsets::field< void* >( trailer, 0x30 );
+            void* second = prism::offsets::field< void* >( trailer, 0x478 );
+            CCore::g_instance->dlog( settings::logcat::teleport,
+                "  ready-dump {:p}: chassis={:p}(read={}) root={:p}(obj={}) second={:p}(obj={})",
+                trailer, chassis, readable_ptr( chassis ), root, plausible_object( root ),
+                second, second == nullptr ? true : plausible_object( second ) );
+            const uint32_t lists[ 3 ][ 2 ] = { { 0x218, 0x220 }, { 0x530, 0x538 }, { 0x1020, 0x1028 } };
+            for ( uint32_t k = 0; k < 3; ++k )
+            {
+                void** begin = prism::offsets::field< void** >( trailer, lists[ k ][ 0 ] );
+                const uint64_t count = prism::offsets::field< uint64_t >( trailer, lists[ k ][ 1 ] );
+                int bad = -1;
+                if ( count > 0 && count <= 0x100 && begin != nullptr &&
+                     readable_span( begin, count * sizeof( void* ) ) >= count * sizeof( void* ) )
+                {
+                    for ( uint64_t i = 0; i < count; ++i )
+                    {
+                        void* e = begin[ i ];
+                        const bool ok = k == 0
+                            ? ( readable_span( e, 0x68 ) >= 0x68 &&
+                                plausible_object( *static_cast< void** >( e ) ) )
+                            : k == 1
+                                ? ( readable_ptr( e ) &&
+                                    readable_span( static_cast< uint8_t* >( e ) + 0x30, 4 ) >= 4 )
+                                : plausible_object( e );
+                        if ( !ok ) { bad = static_cast< int >( i ); break; }
+                    }
+                }
+                CCore::g_instance->dlog( settings::logcat::teleport,
+                    "  list +0x{:X}: begin={:p} count={} bad_elem={}",
+                    lists[ k ][ 0 ], static_cast< const void* >( begin ), count, bad );
+            }
+        }
+        __except ( EXCEPTION_EXECUTE_HANDLER ) {}
+    }
+
+    // 260 - teleporte por-carreta do plugin: escreve o transform pela vfunc+0x2A8
+    // (a mesma chamada por-membro do teleporte do conjunto) depois que a carreta
+    // foi reconstruída; o link slave fica escondido durante a escrita
     inline bool teleport_safe( void* trailer, void* xform )
     {
-        if ( trailer_teleport_hook == nullptr || !is_trailer_obj( trailer ) ||
-             cargo_freeze() ) return false;
-        if ( !node_lists_sane( trailer ) )
+        if ( !is_trailer_obj( trailer ) || cargo_freeze() ||
+             !plausible_vfunc( trailer, 0x2A8 / 8 ) ) return false;
+        if ( !teleport_ready( trailer ) )
         {
-            repair_node_lists( trailer );
-        }
-        if ( !node_lists_sane( trailer ) )
-        {
-            if ( tp_wait_trailer != trailer || tp_wait_ms == 0 || GetTickCount64() - tp_wait_ms > 5000 )
+            static tp_wait_ent tp_wait[ 4 ] = {};
+            tp_wait_ent* slot = &tp_wait[ 0 ];
+            for ( auto& w : tp_wait )
             {
-                tp_wait_trailer = trailer;
-                tp_wait_ms = GetTickCount64();
-                dump_node_lists( trailer );
+                if ( w.t == trailer ) { slot = &w; break; }
+                if ( w.ms < slot->ms ) slot = &w;
+            }
+            if ( slot->ms == 0 || GetTickCount64() - slot->ms > 5000 )
+            {
+                slot->t = trailer;
+                slot->ms = GetTickCount64();
                 CCore::g_instance->dlog( settings::logcat::teleport,
-                    "trailer teleport deferred on {:p} - node lists not ready", trailer );
+                    "trailer teleport deferred on {:p} - rebuild not finished", trailer );
+                dump_teleport_ready( trailer );
             }
             return false;
         }
-        using teleport_fn_t = void __fastcall( void*, void* );
+        bool ok = false;
+        void* slave = nullptr;
         __try
         {
-            trailer_teleport_hook->get_original< teleport_fn_t >()( trailer, xform );
-            return true;
+            slave = prism::offsets::field< void* >( trailer, prism::offsets::trailer_slave );
+            prism::offsets::field< void* >( trailer, prism::offsets::trailer_slave ) = nullptr;
+            vcall< teleport_write_fn >( trailer, 0x2A8 / 8, xform, static_cast< uint8_t >( 1 ) );
+            ok = true;
         }
         __except ( EXCEPTION_EXECUTE_HANDLER ) {}
-        const int removed = repair_node_lists( trailer );
-        if ( removed > 0 )
+        __try
         {
-            __try
-            {
-                trailer_teleport_hook->get_original< teleport_fn_t >()( trailer, xform );
-                CCore::g_instance->dlog( settings::logcat::teleport,
-                    "trailer teleport {:p}: removed {} dead node(s) - re-seated", trailer, removed );
-                return true;
-            }
-            __except ( EXCEPTION_EXECUTE_HANDLER ) {}
+            prism::offsets::field< void* >( trailer, prism::offsets::trailer_slave ) = slave;
         }
+        __except ( EXCEPTION_EXECUTE_HANDLER ) {}
+        if ( ok ) return true;
         if ( tp_fault_trailer != trailer || tp_fault_ms == 0 || GetTickCount64() - tp_fault_ms > 5000 )
         {
             tp_fault_trailer = trailer;
             tp_fault_ms = GetTickCount64();
-            dump_node_lists( trailer );
             CCore::g_instance->warning( "trailer teleport faulted on {:p} - skipped", trailer );
         }
         return false;
@@ -677,6 +763,66 @@ namespace br_carretas
     inline bool detached_idx[ max_trailers ] = {};
     inline hook_xform_t parked_xform[ max_trailers ] = {};
     inline bool parked_xform_valid[ max_trailers ] = {};
+
+    // sonda do corpo físico: pos(+0xA0) e vel(+0xD0) do corpo interno
+    inline bool phys_probe( void* trailer, float pos4[ 4 ], float vel4[ 4 ], void** innerp )
+    {
+        bool ok = false;
+        __try
+        {
+            void* phys = prism::offsets::field< void* >( trailer, 0x30 );
+            void* inner = readable_ptr( phys )
+                ? prism::offsets::field< void* >( phys, 0xf8 ) : nullptr;
+            if ( !readable_ptr( inner ) ) return false;
+            const float* p = reinterpret_cast< const float* >(
+                static_cast< const uint8_t* >( inner ) + 0xa0 );
+            const float* v = reinterpret_cast< const float* >(
+                static_cast< const uint8_t* >( inner ) + 0xd0 );
+            for ( int k = 0; k < 4; ++k ) { pos4[ k ] = p[ k ]; vel4[ k ] = v[ k ]; }
+            if ( innerp != nullptr ) *innerp = inner;
+            ok = true;
+        }
+        __except ( EXCEPTION_EXECUTE_HANDLER ) {}
+        return ok;
+    }
+
+    // prega o corpo no lugar: regrava a posicao capturada e zera a velocidade
+    inline bool phys_pin( void* trailer, const float pos4[ 4 ] )
+    {
+        bool ok = false;
+        __try
+        {
+            void* phys = prism::offsets::field< void* >( trailer, 0x30 );
+            void* inner = readable_ptr( phys )
+                ? prism::offsets::field< void* >( phys, 0xf8 ) : nullptr;
+            if ( !readable_ptr( inner ) ) return false;
+            float* p = reinterpret_cast< float* >(
+                static_cast< uint8_t* >( inner ) + 0xa0 );
+            float* v = reinterpret_cast< float* >(
+                static_cast< uint8_t* >( inner ) + 0xd0 );
+            for ( int k = 0; k < 4; ++k ) { p[ k ] = pos4[ k ]; v[ k ] = 0.f; }
+            ok = true;
+        }
+        __except ( EXCEPTION_EXECUTE_HANDLER ) {}
+        return ok;
+    }
+
+    inline int watch_frames[ max_trailers ] = {};
+    inline int watch_age[ max_trailers ] = {};
+    inline bool watch_popped[ max_trailers ] = {};
+    inline hook_xform_t watch_prev[ max_trailers ] = {};
+    inline void* watch_joint[ max_trailers ] = {};
+    inline void* watch_e60[ max_trailers ] = {};
+    inline void* watch_e68[ max_trailers ] = {};
+    inline float watch_pin[ max_trailers ][ 4 ] = {};
+    inline bool watch_pin_valid[ max_trailers ] = {};
+
+    inline bool watch_active()
+    {
+        for ( int i = 0; i < static_cast< int >( max_trailers ); ++i )
+            if ( watch_frames[ i ] > 0 ) return true;
+        return false;
+    }
 
     inline uint32_t rejoined_frames[ max_trailers ] = {};
 

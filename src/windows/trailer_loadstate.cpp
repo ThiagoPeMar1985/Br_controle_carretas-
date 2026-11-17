@@ -107,6 +107,16 @@ namespace br_carretas
         }
         void* trailer = record != nullptr
             ? prism::offsets::field< void* >( record, 0xB8 ) : nullptr;
+        __try
+        {
+            CCore::g_instance->info(
+                "rebuild: state_apply trailer={:p} canon={} junta={:p} slave={:p}",
+                trailer, canon_index_of( trailer ), joint( trailer ),
+                trailer != nullptr && readable_ptr( trailer )
+                    ? prism::offsets::field< void* >( trailer, prism::offsets::trailer_slave )
+                    : nullptr );
+        }
+        __except ( EXCEPTION_EXECUTE_HANDLER ) {}
         if ( trailer != nullptr && is_plugin_detached( trailer ) )
         {
             CCore::g_instance->info( "trailer state apply skipped: {:p} is plugin-detached", trailer );

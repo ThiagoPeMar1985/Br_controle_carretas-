@@ -64,6 +64,11 @@ namespace br_carretas
                 && ( parent_is_truck || is_trailer_obj( parent ) ) )
             {
                 disconnect_now( t, parent, parent_is_truck );
+                CCore::g_instance->info( "OK: desengate slot {} junta agora={:p}", i, joint( t ) );
+            }
+            else
+            {
+                CCore::g_instance->warning( "FALHOU: desengate slot {} - parent invalido", i );
             }
 
             for ( void* m = t; m != nullptr; )
@@ -73,10 +78,40 @@ namespace br_carretas
                 const int mi = canon_index_of( m );
                 if ( mi >= 0 && parked_xform_valid[ mi ] && trailer_teleport_hook != nullptr )
                 {
-                    teleport_safe( m, &parked_xform[ mi ] );
-                    anchor_valid[ mi ] = false;
-                    if ( carry_hold[ mi ] ) carry_park[ mi ] = 20;
-                    carry_hold[ mi ] = false;
+                    hook_xform_t antes{};
+                    hook_world( m, antes );
+                    if ( teleport_safe( m, &parked_xform[ mi ] ) )
+                    {
+                        anchor_valid[ mi ] = false;
+                        if ( carry_hold[ mi ] ) carry_park[ mi ] = 20;
+                        carry_hold[ mi ] = false;
+                        watch_frames[ mi ] = 300;
+                        watch_age[ mi ] = 0;
+                        watch_popped[ mi ] = false;
+                        hook_world( m, watch_prev[ mi ] );
+                        watch_joint[ mi ] = joint( m );
+                        watch_e60[ mi ] = prism::offsets::field< void* >( m, 0x60 );
+                        watch_e68[ mi ] = prism::offsets::field< void* >( m, 0x68 );
+                        {
+                            float p4[ 4 ] = {}, v4[ 4 ] = {};
+                            watch_pin_valid[ mi ] = phys_probe( m, p4, v4, nullptr );
+                            if ( watch_pin_valid[ mi ] )
+                                for ( int k = 0; k < 4; ++k ) watch_pin[ mi ][ k ] = p4[ k ];
+                            else
+                                CCore::g_instance->warning(
+                                    "watch {}: corpo nao resolvido - sem pregamento", mi );
+                        }
+                        CCore::g_instance->info(
+                            "OK: teleporte slot {} ({:.1f},{:.1f},{:.1f}) -> ({:.1f},{:.1f},{:.1f})",
+                            mi, antes.pos.x, antes.pos.y, antes.pos.z,
+                            watch_prev[ mi ].pos.x, watch_prev[ mi ].pos.y,
+                            watch_prev[ mi ].pos.z );
+                    }
+                    else
+                    {
+                        CCore::g_instance->warning( "FALHOU: teleporte slot {}", mi );
+                        carry_hold[ mi ] = true;
+                    }
                 }
                 void* next = prism::offsets::field< void* >( m, prism::offsets::trailer_slave );
                 m = ( next != m && next != nullptr && readable_ptr( next )
@@ -138,23 +173,102 @@ namespace br_carretas
             for ( auto& h : carry_hold ) h = false;
             any_hold = false;
         }
-        if ( any_hold && canon_age >= 120 && !cargo_freeze() )
+        if ( any_hold && canon_age >= 10 && !cargo_freeze() )
         {
             for ( uint32_t i = 0; i < max_trailers && canon[ i ] != nullptr; ++i )
             {
                 void* t = canon[ i ];
                 if ( !carry_hold[ i ] || !readable_ptr( t ) || joint( t ) != nullptr ) continue;
+                bool seated = true;
                 if ( parked_xform_valid[ i ] && trailer_teleport_hook != nullptr )
                 {
-                    teleport_safe( t, &parked_xform[ i ] );
-                    anchor_valid[ i ] = false;
+                    seated = teleport_safe( t, &parked_xform[ i ] );
+                    if ( seated ) anchor_valid[ i ] = false;
                 }
                 mark_detached( t );
                 mark_plugin_detached( t );
-                carry_hold[ i ] = false;
+                carry_hold[ i ] = !seated;
                 carry_park[ i ] = 20;
-                CCore::g_instance->info( "carried slot {} respawned jointless - put back at its parked pose", i );
+                if ( seated )
+                {
+                    watch_frames[ i ] = 300;
+                    watch_age[ i ] = 0;
+                    watch_popped[ i ] = false;
+                    hook_world( t, watch_prev[ i ] );
+                    watch_joint[ i ] = joint( t );
+                    watch_e60[ i ] = prism::offsets::field< void* >( t, 0x60 );
+                    watch_e68[ i ] = prism::offsets::field< void* >( t, 0x68 );
+                    {
+                        float p4[ 4 ] = {}, v4[ 4 ] = {};
+                        watch_pin_valid[ i ] = phys_probe( t, p4, v4, nullptr );
+                        if ( watch_pin_valid[ i ] )
+                            for ( int k = 0; k < 4; ++k ) watch_pin[ i ][ k ] = p4[ k ];
+                        else
+                            CCore::g_instance->warning(
+                                "watch {}: corpo nao resolvido - sem pregamento", i );
+                    }
+                    CCore::g_instance->info(
+                        "OK: teleporte tardio slot {} -> ({:.1f},{:.1f},{:.1f})",
+                        i, watch_prev[ i ].pos.x, watch_prev[ i ].pos.y,
+                        watch_prev[ i ].pos.z );
+                    CCore::g_instance->info( "carried slot {} respawned jointless - put back at its parked pose", i );
+                }
+                else
+                {
+                    CCore::g_instance->warning( "FALHOU: teleporte tardio slot {}", i );
+                }
             }
+        }
+        for ( uint32_t i = 0; i < max_trailers; ++i )
+        {
+            if ( watch_frames[ i ] <= 0 ) continue;
+            const bool last = --watch_frames[ i ] == 0;
+            ++watch_age[ i ];
+            void* t = canon[ i ];
+            if ( t == nullptr || !readable_ptr( t ) || !is_trailer_obj( t ) )
+            {
+                watch_frames[ i ] = 0;
+                continue;
+            }
+            void* j = joint( t );
+            if ( j != watch_joint[ i ] )
+            {
+                CCore::g_instance->warning(
+                    "watch {}: JUNTA mudou {:p} -> {:p} @+{}f", i, watch_joint[ i ], j,
+                    watch_age[ i ] );
+                watch_joint[ i ] = j;
+            }
+            void* e60 = prism::offsets::field< void* >( t, 0x60 );
+            void* e68 = prism::offsets::field< void* >( t, 0x68 );
+            if ( e60 != watch_e60[ i ] || e68 != watch_e68[ i ] )
+            {
+                CCore::g_instance->warning(
+                    "watch {}: ARESTAS 60={:p}->{:p} 68={:p}->{:p} @+{}f",
+                    i, watch_e60[ i ], e60, watch_e68[ i ], e68, watch_age[ i ] );
+                watch_e60[ i ] = e60;
+                watch_e68[ i ] = e68;
+            }
+            if ( watch_pin_valid[ i ] )
+                phys_pin( t, watch_pin[ i ] );
+            hook_xform_t now{};
+            if ( !hook_world( t, now ) ) continue;
+            const float dx = now.pos.x - watch_prev[ i ].pos.x;
+            const float dy = now.pos.y - watch_prev[ i ].pos.y;
+            const float dz = now.pos.z - watch_prev[ i ].pos.z;
+            if ( dx * dx + dy * dy + dz * dz > 0.05f * 0.05f && !watch_popped[ i ] )
+            {
+                watch_popped[ i ] = true;
+                float p4[ 4 ] = {}, v4[ 4 ] = {};
+                void* ip = nullptr;
+                phys_probe( t, p4, v4, &ip );
+                CCore::g_instance->warning(
+                    ">>> POP slot {} @ +{}f junta={:p} e60={:p} e68={:p} corpo vel=({:.2f},{:.2f},{:.2f}) pos=({:.1f},{:.1f},{:.1f}) inner={:p} <<<",
+                    i, watch_age[ i ], j, e60, e68, v4[ 0 ], v4[ 1 ], v4[ 2 ],
+                    p4[ 0 ], p4[ 1 ], p4[ 2 ], ip );
+            }
+            watch_prev[ i ] = now;
+            if ( last && !watch_popped[ i ] )
+                CCore::g_instance->info( "watch {}: fim da janela - parada", i );
         }
         bool in_section = false;
         for ( uint32_t i = 0; i < max_trailers && canon[ i ] != nullptr; ++i )

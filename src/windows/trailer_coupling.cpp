@@ -717,9 +717,12 @@ namespace br_carretas
     void hk_connect_slave( prism::physics_trailer_u* self )
     {
         std::lock_guard< std::recursive_mutex > claim_lk( claim_write_mutex );
-        static int dbg_cs = 0;
-        if ( dbg_cs < 5 ) CCore::g_instance->info( "fn177 tick self={:p}", ( void* )self );
-        ++dbg_cs;
+        if ( watch_active() && self != nullptr )
+        {
+            CCore::g_instance->warning(
+                "connect_slave na janela: self={:p} slave={:p}", ( void* )self,
+                prism::offsets::field< void* >( self, prism::offsets::trailer_slave ) );
+        }
 
         if ( !settings::g_settings.cargo_restore || load_game_active() )
         {
@@ -796,6 +799,11 @@ namespace br_carretas
     // 179 - hook: link físico (recusa ciclo)
     void __fastcall hk_phys_link( void* parent, void* child )
     {
+        if ( watch_active() )
+        {
+            CCore::g_instance->warning(
+                "phys_link na janela: parent={:p} child={:p}", parent, child );
+        }
         if ( !settings::g_settings.cargo_restore || load_game_active() )
         {
             phys_link_hook->get_original< phys_link_fn >()( parent, child );
@@ -1110,6 +1118,12 @@ namespace br_carretas
     void __fastcall hk_trailer_connect_a( void* trailer, void* parent, float3_t vec,
                                           int state, bool slave_hook, bool is_slave )
     {
+        if ( watch_active() )
+        {
+            CCore::g_instance->warning(
+                "connect(A) na janela: trailer={:p} parent={:p} state={} slave_hook={} is_slave={}",
+                trailer, parent, state, slave_hook, is_slave );
+        }
         if ( !settings::g_settings.cargo_restore || load_game_active() )
         {
             trailer_connect_hook->get_original< prism::physics_trailer_u_connect_fn >()(
@@ -1123,6 +1137,12 @@ namespace br_carretas
     void __fastcall hk_trailer_connect_b( void* trailer, void* parent, float3_t vec,
                                           int state, bool slave_hook, bool is_slave )
     {
+        if ( watch_active() )
+        {
+            CCore::g_instance->warning(
+                "connect(B) na janela: trailer={:p} parent={:p} state={} slave_hook={} is_slave={}",
+                trailer, parent, state, slave_hook, is_slave );
+        }
         if ( !settings::g_settings.cargo_restore || load_game_active() )
         {
             trailer_connect_hook2->get_original< prism::physics_trailer_u_connect_fn >()(
@@ -1757,6 +1777,22 @@ namespace br_carretas
     void* __fastcall hk_trailer_dtor( void* self, uint64_t flags )
     {
         std::lock_guard< std::recursive_mutex > claim_lk( claim_write_mutex );
+        const int dci = canon_index_of( self );
+        [&]()
+        {
+            __try
+            {
+                CCore::g_instance->info(
+                    "dtor IN c{} {:p} junta={:p} slave={:p} parent={:p} e60={:p} e68={:p}",
+                    dci, self,
+                    joint( self ),
+                    prism::offsets::field< void* >( self, prism::offsets::trailer_slave ),
+                    prism::offsets::field< void* >( self, prism::offsets::trailer_parent ),
+                    prism::offsets::field< void* >( self, 0x60 ),
+                    prism::offsets::field< void* >( self, 0x68 ) );
+            }
+            __except ( EXCEPTION_EXECUTE_HANDLER ) {}
+        }();
         if ( !cargo_freeze() && self != nullptr && canon_age >= 90 &&
              canon_index_of( self ) >= 0 && is_trailer_obj( self ) )
         {
@@ -1790,7 +1826,13 @@ namespace br_carretas
             }
             CCore::g_instance->info( "trailer destructor on c{}: {} claim link(s) cut", canon_index_of( self ), cut );
         }
-        if ( readable_ptr( self ) ) repair_node_lists( self );
+        int removed = 0;
+        if ( readable_ptr( self ) )
+        {
+            removed = repair_node_lists( self );
+            CCore::g_instance->info( "dtor c{}: repair_node_lists removeu {}", dci, removed );
+        }
+        CCore::g_instance->info( "dtor c{}: chamando teardown nativo", dci );
         void* ret = nullptr;
         [&]()
         {
@@ -1804,6 +1846,8 @@ namespace br_carretas
                     "trailer dtor faulted on {:p} (função 195) - teardown skipped", self );
             }
         }();
+        CCore::g_instance->info( "dtor c{}: teardown {}", dci,
+                                 ret != nullptr ? "ok" : "falhou" );
         return ret;
     }
 
