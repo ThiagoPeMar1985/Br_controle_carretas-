@@ -284,6 +284,11 @@ namespace br_carretas::settings
         const float keys_width = static_cast< float >( _wtof( value ) );
         if ( keys_width >= 150.f && keys_width <= 800.f ) g_settings.keys_width = keys_width;
 
+        GetPrivateProfileStringW( L"general", L"ui_scale", L"", value, 32, path.c_str() );
+        const float ui_scale = static_cast< float >( _wtof( value ) );
+        g_settings.ui_scale =
+            ( ui_scale == 0.5f || ui_scale == 1.5f || ui_scale == 2.0f ) ? ui_scale : 1.0f;
+
         GetPrivateProfileStringW( L"brake", L"trailer_boost", L"", value, 32, path.c_str() );
         const float boost = static_cast< float >( _wtof( value ) );
         if ( boost >= 0.f && boost <= 200.f ) g_settings.trailer_brake_boost = boost;
@@ -324,6 +329,9 @@ namespace br_carretas::settings
             g_settings.oversize_collapsed ? L"1" : L"0", path.c_str() );
         WritePrivateProfileStringW( L"general", L"ui_tab",
             std::to_wstring( g_settings.ui_tab ).c_str(), path.c_str() );
+        wchar_t scale_buf[ 16 ] = {};
+        swprintf_s( scale_buf, L"%.1f", static_cast< double >( g_settings.ui_scale ) );
+        WritePrivateProfileStringW( L"general", L"ui_scale", scale_buf, path.c_str() );
         wchar_t lic_out[ 256 ] = {};
         MultiByteToWideChar( CP_UTF8, 0, g_settings.license_key, -1, lic_out, 256 );
         WritePrivateProfileStringW( L"license", L"key", lic_out, path.c_str() );

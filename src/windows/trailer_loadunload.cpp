@@ -86,17 +86,16 @@ namespace br_carretas
                         if ( carry_hold[ mi ] ) carry_park[ mi ] = 20;
                         carry_hold[ mi ] = false;
                         watch_frames[ mi ] = 300;
-                        watch_age[ mi ] = 0;
-                        watch_popped[ mi ] = false;
-                        hook_world( m, watch_prev[ mi ] );
-                        watch_joint[ mi ] = joint( m );
-                        watch_e60[ mi ] = prism::offsets::field< void* >( m, 0x60 );
-                        watch_e68[ mi ] = prism::offsets::field< void* >( m, 0x68 );
                         {
                             float p4[ 4 ] = {}, v4[ 4 ] = {};
                             watch_pin_valid[ mi ] = phys_probe( m, p4, v4, nullptr );
                             if ( watch_pin_valid[ mi ] )
-                                for ( int k = 0; k < 4; ++k ) watch_pin[ mi ][ k ] = p4[ k ];
+                            {
+                                watch_pin[ mi ][ 0 ] = parked_xform[ mi ].pos.x;
+                                watch_pin[ mi ][ 1 ] = p4[ 1 ];
+                                watch_pin[ mi ][ 2 ] = parked_xform[ mi ].pos.z;
+                                watch_pin[ mi ][ 3 ] = p4[ 3 ];
+                            }
                             else
                                 CCore::g_instance->warning(
                                     "watch {}: corpo nao resolvido - sem pregamento", mi );
@@ -104,8 +103,8 @@ namespace br_carretas
                         CCore::g_instance->info(
                             "OK: teleporte slot {} ({:.1f},{:.1f},{:.1f}) -> ({:.1f},{:.1f},{:.1f})",
                             mi, antes.pos.x, antes.pos.y, antes.pos.z,
-                            watch_prev[ mi ].pos.x, watch_prev[ mi ].pos.y,
-                            watch_prev[ mi ].pos.z );
+                            parked_xform[ mi ].pos.x, parked_xform[ mi ].pos.y,
+                            parked_xform[ mi ].pos.z );
                     }
                     else
                     {
@@ -139,6 +138,94 @@ namespace br_carretas
         if ( load_game_active() ) return;
         workshop_respawn_update();
         garage_update();
+
+        const uint64_t now_ms = GetTickCount64();
+        static void* last_inner[ max_trailers ] = {};
+        static float last_inner_pos[ max_trailers ][ 4 ] = {};
+        void* live_inner[ max_trailers ] = {};
+        for ( uint32_t i = 0; i < max_trailers && canon[ i ] != nullptr; ++i )
+        {
+            float lp[ 4 ] = {}, lv[ 4 ] = {};
+            void* li = nullptr;
+            void* t = canon[ i ];
+            if ( phys_probe( t, lp, lv, &li ) && li != nullptr )
+            {
+                live_inner[ i ] = li;
+                if ( last_inner[ i ] != li )
+                {
+                    if ( last_inner[ i ] != nullptr )
+                    {
+                        for ( auto& g : ghost_watch )
+                        {
+                            if ( g.inner != nullptr ) continue;
+                            g.inner = last_inner[ i ];
+                            g.ms = now_ms;
+                            g.slot = static_cast< int >( i );
+                            for ( int k = 0; k < 4; ++k ) g.pos4[ k ] = last_inner_pos[ i ][ k ];
+                            break;
+                        }
+                    }
+                    last_inner[ i ] = li;
+                    for ( int k = 0; k < 4; ++k ) last_inner_pos[ i ][ k ] = lp[ k ];
+                }
+                else
+                {
+                    for ( int k = 0; k < 4; ++k ) last_inner_pos[ i ][ k ] = lp[ k ];
+                }
+            }
+            else if ( last_inner[ i ] != nullptr && !is_trailer_obj( t ) )
+            {
+                for ( auto& g : ghost_watch )
+                {
+                    if ( g.inner != nullptr ) continue;
+                    g.inner = last_inner[ i ];
+                    g.ms = now_ms;
+                    g.slot = static_cast< int >( i );
+                    for ( int k = 0; k < 4; ++k ) g.pos4[ k ] = last_inner_pos[ i ][ k ];
+                    break;
+                }
+                last_inner[ i ] = nullptr;
+            }
+        }
+        for ( auto& g : ghost_watch )
+        {
+            if ( g.inner == nullptr || now_ms - g.ms < 3000 || cargo_freeze() ) continue;
+            bool leaked = true;
+            for ( void* li : live_inner )
+                if ( li == g.inner ) { leaked = false; break; }
+            if ( leaked )
+            {
+                [&]()
+                {
+                    __try
+                    {
+                        const float* bp = reinterpret_cast< const float* >(
+                            static_cast< const uint8_t* >( g.inner ) + 0xA0 );
+                        leaked = readable_ptr( g.inner ) &&
+                            std::fabs( bp[ 0 ] - g.pos4[ 0 ] ) < 1.f &&
+                            std::fabs( bp[ 1 ] - g.pos4[ 1 ] ) < 1.f &&
+                            std::fabs( bp[ 2 ] - g.pos4[ 2 ] ) < 1.f;
+                    }
+                    __except ( EXCEPTION_EXECUTE_HANDLER ) {}
+                }();
+            }
+            if ( leaked )
+            {
+                [&]()
+                {
+                    __try
+                    {
+                        float* bp = reinterpret_cast< float* >( static_cast< uint8_t* >( g.inner ) + 0xA0 );
+                        float* bv = reinterpret_cast< float* >( static_cast< uint8_t* >( g.inner ) + 0xD0 );
+                        bp[ 1 ] -= 10000.f;
+                        for ( int k = 0; k < 4; ++k ) bv[ k ] = 0.f;
+                    }
+                    __except ( EXCEPTION_EXECUTE_HANDLER ) {}
+                }();
+                CCore::g_instance->warning( "corpo fantasma de c{} banido", g.slot );
+            }
+            g.inner = nullptr;
+        }
 
         if ( tp_block_watch > 0 && ( --tp_block_watch == 60 || tp_block_watch == 0 ) )
             dump_chain( tp_block_watch == 0 ? "post-actor-tp-blocked+120f" : "post-actor-tp-blocked+60f" );
@@ -192,25 +279,24 @@ namespace br_carretas
                 if ( seated )
                 {
                     watch_frames[ i ] = 300;
-                    watch_age[ i ] = 0;
-                    watch_popped[ i ] = false;
-                    hook_world( t, watch_prev[ i ] );
-                    watch_joint[ i ] = joint( t );
-                    watch_e60[ i ] = prism::offsets::field< void* >( t, 0x60 );
-                    watch_e68[ i ] = prism::offsets::field< void* >( t, 0x68 );
                     {
                         float p4[ 4 ] = {}, v4[ 4 ] = {};
                         watch_pin_valid[ i ] = phys_probe( t, p4, v4, nullptr );
                         if ( watch_pin_valid[ i ] )
-                            for ( int k = 0; k < 4; ++k ) watch_pin[ i ][ k ] = p4[ k ];
+                        {
+                            watch_pin[ i ][ 0 ] = parked_xform[ i ].pos.x;
+                            watch_pin[ i ][ 1 ] = p4[ 1 ];
+                            watch_pin[ i ][ 2 ] = parked_xform[ i ].pos.z;
+                            watch_pin[ i ][ 3 ] = p4[ 3 ];
+                        }
                         else
                             CCore::g_instance->warning(
                                 "watch {}: corpo nao resolvido - sem pregamento", i );
                     }
                     CCore::g_instance->info(
                         "OK: teleporte tardio slot {} -> ({:.1f},{:.1f},{:.1f})",
-                        i, watch_prev[ i ].pos.x, watch_prev[ i ].pos.y,
-                        watch_prev[ i ].pos.z );
+                        i, parked_xform[ i ].pos.x, parked_xform[ i ].pos.y,
+                        parked_xform[ i ].pos.z );
                     CCore::g_instance->info( "carried slot {} respawned jointless - put back at its parked pose", i );
                 }
                 else
@@ -222,53 +308,15 @@ namespace br_carretas
         for ( uint32_t i = 0; i < max_trailers; ++i )
         {
             if ( watch_frames[ i ] <= 0 ) continue;
-            const bool last = --watch_frames[ i ] == 0;
-            ++watch_age[ i ];
+            --watch_frames[ i ];
             void* t = canon[ i ];
             if ( t == nullptr || !readable_ptr( t ) || !is_trailer_obj( t ) )
             {
                 watch_frames[ i ] = 0;
                 continue;
             }
-            void* j = joint( t );
-            if ( j != watch_joint[ i ] )
-            {
-                CCore::g_instance->warning(
-                    "watch {}: JUNTA mudou {:p} -> {:p} @+{}f", i, watch_joint[ i ], j,
-                    watch_age[ i ] );
-                watch_joint[ i ] = j;
-            }
-            void* e60 = prism::offsets::field< void* >( t, 0x60 );
-            void* e68 = prism::offsets::field< void* >( t, 0x68 );
-            if ( e60 != watch_e60[ i ] || e68 != watch_e68[ i ] )
-            {
-                CCore::g_instance->warning(
-                    "watch {}: ARESTAS 60={:p}->{:p} 68={:p}->{:p} @+{}f",
-                    i, watch_e60[ i ], e60, watch_e68[ i ], e68, watch_age[ i ] );
-                watch_e60[ i ] = e60;
-                watch_e68[ i ] = e68;
-            }
             if ( watch_pin_valid[ i ] )
                 phys_pin( t, watch_pin[ i ] );
-            hook_xform_t now{};
-            if ( !hook_world( t, now ) ) continue;
-            const float dx = now.pos.x - watch_prev[ i ].pos.x;
-            const float dy = now.pos.y - watch_prev[ i ].pos.y;
-            const float dz = now.pos.z - watch_prev[ i ].pos.z;
-            if ( dx * dx + dy * dy + dz * dz > 0.05f * 0.05f && !watch_popped[ i ] )
-            {
-                watch_popped[ i ] = true;
-                float p4[ 4 ] = {}, v4[ 4 ] = {};
-                void* ip = nullptr;
-                phys_probe( t, p4, v4, &ip );
-                CCore::g_instance->warning(
-                    ">>> POP slot {} @ +{}f junta={:p} e60={:p} e68={:p} corpo vel=({:.2f},{:.2f},{:.2f}) pos=({:.1f},{:.1f},{:.1f}) inner={:p} <<<",
-                    i, watch_age[ i ], j, e60, e68, v4[ 0 ], v4[ 1 ], v4[ 2 ],
-                    p4[ 0 ], p4[ 1 ], p4[ 2 ], ip );
-            }
-            watch_prev[ i ] = now;
-            if ( last && !watch_popped[ i ] )
-                CCore::g_instance->info( "watch {}: fim da janela - parada", i );
         }
         bool in_section = false;
         for ( uint32_t i = 0; i < max_trailers && canon[ i ] != nullptr; ++i )

@@ -623,18 +623,6 @@ namespace br_carretas
     // 175 - hook por-frame do sim: consome a fila de operações
     void hk_crashes_when_disconnected( prism::physics_trailer_u* self, prism::game_trailer_actor_u* trailer )
     {
-        static uint32_t dbg_state = 0xFFFFFFFF;
-        static int dbg_ticks = 0;
-        const uint32_t st = traffic_game_state != nullptr ? *traffic_game_state : 0xDEADBEEF;
-        if ( st != dbg_state )
-        {
-            dbg_state = st;
-            CCore::g_instance->info( "fn175 estado-jogo -> {}", st );
-        }
-        if ( dbg_ticks < 5 || dbg_ticks % 600 == 0 )
-            CCore::g_instance->info( "fn175 tick self={:p} trailer={:p}", ( void* )self, ( void* )trailer );
-        ++dbg_ticks;
-
         if ( !settings::g_settings.cargo_restore || load_game_active() )
         {
             crashes_when_disconnected_hook->get_original< prism::crashes_when_disconnected_fn >()( self, trailer );
@@ -717,13 +705,6 @@ namespace br_carretas
     void hk_connect_slave( prism::physics_trailer_u* self )
     {
         std::lock_guard< std::recursive_mutex > claim_lk( claim_write_mutex );
-        if ( watch_active() && self != nullptr )
-        {
-            CCore::g_instance->warning(
-                "connect_slave na janela: self={:p} slave={:p}", ( void* )self,
-                prism::offsets::field< void* >( self, prism::offsets::trailer_slave ) );
-        }
-
         if ( !settings::g_settings.cargo_restore || load_game_active() )
         {
             connect_slave_hook->get_original< prism::physics_trailer_u_connect_slave_fn >()( self );
@@ -799,11 +780,6 @@ namespace br_carretas
     // 179 - hook: link físico (recusa ciclo)
     void __fastcall hk_phys_link( void* parent, void* child )
     {
-        if ( watch_active() )
-        {
-            CCore::g_instance->warning(
-                "phys_link na janela: parent={:p} child={:p}", parent, child );
-        }
         if ( !settings::g_settings.cargo_restore || load_game_active() )
         {
             phys_link_hook->get_original< phys_link_fn >()( parent, child );
@@ -1047,16 +1023,23 @@ namespace br_carretas
         {
             void* t = canon[ i ];
             if ( !readable_ptr( t ) ) continue;
-            for ( int dir = 0; dir < 2; ++dir )
+            [&]()
             {
-                const uint32_t edge = dir == 0 ? 0x60 : 0x68;
-                void* next = prism::offsets::field< void* >( t, edge );
-                if ( next == t ||
-                     ( next != nullptr && is_trailer_obj( next ) && joint( next ) == nullptr ) )
+                __try
                 {
-                    prism::offsets::field< void* >( t, edge ) = nullptr;
+                    for ( int dir = 0; dir < 2; ++dir )
+                    {
+                        const uint32_t edge = dir == 0 ? 0x60 : 0x68;
+                        void* next = prism::offsets::field< void* >( t, edge );
+                        if ( next == t ||
+                             ( next != nullptr && is_trailer_obj( next ) && joint( next ) == nullptr ) )
+                        {
+                            prism::offsets::field< void* >( t, edge ) = nullptr;
+                        }
+                    }
                 }
-            }
+                __except ( EXCEPTION_EXECUTE_HANDLER ) {}
+            }();
         }
     }
 
@@ -1118,12 +1101,6 @@ namespace br_carretas
     void __fastcall hk_trailer_connect_a( void* trailer, void* parent, float3_t vec,
                                           int state, bool slave_hook, bool is_slave )
     {
-        if ( watch_active() )
-        {
-            CCore::g_instance->warning(
-                "connect(A) na janela: trailer={:p} parent={:p} state={} slave_hook={} is_slave={}",
-                trailer, parent, state, slave_hook, is_slave );
-        }
         if ( !settings::g_settings.cargo_restore || load_game_active() )
         {
             trailer_connect_hook->get_original< prism::physics_trailer_u_connect_fn >()(
@@ -1137,12 +1114,6 @@ namespace br_carretas
     void __fastcall hk_trailer_connect_b( void* trailer, void* parent, float3_t vec,
                                           int state, bool slave_hook, bool is_slave )
     {
-        if ( watch_active() )
-        {
-            CCore::g_instance->warning(
-                "connect(B) na janela: trailer={:p} parent={:p} state={} slave_hook={} is_slave={}",
-                trailer, parent, state, slave_hook, is_slave );
-        }
         if ( !settings::g_settings.cargo_restore || load_game_active() )
         {
             trailer_connect_hook2->get_original< prism::physics_trailer_u_connect_fn >()(
@@ -1832,6 +1803,38 @@ namespace br_carretas
             removed = repair_node_lists( self );
             CCore::g_instance->info( "dtor c{}: repair_node_lists removeu {}", dci, removed );
         }
+        [&]()
+        {
+            __try
+            {
+                void** slot = reinterpret_cast< void** >( static_cast< uint8_t* >( self ) + 0xEE8 );
+                const uint64_t v = reinterpret_cast< uint64_t >( *slot );
+                const uint64_t hi = v >> 32;
+                if ( hi != 0 && hi < 0x1000000 && ( v & 0xFFFFFFFFull ) == 0 )
+                {
+                    void* donor = nullptr;
+                    for ( uint32_t i = 0; i < max_trailers && canon[ i ] != nullptr; ++i )
+                    {
+                        void* c = canon[ i ];
+                        if ( c == self || !readable_ptr( c ) ) continue;
+                        void* cand = *reinterpret_cast< void** >( static_cast< uint8_t* >( c ) + 0xEE8 );
+                        if ( readable_ptr( cand ) ) { donor = cand; break; }
+                    }
+                    if ( donor != nullptr )
+                    {
+                        *slot = donor;
+                        CCore::g_instance->warning(
+                            "dtor c{}: +0xEE8 amputado {:p} reparado com {:p}", dci, ( void* )v, donor );
+                    }
+                    else
+                    {
+                        CCore::g_instance->warning(
+                            "dtor c{}: +0xEE8 amputado {:p} sem doador", dci, ( void* )v );
+                    }
+                }
+            }
+            __except ( EXCEPTION_EXECUTE_HANDLER ) {}
+        }();
         CCore::g_instance->info( "dtor c{}: chamando teardown nativo", dci );
         void* ret = nullptr;
         [&]()

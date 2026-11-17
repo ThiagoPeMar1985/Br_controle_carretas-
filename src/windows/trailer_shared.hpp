@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <mutex>
@@ -763,6 +764,14 @@ namespace br_carretas
     inline bool detached_idx[ max_trailers ] = {};
     inline hook_xform_t parked_xform[ max_trailers ] = {};
     inline bool parked_xform_valid[ max_trailers ] = {};
+    struct ghost_watch_t
+    {
+        void* inner = nullptr;
+        uint64_t ms = 0;
+        int slot = -1;
+        float pos4[ 4 ] = {};
+    };
+    inline ghost_watch_t ghost_watch[ 16 ] = {};
 
     // sonda do corpo físico: pos(+0xA0) e vel(+0xD0) do corpo interno
     inline bool phys_probe( void* trailer, float pos4[ 4 ], float vel4[ 4 ], void** innerp )
@@ -808,21 +817,8 @@ namespace br_carretas
     }
 
     inline int watch_frames[ max_trailers ] = {};
-    inline int watch_age[ max_trailers ] = {};
-    inline bool watch_popped[ max_trailers ] = {};
-    inline hook_xform_t watch_prev[ max_trailers ] = {};
-    inline void* watch_joint[ max_trailers ] = {};
-    inline void* watch_e60[ max_trailers ] = {};
-    inline void* watch_e68[ max_trailers ] = {};
     inline float watch_pin[ max_trailers ][ 4 ] = {};
     inline bool watch_pin_valid[ max_trailers ] = {};
-
-    inline bool watch_active()
-    {
-        for ( int i = 0; i < static_cast< int >( max_trailers ); ++i )
-            if ( watch_frames[ i ] > 0 ) return true;
-        return false;
-    }
 
     inline uint32_t rejoined_frames[ max_trailers ] = {};
 

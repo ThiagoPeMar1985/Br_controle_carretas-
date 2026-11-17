@@ -948,10 +948,22 @@ namespace br_carretas
     void CTrailerManipulation::render()
     {
 
-        ImGui::PushStyleVar( ImGuiStyleVar_WindowPadding, ImVec2( 10.f, 10.f ) );
-        ImGui::PushStyleVar( ImGuiStyleVar_ItemSpacing, ImVec2( 10.f, 8.f ) );
-        ImGui::PushStyleVar( ImGuiStyleVar_FrameRounding, 3.f );
-        ImGui::PushStyleVar( ImGuiStyleVar_ChildRounding, 3.f );
+        // aplica a escala da interface: delta no estilo global, na janela e na fonte
+        static float prev_ui_scale = -1.f;
+        const float ui_s = settings::g_settings.ui_scale;
+        const bool first_frame = prev_ui_scale < 0.f;
+        const float scale_delta = first_frame ? ui_s : ui_s / prev_ui_scale;
+        if ( scale_delta != 1.f )
+        {
+            ImGui::GetStyle().ScaleAllSizes( scale_delta );
+            ImGui::GetStyle().MouseCursorScale = ui_s;
+        }
+        prev_ui_scale = ui_s;
+
+        ImGui::PushStyleVar( ImGuiStyleVar_WindowPadding, ImVec2( 10.f * ui_s, 10.f * ui_s ) );
+        ImGui::PushStyleVar( ImGuiStyleVar_ItemSpacing, ImVec2( 10.f * ui_s, 8.f * ui_s ) );
+        ImGui::PushStyleVar( ImGuiStyleVar_FrameRounding, 3.f * ui_s );
+        ImGui::PushStyleVar( ImGuiStyleVar_ChildRounding, 3.f * ui_s );
         ImGui::PushStyleVar( ImGuiStyleVar_FrameBorderSize, 1.f );
         ImGui::PushStyleColor( ImGuiCol_Text, ui::pdv( 0xFFFFFF ) );
         ImGui::PushStyleColor( ImGuiCol_TextDisabled, ui::pdv( 0x656565 ) );
@@ -970,8 +982,12 @@ namespace br_carretas
         ImGui::PushStyleColor( ImGuiCol_CheckMark, ui::pdv( 0x27AE60 ) );
         ImGui::PushStyleColor( ImGuiCol_Separator, ui::pdv( 0x444444 ) );
 
-        ImGui::SetNextWindowSize( ImVec2( 560.f, 540.f ), ImGuiCond_FirstUseEver );
+        ImGui::GetIO().FontGlobalScale = 1.25f * ui_s;
+        ImGui::SetNextWindowSize( ImVec2( 560.f * ui_s, 540.f * ui_s ), ImGuiCond_FirstUseEver );
         ImGui::Begin( "Controle de Carretas" );
+        if ( !first_frame && scale_delta != 1.f )
+            ImGui::SetWindowSize( ImVec2( ImGui::GetWindowSize().x * scale_delta,
+                                          ImGui::GetWindowSize().y * scale_delta ) );
 
         if ( !license::active() )
         {
@@ -1026,6 +1042,26 @@ namespace br_carretas
         ImGui::BeginChild( "##keys", ImVec2( 0.f, 0.f ) );
         ImGui::SeparatorText( "Teclas" );
         this->render_keybinds();
+
+        ImGui::SeparatorText( "Tela" );
+        ImGui::PushID( "ui_scale" );
+        ImGui::TextWrapped( "Tamanho da tela" );
+        static const char* scale_names[ 4 ] = { "0.5x", "1.0x", "1.5x", "2.0x" };
+        static const float scale_values[ 4 ] = { 0.5f, 1.0f, 1.5f, 2.0f };
+        int scale_sel = 1;
+        for ( int s = 0; s < 4; ++s )
+        {
+            if ( std::fabs( settings::g_settings.ui_scale - scale_values[ s ] ) < 0.01f )
+                scale_sel = s;
+        }
+        ImGui::SetNextItemWidth( -ImGui::GetFrameHeight() * 1.8f );
+        if ( ImGui::Combo( "##scale", &scale_sel, scale_names, 4 ) )
+        {
+            settings::g_settings.ui_scale = scale_values[ scale_sel ];
+            settings::save();
+        }
+        ImGui::Spacing();
+        ImGui::PopID();
         ImGui::EndChild();
     }
 
@@ -1151,7 +1187,8 @@ namespace br_carretas
         const std::string tagged = hwid.empty() ? hwid : "ETS-" + hwid;
 
         ImGui::Selectable( tagged.empty() ? "(indisponível)" : tagged.c_str(),
-            false, ImGuiSelectableFlags_Disabled, ImVec2( 200.f, 0.f ) );
+            false, ImGuiSelectableFlags_Disabled,
+            ImVec2( 200.f * settings::g_settings.ui_scale, 0.f ) );
         if ( !tagged.empty() )
         {
             ImGui::SameLine();

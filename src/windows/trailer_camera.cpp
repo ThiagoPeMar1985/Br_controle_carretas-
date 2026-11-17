@@ -155,40 +155,47 @@ namespace br_carretas
         {
             return prism::offsets::field< float >( o, off );
         };
-        float acc = f( self, 0x2C ) - f( self, 0x20 );
+        float acc = 0.f;
         void* prev = self;
 
         void* seen[ max_trailers * 2 + 1 ] = { self };
         uint32_t seen_n = 1;
-        for ( void* t = prism::offsets::field< void* >( self, prism::offsets::trailer_slave );
-              t != nullptr;
-              prev = t, t = prism::offsets::field< void* >( t, prism::offsets::trailer_slave ) )
+        [&]()
         {
-
-            if ( !readable_ptr( t ) ||
-                !readable_ptr( static_cast< uint8_t* >( t ) + prism::offsets::trailer_physics_joint ) ||
-                joint( t ) == nullptr )
+            __try
             {
-                break;
+                acc = f( self, 0x2C ) - f( self, 0x20 );
+                for ( void* t = prism::offsets::field< void* >( self, prism::offsets::trailer_slave );
+                      t != nullptr;
+                      prev = t, t = prism::offsets::field< void* >( t, prism::offsets::trailer_slave ) )
+                {
+                    if ( !readable_ptr( t ) ||
+                        !readable_ptr( static_cast< uint8_t* >( t ) + prism::offsets::trailer_physics_joint ) ||
+                        joint( t ) == nullptr )
+                    {
+                        break;
+                    }
+                    bool dup = false;
+                    for ( uint32_t k = 0; k < seen_n; ++k ) dup |= seen[ k ] == t;
+                    if ( dup || seen_n >= max_trailers * 2 + 1 ) break;
+                    seen[ seen_n++ ] = t;
+                    float vec[ 4 ] = {};
+                    bool pos_ok = true;
+                    [&]()
+                    {
+                        __try { combo_hook_pos_fn_ptr( prev, vec ); }
+                        __except ( EXCEPTION_EXECUTE_HANDLER ) { pos_ok = false; }
+                    }();
+                    if ( !pos_ok ) break;
+                    const float gap = f( prev, 0x2C ) - vec[ 2 ];
+                    void* chassis = prism::offsets::field< void* >( t, 0x200 );
+                    const float over = ( chassis != nullptr && readable_ptr( chassis )
+                        ? f( chassis, 0x748 ) : 0.f ) - f( t, 0x20 );
+                    acc += ( f( t, 0x2C ) - f( t, 0x20 ) ) - gap - over;
+                }
             }
-            bool dup = false;
-            for ( uint32_t k = 0; k < seen_n; ++k ) dup |= seen[ k ] == t;
-            if ( dup || seen_n >= max_trailers * 2 + 1 ) break;
-            seen[ seen_n++ ] = t;
-            float vec[ 4 ] = {};
-            bool pos_ok = true;
-            [&]()
-            {
-                __try { combo_hook_pos_fn_ptr( prev, vec ); }
-                __except ( EXCEPTION_EXECUTE_HANDLER ) { pos_ok = false; }
-            }();
-            if ( !pos_ok ) break;
-            const float gap = f( prev, 0x2C ) - vec[ 2 ];
-            void* chassis = prism::offsets::field< void* >( t, 0x200 );
-            const float over = ( chassis != nullptr && readable_ptr( chassis )
-                ? f( chassis, 0x748 ) : 0.f ) - f( t, 0x20 );
-            acc += ( f( t, 0x2C ) - f( t, 0x20 ) ) - gap - over;
-        }
+            __except ( EXCEPTION_EXECUTE_HANDLER ) {}
+        }();
         return acc;
     }
 

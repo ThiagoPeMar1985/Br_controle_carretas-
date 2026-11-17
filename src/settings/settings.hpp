@@ -46,6 +46,8 @@ namespace br_carretas::settings
         float keys_width = 250.f;
         // active UI tab (0 Teclas, 1 Oversize, 2 Carretas, 3 Licença); -1 = collapsed
         int32_t ui_tab = 0;
+        // multiplicador de tamanho da interface (0.5/1.0/1.5/2.0 sobre o tamanho atual)
+        float ui_scale = 1.0f;
         // license key issued by the site for this machine's hardware id
         char license_key[ 256 ] = {};
         // furthest calendar date (yyyymmdd) a genuine check has run - a clock

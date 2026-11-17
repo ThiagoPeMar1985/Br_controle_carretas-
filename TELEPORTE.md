@@ -132,7 +132,53 @@ ilha é que injeta a velocidade.
   só não acumula movimento: qualquer impulso injetado é zerado no
   frame seguinte e a posição é recolocada.
 
-### 6. Manutenção contínua
+### 6. Corpo fantasma (a barreira invisível)
+
+Sintoma: depois do carregamento, o conjunto engatado anda ~1m e trava,
+inclinando como se colidisse com algo invisível — a "carreta dentro da
+carreta". Teleportar o conjunto pra longe liberava porque deixava o
+obstáculo pra trás. Nenhum freio, âncora ou flag explicava — os dumps
+de estado saíam limpos, com juntas vivas e cadeia correta.
+
+Causa provada pelo log: quando o jogo destrói e recria as carretas no
+respawn de carga, o **corpo físico interno da carreta velha vaza** — o
+destruidor não o remove do mundo. O corpo órfão fica parado e invisível
+na vaga onde a carreta estava estacionada; a carreta nova é colocada no
+mesmo lugar e colide com o próprio resto. Confirmado no log: dois
+corpos órfãos (de c1 e c2) banidos e a trava acabou.
+
+#### Reparo no destruidor (a fonte do vazamento)
+
+- O teardown nativo lê um objeto ref-counted compartilhado em
+  `trailer+0xEE8` (`mov rbx,[rcx]; mov eax,[rbx+0x34]` no crash). Nas
+  nossas carretas esse campo chegava amputado — metade baixa zerada
+  (`0x26b00000000`), assinatura de escrita de 4 bytes sobre ponteiro
+  de 8 — e o destruidor crashava → teardown pulado → corpo vazado.
+- `hk_trailer_dtor` (`trailer_coupling.cpp`) confere o slot antes da
+  chamada nativa: com a assinatura amputada, copia `+0xEE8` de uma
+  carreta irmã viva (objeto compartilhado, valor idêntico em todas —
+  igual ao `e60`) e só então chama o original sob `__try/__except`.
+  Resultado: "teardown ok" em todas — bem menos vazamento.
+
+#### Caçador de corpo órfão (a limpeza)
+
+`coupling_parked_update` (fn118) vigia o corpo de cada slot todo frame:
+
+- `last_inner[i]`/`last_inner_pos[i]` — cache por slot do `inner` que o
+  `phys_probe` resolve. Quando o `inner` TROCA (carreta destruída e
+  recriada) ou o slot deixa de ser `is_trailer_obj`, o inner antigo
+  entra na fila `ghost_watch[]` com timestamp e posição.
+- ~3s depois, cada suspeito é conferido:
+  - igual ao `inner` de alguma carreta viva → corpo REAPROVEITADO,
+    não toca (apagar corpo vivo = a carreta atravessa o chão);
+  - `inner+0xA0` ilegível → o jogo já removeu, limpo;
+  - legível e a <1m da posição de morte → **órfão confirmado**:
+    `pos[1] -= 10000` (10km abaixo do mapa) + vel zerada em `+0xD0`,
+    loga "corpo fantasma de cN banido".
+- Roda o tempo todo, não só no respawn — a barreira some sozinha, sem
+  engatar e sem teleporte manual.
+
+### 7. Manutenção contínua
 
 - `refresh_trailer_chain` (fn102) + `rebuild_parked_claim_links`
   (fn101) — claims de visibilidade (carreta solta fica visível).
@@ -162,6 +208,10 @@ ilha é que injeta a velocidade.
   escrever o carimbo lá dentro fez o jogo indexar um array com 0x1E8480 →
   crash (bounds check `exe+0x12EAA0`). A ressincronização real já acontece
   dentro da vfunc+0x2A8 pelo array `+0x218`.
+- **Re-teleportar a carreta pra posição atual após o engate** (resync):
+  a vfunc+0x2A8 só move nós e transforms cacheados — nunca toca o corpo
+  físico. Disparava e a trava voltava igual. O que libera é mexer no
+  CORPO (ou remover o órfão), não no nó.
 - **Chamar a função nativa por-carreta** (`exe+0x7864D0`, sentinela 249): ela
   espera outro tipo de objeto (listas {begin,count} em `+0x30`/`+0x58` que o
   ator não tem); `node_lists_sane` lia `+0x40` como contagem (era um ponteiro
