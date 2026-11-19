@@ -99,7 +99,7 @@ namespace br_carretas
     // 121 - hook: aplica o record de estado na carreta (doca)
     void __fastcall hk_trailer_state_apply( void* record )
     {
-
+        hk_timer hk_t{ HK_SAPP };
         if ( !settings::g_settings.cargo_restore || load_game_active() )
         {
             trailer_state_apply_hook->get_original< trailer_state_apply_fn >()( record );
@@ -107,16 +107,19 @@ namespace br_carretas
         }
         void* trailer = record != nullptr
             ? prism::offsets::field< void* >( record, 0xB8 ) : nullptr;
-        __try
+        [&]()
         {
-            CCore::g_instance->info(
-                "rebuild: state_apply trailer={:p} canon={} junta={:p} slave={:p}",
-                trailer, canon_index_of( trailer ), joint( trailer ),
-                trailer != nullptr && readable_ptr( trailer )
-                    ? prism::offsets::field< void* >( trailer, prism::offsets::trailer_slave )
-                    : nullptr );
-        }
-        __except ( EXCEPTION_EXECUTE_HANDLER ) {}
+            __try
+            {
+                CCore::g_instance->info(
+                    "rebuild: state_apply trailer={:p} canon={} junta={:p} slave={:p}",
+                    trailer, canon_index_of( trailer ), joint( trailer ),
+                    trailer != nullptr && readable_ptr( trailer )
+                        ? prism::offsets::field< void* >( trailer, prism::offsets::trailer_slave )
+                        : nullptr );
+            }
+            __except ( EXCEPTION_EXECUTE_HANDLER ) {}
+        }();
         if ( trailer != nullptr && is_plugin_detached( trailer ) )
         {
             CCore::g_instance->info( "trailer state apply skipped: {:p} is plugin-detached", trailer );
@@ -699,23 +702,33 @@ namespace br_carretas
     }
 
     void* lane_containers[ 128 ] = {};
+    void* lane_nodes[ 64 ] = {};
     uint32_t lane_prune_frames = 0;
     uint32_t lane_prune_idle = 0;
+    alignas( 64 ) uint8_t lane_dead_owner[ 0x200 ] = {};
+    alignas( 64 ) uint8_t lane_fake_element[ 0x200 ] = {};
 
     // 133 - elemento de lane-obstacle está morto
     bool lane_element_dead( void* el )
     {
         if ( el == nullptr ) return true;
-        void* owner = nullptr;
+        bool dead = false;
         __try
         {
-            owner = *reinterpret_cast< void** >( static_cast< uint8_t* >( el ) + 0x88 );
+            void* owner = *reinterpret_cast< void** >( static_cast< uint8_t* >( el ) + 0x88 );
+            if ( owner == nullptr || owner == lane_dead_owner ) return true;
+            void* record = *reinterpret_cast< void** >( static_cast< uint8_t* >( el ) + 0x80 );
+            if ( record != nullptr )
+            {
+                const auto vtbl = *reinterpret_cast< const uint64_t* >( record );
+                dead = vtbl < exe_base() || vtbl >= exe_base() + 0x4000000;
+            }
         }
         __except ( EXCEPTION_EXECUTE_HANDLER )
         {
             return true;
         }
-        return owner == nullptr;
+        return dead;
     }
 
     // 134 - poda elementos mortos dos containers de lane
@@ -723,7 +736,7 @@ namespace br_carretas
     {
         static uint32_t ci = 0;
         static uint64_t ei = ~0ull;
-        uint32_t budget = 64;
+        uint32_t budget = lane_prune_frames > 0 ? 2048 : 512;
         while ( budget > 0 && ci < 128 )
         {
             void*& c = lane_containers[ ci ];
@@ -757,6 +770,9 @@ namespace br_carretas
                     if ( lane_element_dead( el ) )
                     {
                         CCore::g_instance->info( "lane obstacle: pruned dead entry {:p}", el );
+                        if ( el != nullptr && readable_ptr( el ) )
+                            *reinterpret_cast< void** >( static_cast< uint8_t* >( el ) + 0x88 ) =
+                                lane_dead_owner;
                         std::memmove( &elements[ ei ], &elements[ ei + 1 ],
                                       ( n - ei - 1 ) * sizeof( void* ) );
                         --n;
@@ -785,51 +801,361 @@ namespace br_carretas
             }
         }
         if ( ci >= 128 ) { ci = 0; ei = ~0ull; }
+        auto sweep = []( void* obj )
+        {
+            if ( obj == nullptr || !readable_ptr(
+                     static_cast< uint8_t* >( obj ) + 0x28 ) ) return;
+            __try
+            {
+                void** elements = *reinterpret_cast< void*** >(
+                    static_cast< uint8_t* >( obj ) + 0x20 );
+                auto* count = reinterpret_cast< uint64_t* >(
+                    static_cast< uint8_t* >( obj ) + 0x28 );
+                if ( elements == nullptr || !readable_ptr( elements ) ||
+                     *count > 0x10000 ) return;
+                uint64_t n = *count;
+                for ( uint64_t i = 0; i < n; ++i )
+                {
+                    void* el = elements[ i ];
+                    if ( el == nullptr || !lane_element_dead( el ) ) continue;
+                    if ( readable_ptr( el ) )
+                        *reinterpret_cast< void** >( static_cast< uint8_t* >( el ) + 0x88 ) =
+                            lane_dead_owner;
+                    std::memmove( &elements[ i ], &elements[ i + 1 ],
+                                  ( n - i - 1 ) * sizeof( void* ) );
+                    --n;
+                    *count = n;
+                    --i;
+                }
+            }
+            __except ( EXCEPTION_EXECUTE_HANDLER ) {}
+        };
+        for ( auto& c : lane_containers ) sweep( c );
+        for ( auto& nd : lane_nodes ) sweep( nd );
+    }
+
+    // 276 - o objeto-dono referencia a carreta em algum campo (até 768 bytes)
+    bool lane_owner_refs( void* own, void* trailer )
+    {
+        if ( own == trailer ) return true;
+        if ( !readable_ptr( own ) ) return false;
+        const auto* lo = static_cast< uint8_t* >( trailer );
+        void* subs[ 4 ] = {};
+        __try
+        {
+            subs[ 0 ] = prism::offsets::field< void* >( trailer, 0x150 );
+            subs[ 1 ] = prism::offsets::field< void* >( trailer, 0xA0 );
+            subs[ 2 ] = prism::offsets::field< void* >( trailer, 0x1158 );
+        }
+        __except ( EXCEPTION_EXECUTE_HANDLER ) {}
+        __try
+        {
+            void** f = reinterpret_cast< void** >( own );
+            for ( int i = 0; i < 96; ++i )
+            {
+                const auto* p = static_cast< uint8_t* >( f[ i ] );
+                bool hit = p >= lo && p < lo + 0x2800;
+                for ( int s = 0; !hit && s < 3; ++s )
+                {
+                    hit = subs[ s ] != nullptr && f[ i ] == subs[ s ];
+                }
+                if ( hit )
+                {
+                    static int ref_logged = 0;
+                    if ( ref_logged++ < 6 )
+                    {
+                        CCore::g_instance->info(
+                            "lane owner {:p} referencia {:p} em +0x{:X} (ptr +0x{:X})",
+                            own, trailer, i * 8, p - lo );
+                    }
+                    return true;
+                }
+            }
+        }
+        __except ( EXCEPTION_EXECUTE_HANDLER ) {}
+        return false;
+    }
+
+    // 275 - censo dos elementos de lane-obstacle: total, donos únicos, ligados a canon
+    void lane_census( int& elements, int& owners, int& ours )
+    {
+        elements = owners = ours = 0;
+        void* seen[ 64 ] = {};
+        for ( auto& c : lane_containers )
+        {
+            if ( c == nullptr || !readable_ptr( c ) ||
+                 !readable_ptr( static_cast< uint8_t* >( c ) + 0x10 ) ) continue;
+            void** elements_arr = *reinterpret_cast< void*** >( static_cast< uint8_t* >( c ) + 8 );
+            auto* count = reinterpret_cast< uint64_t* >( static_cast< uint8_t* >( c ) + 0x10 );
+            if ( elements_arr == nullptr || !readable_ptr( elements_arr ) ||
+                 *count == 0 || *count > 0x10000 ) continue;
+            __try
+            {
+                for ( uint64_t i = 0; i < *count; ++i )
+                {
+                    void* el = elements_arr[ i ];
+                    if ( el == nullptr || !readable_ptr( el ) ) continue;
+                    ++elements;
+                    void* own = *reinterpret_cast< void** >( static_cast< uint8_t* >( el ) + 0x88 );
+                    if ( own == nullptr ) continue;
+                    bool dup = false;
+                    for ( auto* s : seen ) { if ( s == nullptr ) break; if ( s == own ) { dup = true; break; } }
+                    if ( !dup )
+                    {
+                        for ( auto& s : seen ) { if ( s == nullptr ) { s = own; break; } }
+                        ++owners;
+                    }
+                    if ( is_trailer_obj( own ) )
+                    {
+                        if ( canon_index_of( own ) >= 0 ) ++ours;
+                    }
+                    else
+                    {
+                        for ( uint32_t k = 0; k < max_trailers && canon[ k ] != nullptr; ++k )
+                        {
+                            if ( lane_owner_refs( own, canon[ k ] ) ) { ++ours; break; }
+                        }
+                    }
+                }
+            }
+            __except ( EXCEPTION_EXECUTE_HANDLER ) {}
+        }
+    }
+
+    // 274 - mata elementos de lane-obstacle cujo dono é o objeto dado ou o contém
+    int lane_kill_owner( void* owner )
+    {
+        if ( owner == nullptr ) return 0;
+        int killed = 0;
+        for ( auto& c : lane_containers )
+        {
+            if ( c == nullptr || !readable_ptr( c ) ||
+                 !readable_ptr( static_cast< uint8_t* >( c ) + 0x10 ) ) continue;
+            void** elements = *reinterpret_cast< void*** >( static_cast< uint8_t* >( c ) + 8 );
+            auto* count = reinterpret_cast< uint64_t* >( static_cast< uint8_t* >( c ) + 0x10 );
+            if ( elements == nullptr || !readable_ptr( elements ) ||
+                 *count == 0 || *count > 0x10000 ) continue;
+            __try
+            {
+                const uint64_t n = *count;
+                for ( uint64_t i = 0; i < n; ++i )
+                {
+                    void* el = elements[ i ];
+                    if ( el == nullptr || !readable_ptr( el ) ) continue;
+                    void* own = *reinterpret_cast< void** >( static_cast< uint8_t* >( el ) + 0x88 );
+                    if ( lane_owner_refs( own, owner ) )
+                    {
+                        *reinterpret_cast< void** >( static_cast< uint8_t* >( el ) + 0x88 ) =
+                            lane_dead_owner;
+                        ++killed;
+                    }
+                }
+            }
+            __except ( EXCEPTION_EXECUTE_HANDLER ) {}
+        }
+        return killed;
+    }
+
+    // conta elementos mortos ainda linkados nas estruturas rastreadas
+    int lane_dead_pending()
+    {
+        int dead = 0;
+        auto count_dead = [ & ]( void* obj, uintptr_t arr_off, uintptr_t cnt_off )
+        {
+            if ( obj == nullptr || !readable_ptr(
+                     static_cast< uint8_t* >( obj ) + cnt_off ) ) return;
+            __try
+            {
+                void** arr = *reinterpret_cast< void*** >(
+                    static_cast< uint8_t* >( obj ) + arr_off );
+                auto* cnt = reinterpret_cast< uint64_t* >(
+                    static_cast< uint8_t* >( obj ) + cnt_off );
+                if ( arr == nullptr || !readable_ptr( arr ) ||
+                     *cnt == 0 || *cnt > 0x10000 ) return;
+                const uint64_t n = *cnt;
+                for ( uint64_t i = 0; i < n; ++i )
+                {
+                    if ( lane_element_dead( arr[ i ] ) ) ++dead;
+                }
+            }
+            __except ( EXCEPTION_EXECUTE_HANDLER ) {}
+        };
+        for ( auto& c : lane_containers ) count_dead( c, 8, 0x10 );
+        for ( auto& nd : lane_nodes ) count_dead( nd, 0x20, 0x28 );
+        return dead;
+    }
+
+    // 277 - registra o container {+8 array,+0x10 count} achado num handle de consulta
+    void lane_track_container( void* c )
+    {
+        if ( c == nullptr ) return;
+        for ( auto& e : lane_containers ) { if ( e == c ) return; }
+        if ( !readable_ptr( c ) ||
+             !readable_ptr( static_cast< uint8_t* >( c ) + 0x10 ) ) return;
+        for ( auto& e : lane_containers )
+        {
+            if ( e == c ) return;
+            if ( e == nullptr ) { e = c; return; }
+        }
+    }
+
+    // 278 - registra o nó {+0x20 array,+0x28 count} lido pela varredura
+    void lane_track_node( void* n )
+    {
+        if ( n == nullptr ) return;
+        for ( auto& e : lane_nodes ) { if ( e == n ) return; }
+        if ( !readable_ptr( n ) ||
+             !readable_ptr( static_cast< uint8_t* >( n ) + 0x28 ) ) return;
+        for ( auto& e : lane_nodes )
+        {
+            if ( e == n ) return;
+            if ( e == nullptr ) { e = n; break; }
+        }
+        __try
+        {
+            lane_track_container( *reinterpret_cast< void** >( static_cast< uint8_t* >( n ) + 0x18 ) );
+        }
+        __except ( EXCEPTION_EXECUTE_HANDLER ) {}
+    }
+
+    // registra o container de elementos do nó para a poda e o kill por dono
+    void lane_register_node( void* node )
+    {
+        struct node_cache_t { void* node; void* container; };
+        static node_cache_t known[ 16 ] = {};
+        node_cache_t* free_slot = nullptr;
+        for ( auto& e : known )
+        {
+            if ( e.node == node ) return;
+            if ( e.node == nullptr && free_slot == nullptr ) free_slot = &e;
+        }
+        if ( free_slot == nullptr || node == nullptr ||
+             !plausible_vfunc( node, 0xD0 / 8 ) ) return;
+        free_slot->node = node;
+        for ( auto& nd : lane_nodes )
+        {
+            if ( nd == node ) break;
+            if ( nd == nullptr ) { nd = node; break; }
+        }
+        void* container = nullptr;
+        __try
+        {
+            container = vcall< void* __fastcall( void* ) >( node, 0xD0 / 8 );
+        }
+        __except ( EXCEPTION_EXECUTE_HANDLER ) { return; }
+        if ( container == nullptr || !readable_ptr( container ) ||
+             !readable_ptr( static_cast< uint8_t* >( container ) + 0x10 ) ) return;
+        free_slot->container = container;
+        for ( auto& c : lane_containers )
+        {
+            if ( c == container ) return;
+            if ( c == nullptr ) { c = container; return; }
+        }
     }
 
     using lane_obstacle_insert_fn = uint8_t __fastcall( void* /*node*/, void* /*link*/, float /*pos*/ );
     // 135 - hook: sanitiza o container antes do insert nativo
     uint8_t __fastcall hk_lane_obstacle_insert( void* node, void* link, float pos )
     {
-        if ( node != nullptr && link != nullptr && plausible_vfunc( link, 1 ) )
+        if ( !lane_guard_on.load( std::memory_order_acquire ) )
+        {
+            return lane_obstacle_insert_hook->get_original< lane_obstacle_insert_fn >()( node, link, pos );
+        }
+        const uint64_t tall0 = __rdtsc();
+        ++lane_insert_calls;
+        lane_register_node( node );
+        static uint32_t ins_seq = 0;
+        const uint32_t seq = ++ins_seq;
+        if ( lane_prune_frames > 0 || ( seq & 0xF ) == 0 )
+        {
+            []()
+            {
+                std::unique_lock< std::recursive_mutex > lane_lk( claim_write_mutex, std::try_to_lock );
+                if ( lane_lk.owns_lock() ) prune_lane_containers();
+            }();
+        }
+        if ( ( seq & 0x1F ) == 0 && link != nullptr && plausible_vfunc( link, 1 ) )
         {
             using type_fn = uint32_t __fastcall( void* );
-            const auto get_type = reinterpret_cast< type_fn* >( ( *reinterpret_cast< void** const* >( link ) )[ 1 ] );
-
-            if ( get_type( link ) == 0xFFF && plausible_vfunc( node, 0xD0 / 8 ) )
+            const auto gt = reinterpret_cast< type_fn* >( ( *reinterpret_cast< void** const* >( link ) )[ 1 ] );
+            const uint32_t lt = gt( link );
+            for ( auto& b : ins_type_bins )
             {
-                using container_fn = void* __fastcall( void* );
-                const auto get_container = reinterpret_cast< container_fn* >( ( *reinterpret_cast< void** const* >( node ) )[ 0xD0 / 8 ] );
-                void* container = get_container( node );
-                if ( readable_ptr( container ) && readable_ptr( static_cast< uint8_t* >( container ) + 0x18 ) )
-                {
-
-                    for ( auto& c : lane_containers )
-                    {
-                        if ( c == container ) break;
-                        if ( c == nullptr ) { c = container; break; }
-                    }
-                    void** elements = *reinterpret_cast< void*** >( static_cast< uint8_t* >( container ) + 8 );
-                    auto* count = reinterpret_cast< uint64_t* >( static_cast< uint8_t* >( container ) + 0x10 );
-                    if ( elements != nullptr && readable_ptr( elements ) && *count <= 0x10000 )
-                    {
-                        uint64_t n = *count;
-                        for ( uint64_t i = n; i-- > 0; )
-                        {
-                            void* el = elements[ i ];
-                            if ( lane_element_dead( el ) )
-                            {
-                                CCore::g_instance->info( "lane obstacle: pruned dead entry {:p}", el );
-                                memmove( &elements[ i ], &elements[ i + 1 ], ( n - i - 1 ) * sizeof( void* ) );
-                                --n;
-                            }
-                        }
-                        *count = n;
-                    }
-                }
+                if ( b.count == 0 || b.type == lt ) { b.type = lt; ++b.count; break; }
             }
         }
-        return lane_obstacle_insert_hook->get_original< lane_obstacle_insert_fn >()( node, link, pos );
+        if ( link != nullptr )
+        {
+            bool bad_link = true;
+            __try
+            {
+                const auto lv = *reinterpret_cast< const uint64_t* >( link );
+                bad_link = lv < exe_base() || lv >= exe_base() + 0x4000000;
+            }
+            __except ( EXCEPTION_EXECUTE_HANDLER ) { bad_link = true; }
+            if ( bad_link ) return 0;
+        }
+        const uint64_t tsc0 = __rdtsc();
+        const auto r = lane_obstacle_insert_hook->get_original< lane_obstacle_insert_fn >()( node, link, pos );
+        ins_tsc += __rdtsc() - tsc0;
+        ins_all_tsc += __rdtsc() - tall0;
+        return r;
+    }
+
+    using lane_obstacle_resolve_fn = void* __fastcall( void* /*handle*/ );
+    // 279 - hook: elemento morto vira o elemento-fantasma, e o container entra na poda
+    void* __fastcall hk_lane_obstacle_resolve( void* handle )
+    {
+        if ( !lane_guard_on.load( std::memory_order_acquire ) )
+        {
+            return lane_obstacle_resolve_hook->get_original< lane_obstacle_resolve_fn >()( handle );
+        }
+        void* el = nullptr;
+        __try
+        {
+            lane_track_container( *reinterpret_cast< void** >(
+                static_cast< uint8_t* >( handle ) + 8 ) );
+            el = lane_obstacle_resolve_hook->get_original< lane_obstacle_resolve_fn >()( handle );
+            if ( lane_element_dead( el ) ) return lane_fake_element;
+        }
+        __except ( EXCEPTION_EXECUTE_HANDLER )
+        {
+            return lane_fake_element;
+        }
+        return el;
+    }
+
+    using lane_obstacle_scan_fn = void* __fastcall( void* /*node*/, uint32_t /*flags*/, float /*lo*/, float /*hi*/, float* /*out*/ );
+    // 280 - hook: arranca elementos mortos da lista do nó antes da varredura nativa
+    void* __fastcall hk_lane_obstacle_scan( void* node, uint32_t flags, float lo, float hi, float* out )
+    {
+        if ( !lane_guard_on.load( std::memory_order_acquire ) )
+        {
+            return lane_obstacle_scan_hook->get_original< lane_obstacle_scan_fn >()( node, flags, lo, hi, out );
+        }
+        __try
+        {
+            lane_track_node( node );
+            void** arr = *reinterpret_cast< void*** >( static_cast< uint8_t* >( node ) + 0x20 );
+            auto* cnt = reinterpret_cast< uint64_t* >( static_cast< uint8_t* >( node ) + 0x28 );
+            uint64_t n = ( arr != nullptr && cnt != nullptr ) ? *cnt : 0;
+            if ( arr != nullptr && n > 0 && n < 0x10000 )
+            {
+                for ( uint64_t k = n; k-- > 0; )
+                {
+                    void* el = arr[ k ];
+                    if ( !lane_element_dead( el ) ) continue;
+                    if ( el != nullptr )
+                        *reinterpret_cast< void** >( static_cast< uint8_t* >( el ) + 0x88 ) =
+                            lane_dead_owner;
+                    std::memmove( arr + k, arr + k + 1, ( n - k - 1 ) * sizeof( void* ) );
+                    --n;
+                }
+                *cnt = n;
+            }
+        }
+        __except ( EXCEPTION_EXECUTE_HANDLER ) {}
+        return lane_obstacle_scan_hook->get_original< lane_obstacle_scan_fn >()( node, flags, lo, hi, out );
     }
 
     // 136 - estaciona uma carreta solta (apoio + freio + registro)
@@ -855,7 +1181,8 @@ namespace br_carretas
                 prism::offsets::field< float >( t, 0x1240 ) = 1.f;
                 brace_anim_fn( t, 1, 1.f / 3.f );
             }
-            if ( notify_decoupled_fn != nullptr ) notify_decoupled_fn( t );
+            if ( notify_decoupled_fn != nullptr ) { ++notify_calls; notify_decoupled_fn( t ); }
+            ++park_calls;
             traffic_detach_tail();
             lane_prune_frames = 40;
         }
@@ -965,17 +1292,20 @@ namespace br_carretas
 
     // 138 - vfunc fake que devolve nulo
     void* __fastcall purecall_null_vfunc( void* /*self*/ ) { return nullptr; }
-    void* purecall_fake_vtbl[ 16 ] = {};
+    void* purecall_fake_vtbl[ 64 ] = {};
     struct purecall_fake_t { void* vtbl; uint8_t pad[ 248 ]; };
     purecall_fake_t purecall_fake = { purecall_fake_vtbl };
 
-    // 139 - monta a vtable fake do purecall
+    // 139 - monta a vtable fake do purecall, arma o dono-fantasma e o elemento-fantasma
     void init_purecall_fake()
     {
         for ( auto& slot : purecall_fake_vtbl )
         {
             slot = reinterpret_cast< void* >( &purecall_null_vfunc );
         }
+        *reinterpret_cast< void** >( lane_dead_owner ) = purecall_fake_vtbl;
+        *reinterpret_cast< void** >( lane_fake_element + 0x88 ) = lane_dead_owner;
+        *reinterpret_cast< float* >( lane_fake_element + 0x90 ) = 1.0e30f;
     }
 
     // 140 - hook: engole purecall do iterador de componentes
@@ -995,8 +1325,7 @@ namespace br_carretas
                 break;
             }
         }
-        if ( rva >= 0x927C60 && rva < 0x927CBF ) return &purecall_fake;
-        return nullptr;
+        return &purecall_fake;
     }
 
     // 141 - reexibe carretas escondidas
@@ -1255,7 +1584,7 @@ namespace br_carretas
             const bool parked_rec = prism::offsets::field< void* >( t, prism::offsets::trailer_parked_state ) != nullptr;
 
             const bool parked_reg = prism::offsets::field< uint8_t >( t, prism::offsets::trailer_parked_registered ) != 0;
-            if ( !parked_flag && !parked_reg ) continue;
+            if ( !parked_flag && !parked_reg && !parked_rec ) continue;
 
             prism::offsets::field< uint8_t >( t, prism::offsets::trailer_parked ) = 0;
             prism::offsets::field< uint8_t >( t, prism::offsets::trailer_parked_registered ) = 0;
@@ -1278,8 +1607,16 @@ namespace br_carretas
             unparked_j[ slot ] = joint( t );
             prism::offsets::field< float >( t, prism::offsets::trailer_brake ) = 0.f;
             prism::offsets::field< uint8_t >( t, prism::offsets::trailer_brake_forced ) = 0;
+            lane_prune_frames = 120;
 
-            if ( parked_rec ) parked_record_unlist( t );
+            if ( parked_rec )
+            {
+                const int killed = lane_kill_owner( t );
+                if ( killed > 0 )
+                    CCore::g_instance->info( "un-park c{}: {} obstaculo(s) de pista mortos", i, killed );
+                parked_record_unlist( t );
+                lane_prune_frames = 120;
+            }
             CCore::g_instance->info( "un-parked trailer {} (flag {} record {})", i, parked_flag, parked_rec );
         }
     }
@@ -1304,6 +1641,13 @@ namespace br_carretas
             fn_index_add( fn_addr_of( &lane_element_dead ), 133, "lane_element_dead" );
             fn_index_add( fn_addr_of( &prune_lane_containers ), 134, "prune_lane_containers" );
             fn_index_add( fn_addr_of( &hk_lane_obstacle_insert ), 135, "hk_lane_obstacle_insert" );
+            fn_index_add( fn_addr_of( &lane_kill_owner ), 274, "lane_kill_owner" );
+            fn_index_add( fn_addr_of( &lane_census ), 275, "lane_census" );
+            fn_index_add( fn_addr_of( &lane_owner_refs ), 276, "lane_owner_refs" );
+            fn_index_add( fn_addr_of( &lane_track_container ), 277, "lane_track_container" );
+            fn_index_add( fn_addr_of( &lane_track_node ), 278, "lane_track_node" );
+            fn_index_add( fn_addr_of( &hk_lane_obstacle_resolve ), 279, "hk_lane_obstacle_resolve" );
+            fn_index_add( fn_addr_of( &hk_lane_obstacle_scan ), 280, "hk_lane_obstacle_scan" );
             fn_index_add( fn_addr_of( &native_park_detached ), 136, "native_park_detached" );
             fn_index_add( fn_addr_of( &crash_tracer ), 235, "crash_tracer" );
             fn_index_add( fn_addr_of( &install_crash_tracer ), 137, "install_crash_tracer" );

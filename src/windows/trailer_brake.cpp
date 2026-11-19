@@ -138,6 +138,7 @@ namespace br_carretas
     // 209 - hook: setter de freio vindo da cadeia
     void __fastcall hk_brake_chain_setter( void* self, float v )
     {
+        hk_timer hk_t{ HK_BCH };
         if ( v > 0.f && foreign_brake_write( self, _ReturnAddress() ) )
         {
             if ( void* s = next_jointless_link( self ) )
@@ -152,6 +153,7 @@ namespace br_carretas
     // 210 - hook: setter de freio direto na carreta
     void __fastcall hk_brake_setter( void* self, float v )
     {
+        hk_timer hk_t{ HK_BSET };
         if ( v > 0.f && foreign_brake_write( self, _ReturnAddress() ) ) return;
         brake_setter_hook->get_original< brake_setter_fn >()( self, biased_brake( self, v ) );
     }
@@ -159,6 +161,7 @@ namespace br_carretas
     // 211 - hook: flag de freio forçado vindo da cadeia
     void __fastcall hk_forced_chain_setter( void* self, uint8_t v )
     {
+        hk_timer hk_t{ HK_FCH };
         if ( v != 0 && foreign_brake_write( self, _ReturnAddress() ) )
         {
             if ( void* s = next_jointless_link( self ) )
@@ -173,6 +176,7 @@ namespace br_carretas
     // 212 - hook: flag de freio forçado direto na carreta
     void __fastcall hk_forced_setter( void* self, uint8_t v )
     {
+        hk_timer hk_t{ HK_FSET };
         if ( v != 0 && foreign_brake_write( self, _ReturnAddress() ) ) return;
         forced_setter_hook->get_original< forced_setter_fn >()( self, v );
     }
@@ -181,7 +185,10 @@ namespace br_carretas
     // 213 - hook: solver de freio por roda (zera roda no ar)
     void __fastcall hk_wheel_brake( void* ws )
     {
+        ++wheel_solver_calls;
+        const uint64_t t0 = __rdtsc();
         wheel_brake_hook->get_original< wheel_brake_fn >()( ws );
+        ws_tsc += __rdtsc() - t0;
         if ( ws == nullptr ) return;
         void* const veh = prism::offsets::field< void* >( ws, 0x10 );
         if ( veh == nullptr || index_of( veh ) < 0 ) return;

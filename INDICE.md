@@ -9,12 +9,12 @@ crashar ou falhar, o número diz exatamente qual função é, sem ambiguidade.
 | src/windows/trailer_manipulation.cpp | 065–107 |
 | src/windows/trailer_steering.cpp | 108–114 |
 | src/windows/trailer_loadunload.cpp | 115–118 |
-| src/windows/trailer_loadstate.cpp | 119–143, 235 |
+| src/windows/trailer_loadstate.cpp | 119–143, 235, 274–276 |
 | src/windows/trailer_oficina.cpp | 144–145 |
 | src/windows/trailer_loadgame.cpp | 146–147 |
 | src/windows/trailer_lines.cpp | 148–165 |
 | src/windows/trailer_garage.cpp | 166 |
-| src/windows/trailer_coupling.cpp | 167–197 |
+| src/windows/trailer_coupling.cpp | 167–197, 273 |
 | src/windows/trailer_camera.cpp | 198–202 |
 | src/windows/trailer_camera_zero.cpp | 203 |
 | src/windows/trailer_brake.cpp | 204–216 |
@@ -270,6 +270,10 @@ de bytes; se não bater no exe, aquele recurso desliga sozinho:
 | 195 | `hk_trailer_dtor` | hook: destrutor de carreta (limpa registros) |
 | 196 | `coupling_register_channels` | registra os canais de telemetria |
 | 197 | `coupling_install` | instala o sistema de engate |
+| 273 | `orphan_teardown_tick` | por tick: encerra carreta solta que o rebuild abandonou (elos, registros, obstáculos de pista) |
+| 274 | `lane_kill_owner` | mata elementos de lane-obstacle cujo dono é o objeto dado ou o contém |
+| 275 | `lane_census` | censo dos elementos de lane-obstacle: total, donos únicos, ligados a canon |
+| 276 | `lane_owner_refs` | verifica se o objeto-dono referencia a carreta em algum campo |
 
 ## src/windows/trailer_camera.cpp
 

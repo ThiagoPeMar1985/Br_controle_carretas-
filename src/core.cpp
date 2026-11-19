@@ -16,6 +16,7 @@
 #include "windows/trailer_manipulation.hpp"
 #include "windows/hooks_window.hpp"
 #include "settings/settings.hpp"
+#include "hk_metrics.hpp"
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler( HWND, UINT, WPARAM, LPARAM );
 
@@ -162,6 +163,7 @@ namespace br_carretas
 
     bool CCore::render()
     {
+        hk_timer hk_t{ HK_REND };
         ImGui_ImplDX11_NewFrame();
         ImGui_ImplWin32_NewFrame();
         ImGui::NewFrame();

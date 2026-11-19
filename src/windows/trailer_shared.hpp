@@ -10,6 +10,8 @@
 #include <utility>
 #include <vector>
 
+#include "../hk_metrics.hpp"
+
 #include "imgui.h"
 
 #include "core.hpp"
@@ -130,6 +132,10 @@ namespace br_carretas
         { 0x1409555F0, 0x1412bf010, ( const uint8_t* )"\x48\x8b\xc4\x57\x48\x81\xec\xe0\x00\x00\x00\x48\x89\x58\x08\x48\x8b\xf9\x48\x89\x70", 20 },
         // 269 - lane_obstacle_insert - inserção ordenada de obstáculo
         { 0x14094DFC0, 0x1412b7dd0, ( const uint8_t* )"\x48\x89\x5c\x24\x20\x56\x48\x83\xec\x60\x8b\x41\x10\x48\x8b\xd9\xc1\xe8\x15\x24", 20 },
+        // 270 - lane_obstacle_resolve - resolve handle -> elemento (toda consulta ordenada passa aqui)
+        { 0x14096AAB0, 0x14096aab0, ( const uint8_t* )"\x48\x83\xec\x48\x8b\x51\x14\x48\x8b\x49\x08\xff\xca\x48\x3b\x51\x10\x73", 17 },
+        // 271 - lane_obstacle_scan - varredura linear de obstáculos do nó
+        { 0x1412B85A0, 0x1412b85a0, ( const uint8_t* )"\x48\x8b\xc4\x48\x89\x58\x08\x48\x89\x70\x18\x55\x57\x41\x56\x48\x8d\x68\xb8", 18 },
     };
 
     // 030 - confere o endereço fixo contra a assinatura (cache por chamada)
@@ -215,13 +221,19 @@ namespace br_carretas
         return span < want ? span : want;
     }
 
+    // base do exe fixa: GetModuleHandle por chamada disputa a loader lock no streaming
+    inline uint64_t exe_base()
+    {
+        static const uint64_t base = reinterpret_cast< uint64_t >( GetModuleHandle( nullptr ) );
+        return base;
+    }
+
     // 034 - ponteiro parece um objeto do jogo (vtable dentro do exe)
     inline bool plausible_object( const void* p )
     {
         if ( !readable_ptr( p ) ) return false;
-        const auto base = reinterpret_cast< uint64_t >( GetModuleHandle( nullptr ) );
         const auto vtbl = *reinterpret_cast< const uint64_t* >( p );
-        return vtbl >= base && vtbl < base + 0x4000000;
+        return vtbl >= exe_base() && vtbl < exe_base() + 0x4000000;
     }
 
     // 035 - o slot da vtable aponta pra código do exe
@@ -230,8 +242,7 @@ namespace br_carretas
         if ( !plausible_object( obj ) ) return false;
         const auto* vtbl = *reinterpret_cast< void* const* const* >( obj );
         const auto fn = reinterpret_cast< uint64_t >( vtbl[ slot ] );
-        const auto base = reinterpret_cast< uint64_t >( GetModuleHandle( nullptr ) );
-        return fn >= base && fn < base + 0x2000000;
+        return fn >= exe_base() && fn < exe_base() + 0x2000000;
     }
 
     // 036 - o ponteiro é objeto-carreta de verdade (vfunc 99)
@@ -308,6 +319,8 @@ namespace br_carretas
     inline std::shared_ptr< CFunctionHook > trailer_teleport_hook = nullptr;
     inline std::shared_ptr< CFunctionHook > actor_teleport_hook = nullptr;
     inline std::shared_ptr< CFunctionHook > lane_obstacle_insert_hook = nullptr;
+    inline std::shared_ptr< CFunctionHook > lane_obstacle_resolve_hook = nullptr;
+    inline std::shared_ptr< CFunctionHook > lane_obstacle_scan_hook = nullptr;
     inline std::shared_ptr< CFunctionHook > combo_length_hook = nullptr;
     inline std::shared_ptr< CFunctionHook > cam_set_target_hook = nullptr;
     inline std::shared_ptr< CFunctionHook > cam_update_hook = nullptr;
@@ -346,9 +359,21 @@ namespace br_carretas
         return false;
     }
 
+    inline std::atomic< bool > lane_guard_on{ false };
+    extern uint32_t lane_prune_frames;
+
+    // ponto único de arm - checkbox desligado nunca arma a guarda
+    inline void arm_lane_guard()
+    {
+        if ( !settings::g_settings.cargo_restore ) return;
+        lane_guard_on.store( true, std::memory_order_release );
+        lane_prune_frames = 40;
+    }
+
     // 042 - marca a carreta como desatrelada
     inline void mark_detached( void* trailer )
     {
+        arm_lane_guard();
         for ( void*& d : detached_trailers ) if ( d == nullptr ) { d = trailer; return; }
     }
 
@@ -370,6 +395,7 @@ namespace br_carretas
     // 045 - marca desatrelada pelo plugin
     inline void mark_plugin_detached( void* trailer )
     {
+        arm_lane_guard();
         for ( void*& d : plugin_detached ) if ( d == nullptr ) { d = trailer; return; }
     }
 
@@ -391,6 +417,27 @@ namespace br_carretas
 
     inline void* pending_native_detach = nullptr;
     inline uint32_t pending_native_age = 0;
+
+    inline void* pending_orphans[ max_trailers ] = {};
+    inline uint64_t orphan_sig[ max_trailers ][ 2 ] = {};
+    inline uint32_t orphan_delay = 0;
+
+    alignas( 64 ) inline uint64_t lane_insert_calls = 0;
+    alignas( 64 ) inline uint64_t combo_len_calls = 0;
+    alignas( 64 ) inline uint64_t joint_walk_calls = 0;
+    alignas( 64 ) inline uint64_t park_calls = 0;
+    alignas( 64 ) inline uint64_t notify_calls = 0;
+    alignas( 64 ) inline uint64_t wheel_solver_calls = 0;
+    alignas( 64 ) inline uint64_t ins_tsc = 0;
+    alignas( 64 ) inline uint64_t ws_tsc = 0;
+    alignas( 64 ) inline uint64_t jw_tsc = 0;
+    alignas( 64 ) inline uint64_t ins_all_tsc = 0;
+    alignas( 64 ) inline uint64_t steering_calls = 0;
+    alignas( 64 ) inline uint64_t steer_tsc = 0;
+    alignas( 64 ) inline uint64_t ins_canon_calls = 0;
+    alignas( 64 ) inline uint64_t ins_ref_calls = 0;
+    struct ins_type_bin { uint32_t type; uint64_t count; };
+    inline ins_type_bin ins_type_bins[ 8 ] = {};
 
     inline bool canon_was_jointed[ max_trailers ] = {};
 
@@ -451,10 +498,10 @@ namespace br_carretas
         return true;
     }
 
-    inline uint64_t sim_heartbeat = 0;
-    inline uint64_t sim_heartbeat_seen = 0;
-    inline uint32_t sim_dead_frames = 0;
-    inline uint64_t sim_thread_id = 0;
+    alignas( 64 ) inline uint64_t sim_heartbeat = 0;
+    alignas( 64 ) inline uint64_t sim_heartbeat_seen = 0;
+    alignas( 64 ) inline uint32_t sim_dead_frames = 0;
+    alignas( 64 ) inline uint64_t sim_thread_id = 0;
 
     // 050 - batimento do thread de física
     inline void pump_sim_heartbeat()
@@ -965,6 +1012,7 @@ namespace br_carretas
     // declarações das funções que vivem nos outros arquivos
     void lift_register_channels();
     void lift_axles_update( void* game_actor );
+    void suspension_update();
     void release_all_axles();
     void brake_register_hooks();
     void brake_boost_update();

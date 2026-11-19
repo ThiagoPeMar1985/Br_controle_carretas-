@@ -129,6 +129,11 @@ namespace br_carretas::prism::offsets
     // sync when it commands a lift itself.
     constexpr uint32_t game_actor_lift_state = 0x024C;
 
+    // Trailer air suspension height, found via suspwatch: the native
+    // susp up/down control ramps this float 0..2 (1.0 = normal ride
+    // height, clamped at 2.0) identically on every trailer of the set.
+    constexpr uint32_t trailer_suspension_height = 0x04D4;
+
     template < typename T >
     T& field( void* object, const uint32_t offset )
     {

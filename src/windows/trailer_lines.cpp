@@ -442,7 +442,7 @@ namespace br_carretas
     // 160 - hook: máscara de lâmpadas
     uint8_t __fastcall hk_lamp_mask( void* self, uint8_t mask )
     {
-
+        hk_timer hk_t{ HK_LAMPM };
         if ( !settings::g_settings.cargo_restore )
         {
             return lamp_mask_hook->get_original< lamp_mask_setter_fn >()( self, mask );
@@ -459,7 +459,7 @@ namespace br_carretas
     // 161 - hook: propagação de lâmpadas pela cadeia
     void __fastcall hk_lamp_propagate( void* self, uint32_t mask )
     {
-
+        hk_timer hk_t{ HK_LAMPP };
         if ( !settings::g_settings.cargo_restore )
         {
             lamp_propagate_hook->get_original< lamp_propagate_fn >()( self, mask );
@@ -483,6 +483,7 @@ namespace br_carretas
     // 162 - hook: cabos/mangueiras do engate
     void __fastcall hk_apply_cables( void* truck, void* trailer, int unused, int mode, int zero )
     {
+        hk_timer hk_t{ HK_CABL };
         std::lock_guard< std::recursive_mutex > claim_lk( claim_write_mutex );
         if ( !settings::g_settings.cargo_restore )
         {
@@ -588,7 +589,6 @@ namespace br_carretas
     // 163 - hook: liga/desliga as linhas do veículo
     void __fastcall hk_set_lines( void* vehicle, uint8_t state, uint8_t force )
     {
-
         if ( !settings::g_settings.cargo_restore )
         {
             set_lines_hook->get_original< line_state_fn >()( vehicle, state, force );
@@ -614,6 +614,7 @@ namespace br_carretas
     // 164 - hook: atualização de mangueiras por aresta
     void __fastcall hk_hose_update( void* front, void* trailer )
     {
+        hk_timer hk_t{ HK_HOSE };
         std::lock_guard< std::recursive_mutex > claim_lk( claim_write_mutex );
         if ( !settings::g_settings.cargo_restore || canon_age < 90 )
         {

@@ -46,7 +46,12 @@ namespace br_carretas
     // 199 - hook: update da câmera 2 (esconde links mortos na medida)
     void __fastcall hk_cam_update( void* cam, float dt )
     {
-        std::lock_guard< std::recursive_mutex > claim_lk( claim_write_mutex );
+        hk_timer hk_t{ HK_CAM };
+        const uint64_t lt0 = __rdtsc();
+        claim_write_mutex.lock();
+        hk_stats[ HK_LOCKW ].tsc += __rdtsc() - lt0;
+        ++hk_stats[ HK_LOCKW ].calls;
+        std::lock_guard< std::recursive_mutex > claim_lk( claim_write_mutex, std::adopt_lock );
         if ( canon_age < 90 )
         {
             [&]()
@@ -142,7 +147,8 @@ namespace br_carretas
     // 200 - hook: comprimento do comboio (para na primeira junta morta)
     float __fastcall hk_combo_length( void* self )
     {
-
+        hk_timer hk_t{ HK_COMBO };
+        ++combo_len_calls;
         if ( !settings::g_settings.cargo_restore )
         {
             return combo_length_hook->get_original< combo_length_fn >()( self );

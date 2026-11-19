@@ -60,7 +60,10 @@ namespace br_carretas
                 break;
             }
         }
+        ++steering_calls;
+        const uint64_t t0 = __rdtsc();
         set_individual_steering_hook->get_original< prism::set_individual_steering_fn >()( data, angle );
+        steer_tsc += __rdtsc() - t0;
     }
 
     // 110 - por frame: teclas de direção + centralização suave

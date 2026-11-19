@@ -27,7 +27,11 @@ namespace br_carretas
 
     void trigger_native_sleep();
 
+
     void* canon[ max_trailers ] = {};
+    // último +0xEE8 válido visto na carreta — o destrutor nativo precisa
+    // dele inteiro; se chegar amputado (metade baixa zerada) restaura daqui
+    void* canon_ee8[ max_trailers ] = {};
 
     uint32_t canon_age = 0;
     bool lw_ctx_logged[ max_trailers ] = {};
@@ -203,7 +207,28 @@ namespace br_carretas
             }
         }
         carry_arm_tick = 0;
+        for ( auto& p : pending_orphans ) p = nullptr;
+        for ( auto& s : orphan_sig ) { s[ 0 ] = 0; s[ 1 ] = 0; }
+        orphan_delay = 0;
+        if ( carry )
+        {
+            orphan_delay = 90;
+            for ( uint32_t i = 0; i < max_trailers; ++i )
+            {
+                void* t = canon[ i ];
+                if ( t != nullptr && readable_ptr( t ) && is_trailer_obj( t ) &&
+                     ( detached_idx[ i ] || is_detached( t ) || is_plugin_detached( t ) ) )
+                {
+                    pending_orphans[ i ] = t;
+                    orphan_sig[ i ][ 0 ] = reinterpret_cast< uint64_t >(
+                        prism::offsets::field< void* >( t, 0xA0 ) );
+                    orphan_sig[ i ][ 1 ] = reinterpret_cast< uint64_t >(
+                        prism::offsets::field< void* >( t, 0x150 ) );
+                }
+            }
+        }
         for ( auto& c : canon ) c = nullptr;
+        for ( auto& c : canon_ee8 ) c = nullptr;
         for ( auto& j : canon_was_jointed ) j = false;
         for ( auto& j : canon_jointless_frames ) j = 0;
         for ( auto& j : lines_torn ) j = false;
@@ -350,6 +375,8 @@ namespace br_carretas
         trailer_teleport_hook.reset();
         actor_teleport_hook.reset();
         lane_obstacle_insert_hook.reset();
+        lane_obstacle_resolve_hook.reset();
+        lane_obstacle_scan_hook.reset();
         combo_length_hook.reset();
         cam_set_target_hook.reset();
         cam_update_hook.reset();
@@ -449,12 +476,15 @@ namespace br_carretas
     // 084 - update por frame protegido
     void CTrailerManipulation::update()
     {
-
-        __try { update_impl(); }
-        __except ( update_fault_filter( GetExceptionInformation() ) )
+        hk_timer hk_t{ HK_UPD };
+        [&]()
         {
-            reset_trailer_state();
-        }
+            __try { update_impl(); }
+            __except ( update_fault_filter( GetExceptionInformation() ) )
+            {
+                reset_trailer_state();
+            }
+        }();
     }
 
     // 085 - update por frame: assinatura da cadeia + sub-sistemas
@@ -505,6 +535,38 @@ namespace br_carretas
         if ( wake ) pulse = 0;
 
         load_game_update();
+
+        if ( lane_prune_frames > 0 && settings::g_settings.cargo_restore )
+        {
+            --lane_prune_frames;
+            prune_lane_containers();
+        }
+
+        bool any_loose = false;
+        for ( const void* d : detached_trailers ) if ( d != nullptr ) { any_loose = true; break; }
+        for ( const void* d : plugin_detached ) if ( !any_loose && d != nullptr ) { any_loose = true; break; }
+        for ( uint32_t i = 0; !any_loose && i < max_trailers && canon[ i ] != nullptr; ++i )
+        {
+            void* t = canon[ i ];
+            if ( plausible_object( t ) && ( joint( t ) == nullptr || detached_idx[ i ] ) ) any_loose = true;
+        }
+        if ( settings::g_settings.cargo_restore && ( any_loose || lane_prune_frames > 0 ) )
+        {
+            lane_guard_on.store( true, std::memory_order_release );
+        }
+        else if ( lane_guard_on.load( std::memory_order_acquire ) )
+        {
+            if ( settings::g_settings.cargo_restore && lane_dead_pending() > 0 )
+            {
+                lane_prune_frames = 40;
+            }
+            else
+            {
+                lane_guard_on.store( false, std::memory_order_release );
+                CCore::g_instance->info( "lane guard: desligado" );
+            }
+        }
+
         const bool coupling_on = settings::g_settings.cargo_restore;
 
         static bool coupling_was_on = true;
@@ -569,7 +631,11 @@ namespace br_carretas
 
         auto* game_actor = CCore::g_instance->get_game_actor();
 
-        if ( !cargo_freeze() ) lift_axles_update( game_actor );
+        if ( !cargo_freeze() )
+        {
+            lift_axles_update( game_actor );
+            suspension_update();
+        }
         pt[ 5 ] = __rdtsc();
 
         if ( wake && coupling_on && this->connect_valid_ ) coupling_parked_update();
@@ -592,6 +658,24 @@ namespace br_carretas
 
         if ( settings::g_settings.debug_logs )
         {
+        static LARGE_INTEGER qpc_prev{};
+        static double worst_ms = 0.0;
+        static int64_t qfreq = 0;
+        if ( qfreq == 0 )
+        {
+            LARGE_INTEGER f;
+            QueryPerformanceFrequency( &f );
+            qfreq = f.QuadPart;
+        }
+        LARGE_INTEGER qn{};
+        QueryPerformanceCounter( &qn );
+        if ( win_frames == 0 ) worst_ms = 0.0;
+        if ( qpc_prev.QuadPart != 0 )
+        {
+            const double dt = double( qn.QuadPart - qpc_prev.QuadPart ) / double( qfreq ) * 1000.0;
+            if ( dt > worst_ms ) worst_ms = dt;
+        }
+        qpc_prev = qn;
         if ( win_frames == 0 )
         {
             QueryPerformanceCounter( &qpc0 );
@@ -618,12 +702,117 @@ namespace br_carretas
                 uint32_t top = 0;
                 for ( uint32_t s = 1; s < 9; ++s ) if ( acc[ s ] > acc[ top ] ) top = s;
                 const double top_ms = double( acc[ top ] ) / tsc_hz * 1000.0 / win_frames;
-                if ( plugin_ms > 0.5 )
+                static uint64_t last_saves = 0, last_suspw = 0;
+                const uint64_t d_saves = settings::save_calls - last_saves;
+                const uint64_t d_suspw = settings::susp_writes - last_suspw;
+                last_saves = settings::save_calls;
+                last_suspw = settings::susp_writes;
+                if ( plugin_ms > 0.5 || d_saves != 0 || d_suspw != 0 )
                 {
                     CCore::g_instance->warning(
-                        "perf: plugin update {:.2f} ms/frame - top {} {:.2f} ms",
-                        plugin_ms, names[ top ], top_ms );
+                        "perf: plugin update {:.2f} ms/frame - top {} {:.2f} ms - saves+{} suspw+{}",
+                        plugin_ms, names[ top ], top_ms, d_saves, d_suspw );
                 }
+                static uint64_t last_ins = 0, last_combo = 0, last_jw = 0, last_park = 0, last_ntf = 0, last_ws = 0;
+                int el = 0, ow = 0, ours = 0;
+                lane_census( el, ow, ours );
+                int cnj = 0, cnd = 0, cen = 0;
+                for ( uint32_t i = 0; i < max_trailers && canon[ i ] != nullptr; ++i )
+                {
+                    if ( joint( canon[ i ] ) != nullptr ) ++cnj;
+                    if ( is_detached( canon[ i ] ) || is_plugin_detached( canon[ i ] ) ) ++cnd;
+                    __try
+                    {
+                        cen += static_cast< int >( *reinterpret_cast< uint64_t* >(
+                            static_cast< uint8_t* >( canon[ i ] ) + 0xEA0 ) );
+                    }
+                    __except ( EXCEPTION_EXECUTE_HANDLER ) {}
+                }
+                int orph = 0;
+                for ( auto* p : pending_orphans ) if ( p != nullptr ) ++orph;
+                static uint64_t last_ins_tsc = 0, last_ic = 0, last_ir = 0;
+                static uint64_t last_ws_tsc = 0, last_jw_tsc = 0;
+                static uint64_t last_ins_all = 0, last_str = 0, last_str_tsc = 0;
+                static uint64_t last_hb = 0;
+                static uint64_t last_hkc[ HK_COUNT ] = {}, last_hkt[ HK_COUNT ] = {};
+                static uint64_t last_bins[ 8 ] = {};
+                const double ins_ms = double( ins_tsc - last_ins_tsc ) / tsc_hz * 1000.0 / window_s;
+                uint32_t ord[ 8 ] = { 0, 1, 2, 3, 4, 5, 6, 7 };
+                for ( uint32_t i = 1; i < 8; ++i )
+                {
+                    const uint32_t k = ord[ i ];
+                    uint32_t j = i;
+                    while ( j > 0 &&
+                        ins_type_bins[ ord[ j - 1 ] ].count - last_bins[ ord[ j - 1 ] ] <
+                        ins_type_bins[ k ].count - last_bins[ k ] )
+                    {
+                        ord[ j ] = ord[ j - 1 ];
+                        --j;
+                    }
+                    ord[ j ] = k;
+                }
+                uint32_t ho[ HK_COUNT ];
+                for ( uint32_t i = 0; i < HK_COUNT; ++i ) ho[ i ] = i;
+                for ( uint32_t i = 1; i < HK_COUNT; ++i )
+                {
+                    const uint32_t k = ho[ i ];
+                    uint32_t j = i;
+                    while ( j > 0 && hk_stats[ ho[ j - 1 ] ].tsc - last_hkt[ ho[ j - 1 ] ] <
+                        hk_stats[ k ].tsc - last_hkt[ k ] )
+                    {
+                        ho[ j ] = ho[ j - 1 ];
+                        --j;
+                    }
+                    ho[ j ] = k;
+                }
+                const auto hms = [ & ]( const int j )
+                {
+                    const uint32_t s = ho[ j ];
+                    return double( hk_stats[ s ].tsc - last_hkt[ s ] ) / tsc_hz * 1000.0 / window_s;
+                };
+                const auto hcl = [ & ]( const int j )
+                {
+                    const uint32_t s = ho[ j ];
+                    return double( hk_stats[ s ].calls - last_hkc[ s ] ) / window_s;
+                };
+                CCore::g_instance->info(
+                    "health: fps={:.1f} worst={:.0f}ms lane el={} own={} ours={} ins={:.0f}/s {:.2f}ms+{:.2f}ms ic={} ir={} t:{:#x}={} {:#x}={} {:#x}={} combo={:.0f}/s jw={:.0f}/s {:.2f}ms ws={:.0f}/s {:.2f}ms str={:.0f}/s {:.2f}ms cen={} park+{} ntf+{} orph={} jnt={} det={} sd={} hb={:.0f}/s h:{}={:.0f}/{:.2f} {}={:.0f}/{:.2f} {}={:.0f}/{:.2f} {}={:.0f}/{:.2f} {}={:.0f}/{:.2f} {}={:.0f}/{:.2f}",
+                    win_frames / window_s, worst_ms, el, ow, ours,
+                    ( lane_insert_calls - last_ins ) / window_s, ins_ms,
+                    double( ins_all_tsc - last_ins_all ) / tsc_hz * 1000.0 / window_s - ins_ms,
+                    ins_canon_calls - last_ic, ins_ref_calls - last_ir,
+                    ins_type_bins[ ord[ 0 ] ].type, ins_type_bins[ ord[ 0 ] ].count - last_bins[ ord[ 0 ] ],
+                    ins_type_bins[ ord[ 1 ] ].type, ins_type_bins[ ord[ 1 ] ].count - last_bins[ ord[ 1 ] ],
+                    ins_type_bins[ ord[ 2 ] ].type, ins_type_bins[ ord[ 2 ] ].count - last_bins[ ord[ 2 ] ],
+                    ( combo_len_calls - last_combo ) / window_s,
+                    ( joint_walk_calls - last_jw ) / window_s,
+                    double( jw_tsc - last_jw_tsc ) / tsc_hz * 1000.0 / window_s,
+                    ( wheel_solver_calls - last_ws ) / window_s,
+                    double( ws_tsc - last_ws_tsc ) / tsc_hz * 1000.0 / window_s,
+                    ( steering_calls - last_str ) / window_s,
+                    double( steer_tsc - last_str_tsc ) / tsc_hz * 1000.0 / window_s, cen,
+                    park_calls - last_park, notify_calls - last_ntf,
+                    orph, cnj, cnd, sim_dead_frames,
+                    ( sim_heartbeat - last_hb ) / window_s,
+                    hk_names[ ho[ 0 ] ], hcl( 0 ), hms( 0 ),
+                    hk_names[ ho[ 1 ] ], hcl( 1 ), hms( 1 ),
+                    hk_names[ ho[ 2 ] ], hcl( 2 ), hms( 2 ),
+                    hk_names[ ho[ 3 ] ], hcl( 3 ), hms( 3 ),
+                    hk_names[ ho[ 4 ] ], hcl( 4 ), hms( 4 ),
+                    hk_names[ ho[ 5 ] ], hcl( 5 ), hms( 5 ) );
+                last_ins = lane_insert_calls; last_combo = combo_len_calls;
+                last_jw = joint_walk_calls; last_park = park_calls; last_ntf = notify_calls;
+                last_ws = wheel_solver_calls;
+                last_ins_tsc = ins_tsc; last_ic = ins_canon_calls; last_ir = ins_ref_calls;
+                last_ws_tsc = ws_tsc; last_jw_tsc = jw_tsc;
+                last_ins_all = ins_all_tsc; last_str = steering_calls; last_str_tsc = steer_tsc;
+                last_hb = sim_heartbeat;
+                for ( uint32_t i = 0; i < HK_COUNT; ++i )
+                {
+                    last_hkc[ i ] = hk_stats[ i ].calls;
+                    last_hkt[ i ] = hk_stats[ i ].tsc;
+                }
+                for ( uint32_t i = 0; i < 8; ++i ) last_bins[ i ] = ins_type_bins[ i ].count;
             }
             for ( auto& a : acc ) a = 0;
             win_frames = 0;
@@ -660,6 +849,7 @@ namespace br_carretas
 
         CCore::g_instance->info( "Disconnecting trailer {}", i );
 
+        arm_lane_guard();
         if ( queue_op( pending_kind::disconnect, trailer, parent, parent_is_truck, 0 ) )
         {
             traffic_detach_done.store( false, std::memory_order_release );
@@ -1160,6 +1350,8 @@ namespace br_carretas
                     if ( trailers[ k ] == canon[ i ] ) { ti = static_cast< int >( k ); break; }
                 }
                 if ( ti >= 0 ) this->render_trailer_lift( static_cast< uint32_t >( ti ) );
+                ImGui::SeparatorText( "Suspensão" );
+                this->render_trailer_suspension( i );
                 ImGui::EndChild();
                 ImGui::PopID();
             }
@@ -1451,16 +1643,7 @@ namespace br_carretas
         std::lock_guard< std::recursive_mutex > claim_lk( claim_write_mutex );
         if ( canon_dead() ) reset_trailer_state();
 
-        if ( lane_prune_frames > 0 )
-        {
-            --lane_prune_frames;
-            prune_lane_containers();
-        }
-        else if ( ++lane_prune_idle >= 50 )
-        {
-            lane_prune_idle = 0;
-            prune_lane_containers();
-        }
+        orphan_teardown_tick();
 
         auto* game_actor = CCore::g_instance->get_game_actor();
         void* truck = game_actor != nullptr
@@ -1573,6 +1756,10 @@ namespace br_carretas
                     if ( t == nullptr || !plausible_object( t ) ) continue;
                     live[ ln ] = t;
                     jl[ ln ] = joint( t ) == nullptr;
+                    {
+                        const uint64_t e = prism::offsets::field< uint64_t >( t, 0xEE8 );
+                        if ( ( e & 0xFFFFFFFFull ) != 0 ) canon_ee8[ i ] = reinterpret_cast< void* >( e );
+                    }
 
                     bool live_to_truck = false;
                     uint32_t pd = 0;
@@ -1660,7 +1847,6 @@ namespace br_carretas
                 {
                     *reinterpret_cast< uint8_t* >( static_cast< char* >( live[ i ] ) + 0xE8D ) = 0;
                 }
-                prism::offsets::field< uint32_t >( live[ i ], 0xEE8 ) = 0;
                 if ( set_lines_fn == nullptr ) continue;
                 if ( !is_detached( live[ i ] ) && !is_plugin_detached( live[ i ] ) &&
                     live[ i ] != attach_target )
@@ -1734,6 +1920,7 @@ namespace br_carretas
                         CCore::g_instance->info( "hook break on c{} - hose teardown", i );
 
                         lane_prune_frames = 40;
+                        lane_kill_owner( live[ i ] );
 
                         [&]()
                         {

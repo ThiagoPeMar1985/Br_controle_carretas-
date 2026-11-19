@@ -55,6 +55,7 @@ namespace br_carretas
     extern combo_hook_pos_fn* combo_hook_pos_fn_ptr;
 
     extern void* canon[ max_trailers ];
+    extern void* canon_ee8[ max_trailers ];
     extern uint32_t canon_age;
     extern void* attach_target;
     extern bool lw_ctx_logged[ max_trailers ];
@@ -108,6 +109,9 @@ namespace br_carretas
     void sanitize_slave_walk( void* );
     void sanitize_phys_walk( void* );
     void prune_lane_containers();
+    int lane_kill_owner( void* );
+    int lane_dead_pending();
+    void lane_census( int&, int&, int& );
     void native_park_detached( void* );
     void dump_native_registry();
     void update_parked_locks();
@@ -131,6 +135,7 @@ namespace br_carretas
     void unhide_detached();
     void reset_trailer_state();
     void sever_parked_claims();
+    void orphan_teardown_tick();
     void sever_phys_claims();
     void restore_parked_claims();
     void rebuild_parked_claim_links();
@@ -143,6 +148,8 @@ namespace br_carretas
     void hk_attach_dispatch_raw( void*, uint8_t, uint64_t, uint64_t, uint64_t, const float* );
     void hk_trailer_disconnect( void* );
     uint8_t hk_lane_obstacle_insert( void*, void*, float );
+    void* hk_lane_obstacle_resolve( void* );
+    void* hk_lane_obstacle_scan( void*, uint32_t, float, float, float* );
     void hk_pre_detach( void*, void* );
     void hk_detach_dispatch( void*, uint8_t, uint64_t );
     void hk_detach_dispatch_raw( void*, uint8_t, uint64_t );

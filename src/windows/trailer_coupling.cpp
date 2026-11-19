@@ -238,6 +238,7 @@ namespace br_carretas
         CCore::g_instance->info( "fn173 disconnect_now trailer={:p} parent={:p} truck={} junta={:p}",
                                  trailer, parent, parent_is_truck ? 1 : 0, joint( trailer ) );
 
+        arm_lane_guard();
         if ( parent_is_truck && joint( trailer ) != nullptr && detach_dispatch_hook != nullptr )
         {
             CCore::g_instance->info( "disconnect {:p}: native detach via trailer-of-interest", trailer );
@@ -292,6 +293,7 @@ namespace br_carretas
 
         if ( notify_decoupled_fn != nullptr )
         {
+            ++notify_calls;
             if ( parent != nullptr ) notify_decoupled_fn( parent );
             if ( !section_behind ) notify_decoupled_fn( trailer );
         }
@@ -623,12 +625,13 @@ namespace br_carretas
     // 175 - hook por-frame do sim: consome a fila de operações
     void hk_crashes_when_disconnected( prism::physics_trailer_u* self, prism::game_trailer_actor_u* trailer )
     {
+        hk_timer hk_t{ HK_CRASH };
+        pump_sim_heartbeat();
         if ( !settings::g_settings.cargo_restore || load_game_active() )
         {
             crashes_when_disconnected_hook->get_original< prism::crashes_when_disconnected_fn >()( self, trailer );
             return;
         }
-        pump_sim_heartbeat();
 
         if ( pending_cmd_queued.load( std::memory_order_acquire ) && execute_line_fn != nullptr )
         {
@@ -649,28 +652,31 @@ namespace br_carretas
                 CCore::g_instance->info( "fn175 executa op kind={} trailer={:p} parent={:p}",
                                          static_cast< int >( op.kind ), op.trailer, op.parent );
 
-                __try
+                [&]()
                 {
-                    if ( op.kind == pending_kind::connect )
+                    __try
                     {
-                        connect_now( op.trailer, op.parent, op.parent_is_truck );
+                        if ( op.kind == pending_kind::connect )
+                        {
+                            connect_now( op.trailer, op.parent, op.parent_is_truck );
+                        }
+                        else if ( op.kind == pending_kind::restore )
+                        {
+                            restore_parked_if_enabled();
+                        }
+                        else
+                        {
+                            disconnect_now( op.trailer, op.parent, op.parent_is_truck );
+                        }
                     }
-                    else if ( op.kind == pending_kind::restore )
+                    __except ( EXCEPTION_EXECUTE_HANDLER )
                     {
-                        restore_parked_if_enabled();
+                        const bool canon_alive = !canon_dead();
+                        CCore::g_instance->warning( "pending op faulted (função 175) - canon {}",
+                                                    canon_alive ? "kept" : "reset" );
+                        if ( !canon_alive ) reset_trailer_state();
                     }
-                    else
-                    {
-                        disconnect_now( op.trailer, op.parent, op.parent_is_truck );
-                    }
-                }
-                __except ( EXCEPTION_EXECUTE_HANDLER )
-                {
-                    const bool canon_alive = !canon_dead();
-                    CCore::g_instance->warning( "pending op faulted (função 175) - canon {}",
-                                                canon_alive ? "kept" : "reset" );
-                    if ( !canon_alive ) reset_trailer_state();
-                }
+                }();
             }
         }
         if ( trailer != nullptr &&
@@ -704,6 +710,7 @@ namespace br_carretas
     // 177 - hook: auto-engate de slave (recusa claims falsos)
     void hk_connect_slave( prism::physics_trailer_u* self )
     {
+        hk_timer hk_t{ HK_CSLV };
         std::lock_guard< std::recursive_mutex > claim_lk( claim_write_mutex );
         if ( !settings::g_settings.cargo_restore || load_game_active() )
         {
@@ -747,6 +754,7 @@ namespace br_carretas
     // 178 - hook: caminhada de juntas (guarda anti-ciclo)
     float __fastcall hk_joint_walk( void* self, float arg )
     {
+        ++joint_walk_calls;
         if ( !settings::g_settings.cargo_restore || load_game_active() )
         {
             return joint_walk_hook->get_original< joint_walk_fn >()( self, arg );
@@ -771,7 +779,9 @@ namespace br_carretas
             return 0.f;
         }
         jw_seen[ jw_depth++ ] = self;
+        const uint64_t t0 = __rdtsc();
         const float r = joint_walk_hook->get_original< joint_walk_fn >()( self, arg );
+        jw_tsc += __rdtsc() - t0;
         --jw_depth;
         return r;
     }
@@ -882,6 +892,7 @@ namespace br_carretas
             return;
         }
         if ( trailer == nullptr || !is_trailer_obj( trailer ) ) return;
+        arm_lane_guard();
         CCore::g_instance->info( "fn182 vfunc99 trailer={:p} junta={:p}", trailer, joint( trailer ) );
 
         const auto repair_ctx = []( void* m ) { repair_lamp_ctx( m ); };
@@ -1175,6 +1186,7 @@ namespace br_carretas
             return;
         }
 
+        arm_lane_guard();
         __try { hk_detach_dispatch_raw( self, dl, r8 ); }
         __except ( EXCEPTION_EXECUTE_HANDLER )
         {
@@ -1577,17 +1589,6 @@ namespace br_carretas
             }
         }
 
-        if ( const auto addr = validated_va( 0x14094DFC0 ) )
-        {
-            lane_obstacle_insert_hook = CCore::g_instance->get_hooks_manager()->register_function_hook(
-                "lane_obstacle_insert", addr,
-                reinterpret_cast< uint64_t >( &hk_lane_obstacle_insert ) );
-            if ( lane_obstacle_insert_hook != nullptr )
-            {
-                lane_obstacle_insert_hook->hook();
-            }
-        }
-
         combo_hook_pos_fn_ptr = reinterpret_cast< combo_hook_pos_fn* >(
             validated_va( 0x140789880 ) );
         if ( const auto addr = validated_va( 0x140789AB0 ) )
@@ -1611,6 +1612,32 @@ namespace br_carretas
             {
                 purecall_hook->hook();
                 install_crash_tracer();
+            }
+        }
+
+        if ( const auto addr = validated_va( 0x14096AAB0 ) )
+        {
+            lane_obstacle_resolve_hook = CCore::g_instance->get_hooks_manager()->register_function_hook(
+                "lane_obstacle_resolve", addr,
+                reinterpret_cast< uint64_t >( &hk_lane_obstacle_resolve ) );
+            if ( lane_obstacle_resolve_hook != nullptr )
+            {
+                lane_obstacle_resolve_hook->hook();
+                CCore::g_instance->info( "lane_obstacle_resolve hook ativo em {:p}",
+                    reinterpret_cast< void* >( addr ) );
+            }
+        }
+
+        if ( const auto addr = validated_va( 0x1412B85A0 ) )
+        {
+            lane_obstacle_scan_hook = CCore::g_instance->get_hooks_manager()->register_function_hook(
+                "lane_obstacle_scan", addr,
+                reinterpret_cast< uint64_t >( &hk_lane_obstacle_scan ) );
+            if ( lane_obstacle_scan_hook != nullptr )
+            {
+                lane_obstacle_scan_hook->hook();
+                CCore::g_instance->info( "lane_obstacle_scan hook ativo em {:p}",
+                    reinterpret_cast< void* >( addr ) );
             }
         }
 
@@ -1754,8 +1781,8 @@ namespace br_carretas
             __try
             {
                 CCore::g_instance->info(
-                    "dtor IN c{} {:p} junta={:p} slave={:p} parent={:p} e60={:p} e68={:p}",
-                    dci, self,
+                    "dtor IN c{} {:p} flags={} junta={:p} slave={:p} parent={:p} e60={:p} e68={:p}",
+                    dci, self, flags,
                     joint( self ),
                     prism::offsets::field< void* >( self, prism::offsets::trailer_slave ),
                     prism::offsets::field< void* >( self, prism::offsets::trailer_parent ),
@@ -1813,12 +1840,18 @@ namespace br_carretas
                 if ( hi != 0 && hi < 0x1000000 && ( v & 0xFFFFFFFFull ) == 0 )
                 {
                     void* donor = nullptr;
-                    for ( uint32_t i = 0; i < max_trailers && canon[ i ] != nullptr; ++i )
+                    if ( dci >= 0 && readable_ptr( canon_ee8[ dci ] ) ) donor = canon_ee8[ dci ];
+                    for ( uint32_t i = 0; donor == nullptr && i < max_trailers && canon[ i ] != nullptr; ++i )
                     {
                         void* c = canon[ i ];
                         if ( c == self || !readable_ptr( c ) ) continue;
                         void* cand = *reinterpret_cast< void** >( static_cast< uint8_t* >( c ) + 0xEE8 );
                         if ( readable_ptr( cand ) ) { donor = cand; break; }
+                    }
+                    if ( donor == nullptr &&
+                         readable_ptr( prism::offsets::field< void* >( self, 0x60 ) ) )
+                    {
+                        donor = prism::offsets::field< void* >( self, 0x60 );
                     }
                     if ( donor != nullptr )
                     {
@@ -1852,6 +1885,85 @@ namespace br_carretas
         CCore::g_instance->info( "dtor c{}: teardown {}", dci,
                                  ret != nullptr ? "ok" : "falhou" );
         return ret;
+    }
+
+    // 273 - por tick: encerra carreta solta que o rebuild abandonou (elos, registros, obstáculos)
+    void orphan_teardown_tick()
+    {
+        if ( orphan_delay > 0 ) --orphan_delay;
+        else for ( uint32_t pi = 0; pi < max_trailers; ++pi )
+        {
+            auto& p = pending_orphans[ pi ];
+            void* t = p;
+            p = nullptr;
+            if ( t == nullptr ) continue;
+            const char* why = nullptr;
+            if ( !readable_ptr( t ) || !is_trailer_obj( t ) ) why = "morta";
+            else if ( canon_index_of( t ) >= 0 ) why = "retratada";
+            else if ( joint( t ) != nullptr ) why = "engatada";
+            else if ( is_detached( t ) || is_plugin_detached( t ) ) why = "re-marcada";
+            else
+            {
+                uint64_t s0 = 0, s1 = 0;
+                __try
+                {
+                    s0 = reinterpret_cast< uint64_t >( prism::offsets::field< void* >( t, 0xA0 ) );
+                    s1 = reinterpret_cast< uint64_t >( prism::offsets::field< void* >( t, 0x150 ) );
+                }
+                __except ( EXCEPTION_EXECUTE_HANDLER ) {}
+                if ( s0 != orphan_sig[ pi ][ 0 ] || s1 != orphan_sig[ pi ][ 1 ] ) why = "reciclada";
+                else
+                {
+                    __try { repair_node_lists( t ); } __except ( EXCEPTION_EXECUTE_HANDLER ) {}
+                    if ( !node_lists_sane( t ) ) why = "corrompida";
+                }
+            }
+            if ( why != nullptr )
+            {
+                CCore::g_instance->info( "orphan {:p} ignorada ({})", t, why );
+                continue;
+            }
+            for ( auto& q : pending_orphans )
+            {
+                void* o = q;
+                if ( o == nullptr || o == t || !readable_ptr( o ) || !is_trailer_obj( o ) ) continue;
+                if ( prism::offsets::field< void* >( o, prism::offsets::trailer_slave ) == t )
+                    prism::offsets::field< void* >( o, prism::offsets::trailer_slave ) = nullptr;
+                if ( prism::offsets::field< void* >( o, prism::offsets::trailer_parent ) == t )
+                    prism::offsets::field< void* >( o, prism::offsets::trailer_parent ) = nullptr;
+            }
+            prism::offsets::field< void* >( t, prism::offsets::trailer_slave ) = nullptr;
+            prism::offsets::field< void* >( t, prism::offsets::trailer_parent ) = nullptr;
+            int killed = 0, nent = 0;
+            __try
+            {
+                parked_record_unlist( t );
+                killed = lane_kill_owner( t );
+                lane_prune_frames = 40;
+                void* lbeg = *reinterpret_cast< void** >( static_cast< uint8_t* >( t ) + 0xE98 );
+                nent = static_cast< int >( *reinterpret_cast< uint64_t* >( static_cast< uint8_t* >( t ) + 0xEA0 ) );
+                if ( nent > 0 && nent <= 0x1000 && readable_ptr( lbeg ) && set_lines_fn != nullptr )
+                    set_lines_fn( t, 0, 1 );
+            }
+            __except ( EXCEPTION_EXECUTE_HANDLER ) {}
+            CCore::g_instance->info(
+                "orphan: carreta solta {:p} abandonada pelo rebuild - desmanchando, {} obstáculo(s) mortos, {} cabos",
+                t, killed, nent );
+            __try { hk_trailer_dtor( t, 0 ); }
+            __except ( EXCEPTION_EXECUTE_HANDLER ) {}
+        }
+        for ( uint32_t i = 0; i < max_trailers && canon[ i ] != nullptr; ++i )
+        {
+            void* t = canon[ i ];
+            if ( t == nullptr || !readable_ptr( t ) || joint( t ) == nullptr ) continue;
+            const int k = lane_kill_owner( t );
+            if ( k > 0 )
+            {
+                lane_prune_frames = 40;
+                CCore::g_instance->info(
+                    "orphan: {} obstáculo(s) de pista mortos na engatada c{}", k, i );
+            }
+        }
     }
 
     SCSAPI_VOID on_parking_brake( const scs_string_t, const scs_u32_t, const scs_value_t* const value, const scs_context_t )
@@ -1945,6 +2057,7 @@ namespace br_carretas
             fn_index_add( fn_addr_of( &hk_trailer_dtor ), 195, "hk_trailer_dtor" );
             fn_index_add( fn_addr_of( &coupling_register_channels ), 196, "coupling_register_channels" );
             fn_index_add( fn_addr_of( &coupling_install ), 197, "coupling_install" );
+            fn_index_add( fn_addr_of( &orphan_teardown_tick ), 273, "orphan_teardown_tick" );
             return true;
         }();
     }

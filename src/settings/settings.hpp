@@ -29,6 +29,9 @@ namespace br_carretas::settings
         // per-slot axle selection masks for the trailer-lift feature (-1 = native).
         // The N-th trailer in the chain always uses slot N.
         int32_t axle_masks[ trailer_slot_count ];
+        // per-slot trailer suspension height, 0-100 in steps of 5
+        // (50 = native height). The N-th trailer in the chain uses slot N.
+        int32_t suspension_height[ trailer_slot_count ];
         // truck axle selection mask for the truck-lift feature (-1 = native)
         int32_t truck_axle_mask = -1;
         // raise the first liftable axle while reverse gear is engaged
@@ -81,6 +84,10 @@ namespace br_carretas::settings
     enum class logcat { axles, steering, truck, coupling, teleport, cargo };
 
     extern Settings g_settings;
+
+    // diagnostic counters - how many ini saves / suspension writes happen
+    inline uint64_t save_calls = 0;
+    inline uint64_t susp_writes = 0;
 
     // Packed key value: low byte = VK code or joystick button index,
     // bits 8-10 = Ctrl/Shift/Alt modifiers, bit 24 = joystick flag with the

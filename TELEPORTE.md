@@ -226,3 +226,82 @@ Mover carreta separada = esperar `teleport_ready` +
 Depois do restore, pregar o corpo ~5s (`phys_pin` por frame) — o
 trabalho atrasado do jogo ativa a ilha aos ~2,7s e injeta impulso.
 Nunca escrever durante a reconstrução, nunca delegar ao jogo.
+
+## Obstáculos de pista — o crash do ciclo desatrelar/reatrelar (RESOLVIDO)
+
+Sintoma: desatrelar/reatrelar funcionava UMA vez por carreta. No segundo
+desatrelamento o jogo crashava ~50ms depois, sempre em
+`exe+0x12B9495` lendo `addr=0x10` — e o dump nativo afogava o log em
+AVs byte a byte.
+
+### A ferida
+
+Cada carreta desatrelada é registrada pelo jogo como obstáculo de pista.
+O obstáculo vive num **elemento** assim:
+
+- `elemento+0x80` = record `{vptr, +8 binding/obstacle, +0x10 pos}`
+- `elemento+0x88` = **dono** (o registro/objeto que criou o obstáculo)
+- `elemento+0x90` = posição na pista (float)
+
+O elemento fica linkado em **DUAS estruturas ao mesmo tempo**, dentro
+de cada nó de pista:
+
+- `nó+0x20` = array de ponteiros p/ elementos, `+0x28` = count
+  (varredura `0x1412B85A0` itera esse array)
+- `nó+0x18` = container ordenado `{+8 array, +0x10 count}` (as vfuncs
+  da vtable `0x142412E60` — comparador `0x12B9480`, `0x12B94D0`,
+  `0x12B9550` — andam nele via um resolvedor comum)
+
+Quando a carreta **reengata**, o jogo destrói o dono mas **deixa o
+elemento linkado nas duas estruturas apontando pra nada**. No próximo
+desatrelamento qualquer leitora faz `elemento+0x88 → dono+0x10` sem
+checar nulo → crash. Algumas leitoras ainda chamam vfunc no dono →
+dono-fantasma precisa de vtable válida.
+
+### A solução que funcionou
+
+Não remendar leitora por leitora — cobrir o **ponto único**:
+
+1. **Hook no resolvedor `0x14096AAB0`** (`hk_lane_obstacle_resolve`):
+   todas as vfuncs da estrutura ordenada passam por ele pra transformar
+   handle em elemento ANTES de ler o dono. Se `elemento+0x88` é nulo ou
+   o record tem vtbl fora do exe, o hook devolve um **elemento-fantasma
+   estático** (dono = `lane_dead_owner`, posição = 1.0e30 = "longe
+   demais pra ser escolhido"). Um guarda cobre TODAS as leitoras da
+   estrutura ordenada.
+2. **Hook na varredura `0x1412B85A0`** (`hk_lane_obstacle_scan`):
+   assinatura `(nó, flags, lo, hi, float* out)` — **5 args**, o 5º é
+   escrito pela função (`movss [rax],xmm7` em `0x12B8A36`); hook com 4
+   args = crash no load do mundo. Antes da original, remove do array
+   `nó+0x20/+0x28` todo elemento com dono morto (depois de apontar o
+   dono dele pro fantasma, pro caso dele estar linkado em outra
+   estrutura também).
+3. **Dono-fantasma com vtable**: `lane_dead_owner` é um buffer com
+   `vptr = purecall_fake_vtbl` (64 slots apontando pra
+   `purecall_null_vfunc`, que retorna 0). Elemento neutralizado
+   sobrevive a qualquer leitura — flags zeradas, vfuncs devolvem nulo,
+   leitoras pulam o elemento.
+4. **Poda real**: os hooks registram os containers/nós que tocam
+   (`lane_track_container`/`lane_track_node`); `prune_lane_containers`
+   roda durante `lane_prune_frames` (janela de 40-120 frames armada no
+   desengate/desparque) neutralizando elementos mortos;
+   `lane_kill_owner(t)` mata por dono quando uma carreta vira órfã.
+5. **Desparque cobre ficha velha**: o trigger do desparque inclui
+   `parked_rec`, não só os bytes `parked` — limpa ficha mesmo quando o
+   jogo já zerou os flags.
+
+Todo endereço hookado PRECISA estar em `va_sentinels` com assinatura de
+prólogo — `validated_va` retorna 0 pra endereço não cadastrado e o hook
+não instala (silencioso; conferir o log "hook ativo" na init).
+
+### Tentativas mortas — não repetir
+
+- Remover elemento morto do array `nó+0x20` e esquecer o container
+  ordenado `nó+0x18` → crash na árvore (elemento vive nas duas).
+- Dono-fantasma SEM vtable → próximo crash é `call [vptr+off]` no
+  fantasma.
+- Destruir/recriar a ficha de estacionado no engate/desengate → a ficha
+  já morre sozinha; o que mata são os ELEMENTOS órfãos nas listas.
+- Guarda numa leitora só → existem 3+ leitoras; só o ponto único do
+  resolvedor cobre todas.
+- Contar parâmetro errado no hook → a varredura tem 5 args.

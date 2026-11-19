@@ -7,6 +7,9 @@
 
 namespace br_carretas
 {
+    extern int respawn_pose_due;
+    extern uint64_t reload_pending_ms;
+    extern bool pose_pending[ max_trailers ];
 
     // 115 - chama o restore só se a opção "restaurar carga" estiver ligada
     void restore_parked_if_enabled()
@@ -139,6 +142,21 @@ namespace br_carretas
         workshop_respawn_update();
         garage_update();
 
+        bool dbg = in_cargo_window() || tp_block_watch > 0 || rig_armed ||
+            respawn_pose_due > 0 || reload_pending_ms != 0 || carry_brake_frames > 0;
+        for ( uint32_t i = 0; i < max_trailers && !dbg; ++i )
+            dbg = carry_hold[ i ] || carry_park[ i ] > 0 || watch_frames[ i ] > 0 ||
+                  pose_pending[ i ];
+        for ( auto& g : ghost_watch ) { if ( g.inner != nullptr ) { dbg = true; break; } }
+        if ( dbg )
+        {
+            CCore::g_instance->info(
+                "load: win={} frz={} age={} rsdu={} rlms={} tpbw={} cbf={} rig={} rd={} pk={}",
+                in_cargo_window(), cargo_freeze(), canon_age, respawn_pose_due,
+                reload_pending_ms, tp_block_watch, carry_brake_frames, rig_armed,
+                rig_restore_delay, static_cast< int >( pending.kind ) );
+        }
+
         const uint64_t now_ms = GetTickCount64();
         static void* last_inner[ max_trailers ] = {};
         static float last_inner_pos[ max_trailers ][ 4 ] = {};
@@ -233,6 +251,9 @@ namespace br_carretas
         {
             if ( carry_park[ i ] <= 0 || --carry_park[ i ] != 0 ) continue;
             void* t = canon[ i ];
+            if ( dbg )
+                CCore::g_instance->info( "load: carry_park c{} dispara (joint={} frz={})", i,
+                    t != nullptr && readable_ptr( t ) ? joint( t ) != nullptr : -1, cargo_freeze() );
             if ( !cargo_freeze() && t != nullptr && readable_ptr( t ) && joint( t ) == nullptr )
             {
                 carry_set_brace( t );
@@ -248,6 +269,7 @@ namespace br_carretas
             {
                 void* t = canon[ i ];
                 if ( !is_trailer_obj( t ) || trailer_is_live( t ) ) continue;
+                if ( dbg ) CCore::g_instance->info( "load: brake-força c{} (cbf resta {})", i, carry_brake_frames );
                 prism::offsets::field< float >( t, prism::offsets::trailer_brake ) = 1.f;
                 prism::offsets::field< float >( t, prism::offsets::trailer_service_brake ) = 0.f;
                 prism::offsets::field< uint8_t >( t, prism::offsets::trailer_brake_forced ) = 1;
@@ -266,6 +288,7 @@ namespace br_carretas
             {
                 void* t = canon[ i ];
                 if ( !carry_hold[ i ] || !readable_ptr( t ) || joint( t ) != nullptr ) continue;
+                if ( dbg ) CCore::g_instance->info( "load: carry c{} -> reteleporta pra pose estacionada", i );
                 bool seated = true;
                 if ( parked_xform_valid[ i ] && trailer_teleport_hook != nullptr )
                 {
@@ -316,13 +339,23 @@ namespace br_carretas
                 continue;
             }
             if ( watch_pin_valid[ i ] )
+            {
+                if ( dbg ) CCore::g_instance->info( "load: phys_pin c{} (watch resta {})", i, watch_frames[ i ] );
                 phys_pin( t, watch_pin[ i ] );
+            }
         }
         bool in_section = false;
         for ( uint32_t i = 0; i < max_trailers && canon[ i ] != nullptr; ++i )
         {
             void* t = canon[ i ];
             if ( !readable_ptr( t ) ) { detached_idx[ i ] = false; in_section = false; continue; }
+            if ( dbg )
+                CCore::g_instance->info(
+                    "load: sec c{} det={} pdet={} jnt={} own={} rej={} pkd={} rec={}",
+                    i, detached_idx[ i ], is_plugin_detached( t ), joint( t ) != nullptr,
+                    own_head[ i ], rejoined_frames[ i ],
+                    prism::offsets::field< uint8_t >( t, prism::offsets::trailer_parked ),
+                    prism::offsets::field< void* >( t, prism::offsets::trailer_parked_state ) != nullptr );
             if ( detached_idx[ i ] )
             {
                 if ( joint( t ) == nullptr )
@@ -342,6 +375,9 @@ namespace br_carretas
                     }
                     else if ( ++rejoined_frames[ i ] >= 30 && pending.kind == pending_kind::none )
                     {
+                        if ( dbg )
+                            CCore::g_instance->info( "load: c{} reengatou 30f - restore {}", i,
+                                sim_is_quiet() ? "agora" : "enfileirado" );
                         rejoined_frames[ i ] = 0;
                         if ( sim_is_quiet() )
                         {

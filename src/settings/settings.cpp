@@ -186,6 +186,7 @@ namespace br_carretas::settings
         for ( int i = 0; i < trailer_slot_count; ++i )
         {
             g_settings.axle_masks[ i ] = -1;
+            g_settings.suspension_height[ i ] = 50;
         }
         g_settings.truck_axle_mask = -1;
         g_settings.reverse_lift = true;
@@ -255,6 +256,15 @@ namespace br_carretas::settings
             g_settings.axle_masks[ i ] = GetPrivateProfileIntW(
                 L"axle_lift", key_name_w, -1, path.c_str() );
         }
+        for ( int i = 0; i < trailer_slot_count; ++i )
+        {
+            wchar_t key_name_w[ 32 ] = {};
+            swprintf_s( key_name_w, L"trailer_%d", i );
+            const int h = GetPrivateProfileIntW(
+                L"suspension", key_name_w, 50, path.c_str() );
+            g_settings.suspension_height[ i ] =
+                h >= 0 && h <= 100 ? ( h + 2 ) / 5 * 5 : 50;
+        }
         g_settings.truck_axle_mask = GetPrivateProfileIntW(
             L"axle_lift", L"truck", -1, path.c_str() );
         g_settings.reverse_lift = GetPrivateProfileIntW( L"axle_lift", L"reverse_lift", 1, path.c_str() ) != 0;
@@ -302,6 +312,7 @@ namespace br_carretas::settings
 
     void save()
     {
+        ++save_calls;
         const auto path = settings_path();
         if ( path.empty() ) return;
 
@@ -318,6 +329,13 @@ namespace br_carretas::settings
             swprintf_s( key_name_w, L"trailer_%d", i );
             WritePrivateProfileStringW( L"axle_lift", key_name_w,
                 std::to_wstring( g_settings.axle_masks[ i ] ).c_str(), path.c_str() );
+        }
+        for ( int i = 0; i < trailer_slot_count; ++i )
+        {
+            wchar_t key_name_w[ 32 ] = {};
+            swprintf_s( key_name_w, L"trailer_%d", i );
+            WritePrivateProfileStringW( L"suspension", key_name_w,
+                std::to_wstring( g_settings.suspension_height[ i ] ).c_str(), path.c_str() );
         }
         WritePrivateProfileStringW( L"axle_lift", L"truck",
             std::to_wstring( g_settings.truck_axle_mask ).c_str(), path.c_str() );

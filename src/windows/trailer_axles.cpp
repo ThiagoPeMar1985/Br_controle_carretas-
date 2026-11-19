@@ -219,6 +219,58 @@ namespace br_carretas
         }
     }
 
+    std::atomic< uint32_t > suspension_dirty{ 0 };
+
+    // 274 - régua de altura da suspensão de uma carreta (0-100, de 5 em 5);
+    // nada é escrito até o botão Salvar ser clicado
+    void CTrailerManipulation::render_trailer_suspension( const uint32_t i ) const
+    {
+        auto& stored = settings::g_settings.suspension_height[ i ];
+        int height = stored;
+        ImGui::SetNextItemWidth( -1.f );
+        if ( ImGui::SliderInt( "##susp", &height, 0, 100,
+            height == 50 ? "50 (normal)" : "%d" ) )
+        {
+            stored = ( height + 2 ) / 5 * 5;
+        }
+        if ( ImGui::Button( "Salvar altura", ImVec2( -1.f, 0.f ) ) )
+        {
+            settings::save();
+            suspension_dirty.fetch_or( 1u << i, std::memory_order_release );
+        }
+    }
+
+    // 275 - escreve a altura da suspensão só quando o usuário moveu a
+    // régua; sem mexer nela, nada é escrito na carreta
+    void suspension_update()
+    {
+        for ( uint32_t i = 0; i < max_trailers; ++i )
+        {
+            const uint32_t bit = 1u << i;
+            if ( ( suspension_dirty.load( std::memory_order_relaxed ) & bit ) == 0 ) continue;
+            void* const t = canon[ i ];
+            if ( t == nullptr || !is_trailer_obj( t ) ) continue;
+            __try
+            {
+                auto& f = prism::offsets::field< float >( t, prism::offsets::trailer_suspension_height );
+                const float want = static_cast< float >( settings::g_settings.suspension_height[ i ] ) / 50.f;
+                if ( f < 0.3f || f > 2.3f || std::fabs( f - want ) < 0.005f )
+                {
+                    suspension_dirty.fetch_and( ~bit, std::memory_order_release );
+                    continue;
+                }
+                CCore::g_instance->info( "susp write c{} {:p}: {:.2f} -> {:.2f}", i, t, f, want );
+                f = want;
+            }
+            __except ( EXCEPTION_EXECUTE_HANDLER )
+            {
+                continue;
+            }
+            ++settings::susp_writes;
+            suspension_dirty.fetch_and( ~bit, std::memory_order_release );
+        }
+    }
+
     // 221 - UI de eixos do cavalo
     void CTrailerManipulation::render_truck_lift() const
     {
@@ -650,6 +702,7 @@ namespace br_carretas
             fn_index_add( fn_addr_of( &release_all_axles ), 219, "release_all_axles" );
             fn_index_add( fn_addr_of( &lift_register_channels ), 222, "lift_register_channels" );
             fn_index_add( fn_addr_of( &lift_axles_update ), 223, "lift_axles_update" );
+            fn_index_add( fn_addr_of( &suspension_update ), 275, "suspension_update" );
             return true;
         }();
     }
