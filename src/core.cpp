@@ -24,6 +24,7 @@ namespace br_carretas
 {
     void diag_log( const std::string& msg )
     {
+        if ( !settings::g_settings.debug_logs ) return;
         static FILE* f = nullptr;
         static std::string path;
         static uint32_t calls = 0;

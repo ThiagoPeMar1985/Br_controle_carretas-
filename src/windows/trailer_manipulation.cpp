@@ -548,7 +548,7 @@ namespace br_carretas
         };
 
         // despejo unico de memoria dos veiculos (leitura pura, arquivo proprio)
-        if ( canon[ 0 ] != nullptr ) memdump_world();
+        if ( canon[ 0 ] != nullptr && settings::g_settings.debug_logs ) memdump_world();
 
         static uint64_t idle_sig = ~0ull;
         static uint32_t active = 0;

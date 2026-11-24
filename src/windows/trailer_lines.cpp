@@ -30,7 +30,7 @@ namespace br_carretas
     void play_brace_sound( void* trailer, const bool up )
     {
         if ( !expected_build() ) return;
-        const auto sound_vtbl = validated_va( 0x142220EE60 );
+        const uint64_t sound_vtbl = 0;
         void* audio = readable_ptr( trailer ) ? prism::offsets::field< void* >( trailer, 0x12A8 ) : nullptr;
         if ( !readable_ptr( audio ) || !readable_ptr( reinterpret_cast< uint8_t* >( audio ) + 0x60 ) )
         {
