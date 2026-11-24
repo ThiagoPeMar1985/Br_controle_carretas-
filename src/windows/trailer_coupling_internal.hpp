@@ -1,6 +1,7 @@
 #pragma once
 
 #include "trailer_shared.hpp"
+#include "trailer_connections.hpp"
 
 namespace br_carretas
 {
@@ -109,11 +110,15 @@ namespace br_carretas
     void sanitize_slave_walk( void* );
     void sanitize_phys_walk( void* );
     void prune_lane_containers();
+    void lane_sanitize_node( void* );
+    void lane_tracking_reset();
     int lane_kill_owner( void* );
+    void lane_dump_refs( void* );
     int lane_dead_pending();
     void lane_census( int&, int&, int& );
     void native_park_detached( void* );
     void dump_native_registry();
+    void memdump_world();
     void update_parked_locks();
     void unpark_jointed( const bool* in_convoy );
     void update_convoy_brakes( void* truck, const bool* in_convoy );
@@ -128,7 +133,7 @@ namespace br_carretas
     float3_t quat_rot( const quat_t&, const float3_t& );
     float3_t attach_offset( void*, bool );
     bool native_attach_via_slot( void* );
-    bool native_detach_via_slot( void* );
+    void trailer_manual_detach( void*, void*, bool );
     void connect_now( void*, void*, bool );
     void disconnect_now( void*, void*, bool );
     void play_brace_sound( void*, bool );
@@ -139,9 +144,17 @@ namespace br_carretas
     void sever_phys_claims();
     void restore_parked_claims();
     void rebuild_parked_claim_links();
+    void conn_observe();
+    void conn_commit();
+    void conn_mark_parked( void*, void* );
+    void conn_reset();
     void hk_connect_slave( prism::physics_trailer_u* );
     float hk_joint_walk( void*, float );
     void hk_phys_link( void*, void* );
+    void dump_phys_chain( void*, const char* );
+    void unlink_phys_node( void* );
+    void dump_real_chain( const char* );
+    void repair_phys_chain( const char* );
     void hk_trailer_connect_a( void*, void*, float3_t, int, bool, bool );
     void hk_trailer_connect_b( void*, void*, float3_t, int, bool, bool );
     void hk_attach_dispatch( void*, uint8_t, uint64_t, uint64_t, uint64_t, const float* );
@@ -150,6 +163,8 @@ namespace br_carretas
     uint8_t hk_lane_obstacle_insert( void*, void*, float );
     void* hk_lane_obstacle_resolve( void* );
     void* hk_lane_obstacle_scan( void*, uint32_t, float, float, float* );
+    void* hk_lane_obstacle_query( void*, uint32_t, float, float, float* );
+    uint8_t hk_lane_obstacle_sort( void*, void*, float );
     void hk_pre_detach( void*, void* );
     void hk_detach_dispatch( void*, uint8_t, uint64_t );
     void hk_detach_dispatch_raw( void*, uint8_t, uint64_t );

@@ -353,3 +353,1131 @@ reescrever elo velho/morto na corrente.
 
 Correção 2: `hk_trailer_teleport` no caminho desligado/loading agora
 chama o original direto — sem hide/restore, sem gate.
+
+## 11. Tabela de conexões nomeadas (A0..A19, B..T) — implementada
+
+`trailer_connections.hpp` guarda um `conn_record` persistente por
+conexão: `left` (cavalo na série A; carreta da frente na série B+),
+`right` (carreta de trás) e `st` ∈ {off, parked, linked}.
+
+- `linked` = junta física real (`joint` vivo + `parent == left`).
+- `parked` = claim do plugin (elo slave sem junta, peça visível).
+- `off` = sem relação.
+
+`conn_observe` (fn277) lê junta/pai de cada canon e grava o físico;
+`conn_commit` (fn278) reescreve a corrente a partir da tabela —
+`rebuild_parked_claim_links` (fn101) virou observe + commit, mesmas
+escritas de antes. sever/restore e o visibility pin sincronizam a
+tabela (`conn_mark_parked`, fn279); `reset_trailer_state` zera
+(`conn_reset`, fn280).
+
+Rotação da cabeça: a A linkada decide a "T0" visível — A1 ativa põe
+T1 como `game_actor_trailer`/`truck+0x1580` e as conexões adjacentes
+formam a corrente física; a ex-T0 fica parked atrás.
+
+## 12. EM CORREÇÃO — estouro de pilha no engate A2 (ciclo na cadeia +0x68)
+
+Ocorrência 23:34:34, fatal (jogo fechou). Sequência do usuário:
+
+1. desatrelou T2; desatrelou T0 do cavalo — T0+T1 ficaram engatadas
+   entre si como par estacionado;
+2. atrelou o cavalo direto em T2 (conexão A2) via
+   `native_attach_via_slot` (fn172) — a junta `0x27fe92f44a0` foi
+   criada com sucesso;
+3. ~90ms depois: AV `0xC00000FD` (stack overflow) em `exe+0x124876D`,
+   `addr=0xb8c2893fd8` (página de guarda da pilha).
+
+### A função que explodiu (disasm confirmado)
+
+`exe+0x1248750`: função AUTO-RECURSIVA — lê `[rcx+0x68]` como próximo
+elo, chama a si mesma (`call 0x141248750` em `+0x76D`, retorno
+`+0x772`), soma `[rbx+0x74]` por elo e `[rbx+0x5c]` no elo final.
+Pilha do AV cheia de `exe+0x1248772` = a recursão nunca terminava =
+**ciclo na cadeia `+0x68`**.
+
+`+0x60`/`+0x68` são as arestas físicas das carretas (as mesmas que
+`sever_phys_claims`, fn184, e `sanitize_phys_walk`, fn181, tratam —
+a checagem de ciclo do `phys_link` hook também sobe por `+0x60`).
+
+### O furo confirmado no código
+
+Toda chamada nativa de engate protege as DUAS cadeias antes do jogo
+andar nelas — `run_native_connect` (fn186) e `hk_detach_dispatch_raw`
+(fn191) chamam `sever_parked_claims()` **e** `sever_phys_claims()`.
+
+`native_attach_via_slot` (fn172) — o caminho "atrelar direto numa
+carreta específica" usado no A2 — chama **só** `sever_parked_claims()`:
+os elos físicos `+0x60/+0x68` velhos do par T0+T1 e da T2 solta ficaram
+pendurados; quando o jogo inseriu T2 na árvore física o ciclo fechou.
+`native_detach_via_slot` (fn171) tem o mesmo furo — só saneia a cadeia
+slave, nunca corta aresta física. E nenhum dos dois caminhos por-slot
+tem `__try` — a falha subiu direto e derrubou o jogo.
+
+Falta provado por diff de caminhos: fn186/fn191 fazem as duas
+limpezas; fn172/fn171 não.
+
+### Hipótese da formação do ciclo (não provada)
+
+Elos `+0x68` velhos sobrevivendo à reorganização (T0+T1 engatadas
+entre si, T2 solta) — ao inserir T2 na árvore do cavalo, um elo
+apontava de volta pra nó já dentro da árvore. `sever_phys_claims`
+hoje corta elo pra si mesmo e elo pra carreta sem junta — um ciclo
+entre carretas ENGATADAS passaria batido mesmo com a limpeza.
+
+### Caminho de reparo (aplicado)
+
+1. `native_attach_via_slot`/`native_detach_via_slot` agora chamam
+   `sever_phys_claims()` antes do nativo, igual fn186/fn191, e a
+   chamada roda em lambda `__try`/`__except` com `_resetstkoflw()`
+   (mesmo padrão do `run_native_connect`) — falha vira aviso, não
+   crash.
+2. `sever_phys_claims` agora percorre cada direção da cadeia
+   `+0x60`/`+0x68` com conjunto de visitados (até 96 nós): o elo
+   que aponta pra nó já visto fecha um laço e é cortado com aviso
+   no log — nenhum ciclo chega ao andador recursivo do jogo,
+   engatada ou não.
+
+### Recorrência 23:55:23 — ciclo criado DENTRO do engate nativo
+
+Segunda morte, mesmo padrão: processo morreu instantâneo, sem dump
+(overflow de pilha mata antes do tratador rodar). A linha do tempo
+no log do plugin prova o mecanismo:
+
+- 23:54:33 — engate A1 (cavalo→T1) via `native_attach_via_slot`, já
+  com o sever físico pré-chamada ativo. ~30ms depois o hook
+  `hk_joint_walk` logou `cyclic node 0x16bcad159c0 - skipped
+  subtree`: **a junta nativa criou um nó em ciclo na árvore física
+  por dentro da própria chamada** — depois da nossa limpeza.
+- O ciclo sobreviveu ~50s protegido só pelo guard do `joint_walk`.
+- 23:55:23 — tecla T1→T2 (`connect_now` → vfunc_connect): a junta
+  `0x16f9b95a990` foi criada certa (dump post-connect íntegro) e o
+  processo morreu logo depois — um andador recursivo nativo sem
+  guarda (família `exe+0x1248750`, acumulador da cadeia `+0x68`)
+  rodou por conta própria sobre o ciclo.
+- Sintomas correlatos reportados: T2 travada por "junta física"
+  fantasma (não aceitava dolly — a T2 estava presa na árvore
+  corrompida) e um cabo extra aparecendo no cavalo (mesma
+  corrupção de elos).
+
+Conclusão: cortar elos velhos ANTES da chamada não basta — o laço
+nasce dentro do código do jogo. Correção 2 aplicada:
+
+3. `sever_phys_claims()` também DEPOIS de cada chamada nativa de
+   cadeia (fn171, fn172, fn186/run_native_connect, fn191) — o laço
+   que o jogo acabou de criar é cortado na saída.
+4. `sever_phys_claims()` agora roda na manutenção contínua
+   (`rebuild_parked_claim_links`, fn101) — qualquer ciclo de outra
+   fonte morre no próximo tick (~100ms), não vive 50s.
+
+### Recorrência 00:12:43 — rodovia, mesmo estouro
+
+Terceira morte, mesma assinatura `0xC00000FD` em `exe+0x124876D`,
+~20ms após engate A2 (cavalo→T2) na rodovia. Na empresa funciona —
+na rua as carretas soltas ficam com física integral (na doca o jogo
+as registra como estacionadas e simplifica a física), então a
+corrente física corrupta só é percorrida na rua.
+
+Achados decisivos nesta sessão:
+
+- Os nós da corrente fatal vivem numa arena própria (`0x2be09...`)
+  — NÃO são objetos de carreta. Os dtor-dumps mostram `e60` da
+  carreta apontando pra essa arena (raiz da cadeia de nós).
+- O acumulador `exe+0x1248750` segue `nó+0x68` — é chamado de 50+
+  pontos do exe; proteger chamador a chamador é inviável.
+
+### Recorrência 00:23:30 — startup, AV em outra função
+
+Com a build que substituía o acumulador por versão iterativa
+(`hk_phys_sum`), o jogo morreu na carga: `0xC0000005` em
+`exe+0x12E8852` (`movss [rdx+8]` com rdx=0 — ponteiro de saída
+nulo), segundos depois do `attach dispatch` da carga do mundo. A
+abordagem de substituir a folha recursiva foi rejeitada/revertida.
+
+### Correção 3 — controle no ponto de nascimento do elo (vigente)
+
+Disasm do `phys_link` (`0x1412BE360`, já hookeado como fn179)
+revelou a estrutura exata — é o ÚNICO criador de elos `+0x68`:
+
+    phys_link(parent, child):
+      child->+0x60  = parent        elo de subida
+      parent->+0x68 = child         elo de descida (o que o
+                                    acumulador percorre)
+      parent->+0x74 = distância     o float da soma
+      parent->+0x210 = child
+    phys_link(parent, null):        desfaz — limpa +0x68/+0x74 do
+                                    pai e +0x60 do filho velho
+
+O defeito nativo: em reparent (carreta muda de pai sem unlink),
+a função sobrescreve `child->+0x60` mas NÃO limpa `+0x68` do pai
+antigo — a carreta fica em duas correntes ao mesmo tempo e, quando
+elas se cruzam, o laço fecha. `hk_phys_link` (fn179) agora, antes
+de deixar o link nativo rodar:
+
+5. Se `child->+0x60` aponta pra pai velho cujo `+0x68` ainda é o
+   filho → corta o elo velho (`+0x68=null`, `+0x74=0`) — reparent
+   limpo, filho numa corrente só.
+6. Percorre a corrente `+0x68` do filho com conjunto de visitados
+   (até 96): elo que aponta pro pai novo, pra nó já visto ou pra
+   endereço morto → cortado com aviso no log
+   (`phys link: stale/bad/cyclic edge cut`).
+
+O elo cíclico não nasce mais — sem hook novo, sem tocar no
+andador recursivo, sem varredura contínua de nós.
+
+### Recorrência 00:35:43 — laço criado fora do portão do link
+
+Quarta morte, mesma assinatura. A linha do tempo prova que o
+guarda do `phys_link` funcionou (cortou dois elos velhos de
+reparent reais, nos engates da T2 e da T1) MAS o laço nasceu por
+outro caminho — o `joint_walk` viu o nó cíclico `0x1bed2bec090`
+50ms depois do engate T2 e ele ficou vivo 54 segundos (o guarda
+só pulava o galho), até o acumulador recursivo matar no engate
+T1→T2. Provável criador: o remendo de corrente do "desengate
+nativo pendente" (fn191 adia o unlink real pra uma fila — reescreve
+`+0x68` fora das nossas janelas de limpeza).
+
+Correção 4 aplicada:
+
+7. `hk_joint_walk` (fn178) — ao detectar o nó na própria trilha,
+   segue a corrente `+0x68` do nó com conjunto de visitados e
+   corta a aresta que fecha o laço (`joint walk: cyclic chain
+   edge cut`). O ciclo morre no mesmo frame em que é detectado
+   (~1ms) em vez de viver ~50s até o acumulador tropeçar nele —
+   não importa qual escritor criou o elo podre.
+
+### Recorrência 00:57:09 — crash imediato após o corte pré-chamada
+
+Quinta morte. Padrão novo e suspeito: os últimos três crashes
+(00:44:10, 00:35:43, 00:57:09) morreram 15-120ms DEPOIS do
+`stale parent edge cut` disparar. Hipótese: cortar o elo velho
+do pai antigo ANTES da chamada nativa muda o estado que o remendo
+interno do jogo espera — ele pode religar o rabo da corrente no
+lugar errado e FECHAR o laço que a correção tentava evitar.
+
+Correção 5 aplicada:
+
+8. O corte de elo velho de reparent foi movido pra DEPOIS da
+   chamada nativa no `hk_phys_link` — o jogo faz o remendo dele
+   primeiro; se `old_up->+0x68` continuar apontando pro filho já
+   reparentado (`child->+0x60 == parent`), aí sim corta (resto
+   podre de verdade). Se o jogo resolveu sozinho, nada é escrito.
+   Os cortes pré-chamada que restam são só os de ciclo
+   comprovado (dup, back-edge pro pai, endereço morto) — esses
+   precisam morrer antes ou o elo ruim nasce.
+9. Diagnóstico novo no tracer (fn235): quando o crash é no
+   acumulador `exe+0x12487xx`, despeja a corrente `+0x68` real
+   dos nós nos registradores (`phys chain A->B B->C C->A LOOP`)
+   — só leitura, mostra o desenho exato do laço.
+
+Sessão 10:04 — crash no engate T1→cavalo (não era T2: o defeito
+é genérico em qualquer posição). O dump pré-engate provou que
+`trailer+0x60/+0x68` são campos compartilhados (idênticos nas 3
+carretas, +0x68 aponta pra dentro do exe) — NÃO é a corrente
+física. O `sever_phys_claims` vigiava a estrutura errada.
+
+Disasm do `phys_link` (0x1412be360) revelou a semântica real:
+`child->+0x60 = parent; parent->+0x68 = child` — sobrescreve
+meio-elos e NUNCA limpa os viúvos (pai antigo do filho, filho
+deslocado do pai, rabo do filho). Na rua a varredura do jogo
+fica pendente, os viúvos sobrevivem, e o reengate de qualquer
+carreta sob seu antigo "dono viúvo" fecha ciclo 2-nós
+(ex.: viúvo T1→T2 + link T2→T1 = laço). Genérico — toda
+posição da lista.
+
+Correção 6 aplicada:
+
+10. `hk_phys_link` agora faz reconciliação de reciprocidade
+    pós-chamada nos 4 nós tocados (parent, child, pai antigo do
+    filho, filho deslocado do pai): se A.dn=B mas B.up≠A, o elo
+    é viúvo comprovado → corta dn e zera +0x74; se A.up=B mas
+    B.dn≠A → corta up. Elo viúvo morre no instante em que nasce,
+    em qualquer posição. Elos recíprocos (rabo legítimo) são
+    preservados — a lista é atualizada, não destruída.
+
+Sessão 10:28 — tráfego DESLIGADO: engate T1→cavalo SOBREVIVEU
+(reconciliação cortou 2 elos viúvos reais). Depois engate T1→T2
+completou e o jogo morreu com ASSINATURA NOVA: ACCESS_VIOLATION
+lendo ponteiro rasgado 0x20900000000 num container refcounted,
+na pilha do teardown adiado (exe+0x4DFA05 ~ desengate nativo
+pendente) — não mais estouro de pilha.
+
+Causa raiz encontrada no dump post-connect: c0.slave = c2
+(claim parked velho) ENQUANTO c2.parent = c1 (link real T1→T2).
+A T2 ficou em DUAS listas slave — o teardown adiado processou
+ela duas vezes com pais diferentes → ponteiro rasgado. O claim
+velho só seria limpo na manutenção do frame seguinte — tarde.
+
+Correção 7 aplicada:
+
+11. `drop_stale_claims` (fn236): varre o canon e mata todo
+    slave-edge cujo alvo ganhou junta e tem parent diferente —
+    claim órfão de trailer que virou membro real de outra
+    corrente morre NA HORA (marca conexão off na tabela).
+    Chamada no fim de todo engate (antes do teardown adiado
+    poder rodar) e dentro da manutenção por-frame, entre
+    observe e commit.
+
+Sessão 11:07 — crash idêntico ao anterior (mesmo AV, sem dump
+novo — crash.txt ficou velho em 00:23). Morte ~20ms após os
+cortes manuais de elo viúvo → a suspeita endureceu: anular
+campos na mão briga com o remendo adiado do jogo.
+
+Correção 8 aplicada:
+
+12. `hk_phys_link` não escreve mais nulo nos elos. Antes do
+    link nativo, chama o PRÓPRIO `phys_link(nó, nullptr)` —
+    a forma de deslink do jogo (trunca pai.dn, zera filho.up
+    e a distância, com o bookkeeping interno de +0x88/+0x210):
+    (a) no pai antigo do filho, se ele ainda aponta pro filho
+    — splice-out nativo da posição velha; (b) no pai novo, se
+    seu slot dn está ocupado por outro nó — libera o slot. O
+    link nasce sobre terreno limpo usando o vocabulário do
+    próprio jogo, sem escrita manual.
+
+Sessão 11:17 — T1 atrelou e desatrelou limpo (34s). T2 morreu
+logo após o deslink nativo — morte instantânea, sem dump.
+
+Causa encontrada no disasm: o próprio phys_link chama o
+somador recursivo 0x141248750 (anda +0x68) quando o elo novo
+fica não-nulo. O jogo recria elos velhos no meio do engate
+(visto na T1: elo desfeito foi religado e o joint_walk
+capturou). Na T2 o círculo existia no instante do link →
+somador estourou a pilha dentro do phys_link, antes de
+qualquer guarda.
+
+Correção 9 aplicada:
+
+13. `hk_chain_accum` hooka o somador 0x141248750 e substitui
+    a recursão por iteração com detecção de ciclo — mesmo
+    resultado em corrente sã; elo em círculo devolve soma
+    parcial em vez de estourar a pilha. Genérico para todas
+    as posições.
+
+Sessão 11:24 — PROVA DEFINITIVA via WER/minidump:
+
+- Windows Error Reporting: falha em br_controle_de_carretas.dll
+  +0x41DC3, código 0xc0000005 — escrita de pilha no prólogo de
+  função com frame de 0xbe0 bytes = pilha esgotada.
+- Minidump (CrashDumps/eurotrucks2.exe.4436.dmp): o retorno
+  exe+0x1248772 aparece 21.427 vezes na pilha = o somador
+  recursivo 0x141248750 recursou ~21 mil níveis num ciclo
+  +0x68. Nossa função foi chamada no fundo da pilha e morreu
+  ao escrever o próprio frame.
+- O somador tem 49 call sites no exe — qualquer um pega a
+  corrente cíclica transitória do engate = morte instantânea.
+- CAUSA RAIZ da não-correção anterior: o hook do somador nunca
+  instalou porque 0x141248750 não estava na tabela de
+  sentinelas — validated_va devolveu 0 em silêncio.
+
+Correção 10 aplicada:
+
+14. Sentinela 272 para 0x141248750 + `hk_chain_accum` (237):
+    iteração substitui a recursão; elo que fecha círculo é
+    cortado (dn=null, +0x74=0 — mesmo estado do unlink nativo)
+    e devolve a soma parcial. Cobre os 49 call sites de uma
+    vez — ciclo transitório deixa de ser fatal.
+
+Sessão 11:43 — crash pegado pelo nosso handler (2x, mesmo
+endereço): AV em exe+0x12E8852 `movss [rdx+8]` com rdx nulo.
+
+PROVA no disasm: a função 0x1412E8740 escreve [rdx] no início
+com sucesso (rdx chegou válido), depois chama o somador
+0x141248750 e usa rdx na volta. O somador nativo é asm que só
+toca rcx/xmm0 — o jogo conta com rdx preservado. Nosso detour
+em C++ suja rdx (e demais voláteis) → crash nosso, não do
+jogo.
+
+Correção 11 aplicada:
+
+15. `hk_chain_accum` agora entra via trampoline asm emitido
+    em página executável: salva rax/rdx/r8-r11 + xmm1-5,
+    chama a lógica C++, restaura tudo. Contrato de
+    registradores idêntico ao somador nativo — nada além de
+    rcx e xmm0 muda para o chamador.
+
+Sessão 11:52 — a sequência completa de ~8 operações sobreviveu
+(o somador iterativo funcionou: a corrente transitória deixou
+de ser fatal). O crash migrou para a LISTA DE OBSTÁCULOS DE
+PISTA — a "lista do tráfego" que o usuário suspeitava: o
+reordenador 0x1412B7A20 iterou os elementos e leu [owner+0x10]
+de um elemento cujo dono era ponteiro selvagem (WER:
+exe+0x12B7B13).
+
+Correção 12 aplicada:
+
+16. `lane_element_dead`: sonda `owner+0x10` dentro do __try
+    existente — dono selvagem/não-mapeado marca o elemento
+    como morto. Custo zero (uma leitura de memória, sem
+    syscall). Todas as podas passam a remover esse elemento.
+17. `hk_lane_obstacle_sort` (281) hooka o reordenador
+    0x1412B7A20 — chamada original dentro de __try; falha
+    devolve 0 ("sem obstáculo", contrato testado pelos 16
+    call sites) e arma a janela de poda. Cobre a janela entre
+    o elemento morrer e a próxima poda.
+
+Sessão 12:21 — tráfego ZERO: sucesso total
+~24 operações (7 engates, 17 desengates) em ~3,5min, ordens
+variadas em todas as posições. Proteções dispararam e
+seguraram: `chain accum: cyclic edge cut` cortou círculo real
+(exatamente o que matava instantâneo), `stale parent edge cut`
+cortou viúvos. Fim = scs_telemetry_shutdown (fechamento
+normal, sem dump). O que segurou: reconciliação de
+reciprocidade (correção 6) + somador iterativo com corte de
+ciclo (10/11) + drop_stale_claims (7) + poda de pista (12).
+
+Sessão 13:33 — tráfego LIGADO: crash no engate T2→cavalo
+Sintomas em ordem: desengates OK; engate T1 com tráfego =
+queda de FPS (health 13:33:09: fps=19.6, worst=109ms,
+lane el=111 own=25); desengate T1 = caiu mais; engate
+T2→cavalo = morte. Linha do tempo do engate fatal:
+junta criada -> stale edge cut -> `chain accum: cyclic
+edge cut` -> 4ms depois AV em exe+0x12B8B64 (`mov ecx,
+[rax+0x10]` — comparador da lista de pista com owner nulo,
+mesma família do 0x12B7B13 mas OUTRO leitor, não coberto
+pela poda) -> o handler continuou execução -> flood de AVs
+byte-a-byte em DLL externa (scanner 0x7FF950002A96 lendo
+buffer de descritor exe+0x222BBF0 além do fim) -> morte
+real em exe+0x11E0D8 (container refcounted,
+rcx=0x20900000000 — MESMO valor selvagem do crash de T1→T2)
+na pilha do teardown adiado.
+Leituras: a poda de pista funciona mas cobre só o scan e o
+reordenador — com tráfego ligado a lista tem 111 elementos e
+OUTROS leitores (o comparador 0x12B8B64) tocam elementos
+mortos fora das janelas de poda. A queda de FPS antes do
+crash sugere a lista já crescida/corrompida antes do engate
+fatal.
+
+Correção 13 aplicada — fechamento da família de pista:
+
+Mapeamento completo: a lista de obstáculos tem exatamente 4
+pontos de entrada (insert 0x12B7DD0, sorter 0x12B7A20, scan
+0x12B85A0, comparador 0x12B8AC0). Os 3 primeiros já tinham
+guarda. O comparador era o buraco: chamado só pela consulta
+"obstáculo mais próximo" da IA (fn 0x12D5FC0, call site
+0x12D6005) — roda por veículo de tráfego por tick, por isso
+só mata com tráfego ligado.
+
+18. `hk_lane_obstacle_nearest` (282) + sentinela 274 hooka o
+    comparador: original dentro de __try; falha devolve 0
+    ("sem obstáculo" — o chamador testa rax e tem caminho de
+    fallback legítimo) e arma a janela de poda. Assinatura
+    completa de 6 args (rcx ctx, edx flags, xmm2/3 floats,
+    stack arg5 ptr, arg6 byte — o callee lê [rbp+0x88]).
+    Cobertura da lista de pista agora é total.
+
+Sessão 14:02 — tráfego LIGADO: conjunto completo montou sem
+crash nos engates (todas as posições). Dois problemas novos:
+
+A. FPS caiu 58→8 progressivamente. Health: lane el 0→106
+   monotônico, jw 181→984/s, custo por chamada de
+   update/render 0,3→22ms. O jogo processa a lista inchada
+   por frame por veículo — trabalho cresce com a lista.
+
+B. Após o conjunto completar, `lane_guard_on` desarmou
+   (any_loose=false + dead_pending=0). 14s depois um dono
+   de elemento morreu e o borbulhador 0x12B7E3B (5º leitor,
+   chamado pelo mesmo vfunc 0x1315130 do insert — não
+   hookado) leu [rax+0x10] com rax=0 -> crash.
+
+Causa de desenho: elementos mortos na lista de pista não
+vêm só das nossas carretas — o tráfego gera os seus
+continuamente (despawn, troca de pista). Armar a guarda só
+com carreta solta deixava ela desligada justo quando o
+tráfego continuava sujando.
+
+Correção 14 aplicada:
+
+19. Guarda armada permanente enquanto cargo_restore ligado
+    — nunca desarma por conjunto completo. Custo ~zero com
+    lista limpa (um teste atômico por chamada).
+20. `prune_lane_containers` roda TODO frame (janela fixa
+    removida) — elemento morto morre em <1 frame, antes de
+    qualquer leitor tropeçar. A poda já era incremental com
+    orçamento — cadência por-frame é segura.
+21. Health agora separa mortos: `lane el=N own=N mortos=N`
+    — mede se o inchaço é cadáver (poda resolve FPS+crash)
+    ou registro legítimo duplicado (precisa mapear o
+    caminho de registro, `ins=0/s` sugere que não passa
+    pelo insert hookado).
+
+## Sessão 14:33 — REGRESSÃO: correção 14 foi rejeitada (e estava errada)
+
+Tráfego ligado: desatrelou o conjunto, atrelou T1 → morte
+instantânea ~30ms após `stale parent edge cut`, sem dump e
+sem AV logado (mesma classe das mortes antigas, e no
+PRIMEIRO engate — pior que a build 14:02 que sobreviveu ~15
+manobras). O código foi rejeitado pelo usuário.
+
+### O que a sessão provou (fatos medidos)
+
+- `mortos=0` em TODAS as linhas de health: a lista de pista
+  cresceu 39→73 com ZERO elemento morto. A hipótese "inchaço
+  por cadáveres" está REFUTADA — o crescimento é de elementos
+  VIVOS (registro legítimo ou duplicado, não lixo).
+- A queda de FPS aconteceu de novo (63→33) com a lista
+  crescendo — correlato confirmado: custo por frame escala
+  com o tamanho da lista (rend/upd ~250ms/s).
+- `ins=0/s` persiste: elementos entram por um caminho que
+  NÃO passa pelo insert hookado (provável: vfunc 0x1315130,
+  que também chama o borbulhador não-hookado 0x12B7E3B).
+
+### Por que a correção 14 provavelmente matou
+
+- `prune_lane_containers` é um ESCRITOR: remove/move
+  elementos dentro dos arrays da lista. Rodá-lo TODO frame
+  na thread de update = escritor concorrente iterando os
+  mesmos arrays que a thread de simulação lê/ordena durante
+  engates e consultas da IA → estado rasgado → morte
+  instantânea. O desenho antigo (podar só em janelas de 40
+  frames após eventos) limitava essa colisão — a correção
+  14 removeu o limite.
+- Suspeito secundário: `hk_lane_obstacle_nearest` (282) —
+  assinatura de 6 args inferida por disasm (arg6 byte lido
+  de [rbp+0x88] no callee). Se o encaminhamento estiver
+  errado, a primeira consulta da IA com tráfego corrompe.
+  Não reprovado — mas desnecessário se a limpeza for feita
+  na origem.
+
+### Regras derivadas (NÃO violar de novo)
+
+1. NUNCA escrever nas estruturas de pista a partir do loop
+   de update por-frame — a poda só pode rodar serializada
+   DENTRO de um hook de pista (mesma thread da chamada
+   nativa) ou em janela curta armada por evento. Escritor
+   livre por-frame = colisão garantida com os leitores
+   nativos.
+2. Guarda armada permanentemente É segura (só adiciona
+   __try/leitura) — mas sozinha não resolve nada; só
+   converte AV em retorno seguro nos leitores hookados.
+3. O problema real do FPS é CARGA VIVA, não lixo: a lista
+   cresce com elementos legítimos e todo leitor paga
+   O(lista × veículos). Corrigir = achar QUEM registra
+   (mapear o caminho de registro de obstáculo — começar
+   pelo vfunc 0x1315130 e pelo que chama o insert e o
+   borbulhador) e impedir registro duplicado/desnecessário
+   das nossas carretas — não podar depois.
+4. Validar assinatura de hook novo contra TODOS os
+   call sites antes de instalar (o detour de 6 args foi
+   especulativo — padrão já causou crash antes: somador,
+   rdx).
+
+============================================================
+FALHAS ABERTAS — a lista do que falta resolver
+(escrita após o mapeamento completo do disasm, 19/11)
+============================================================
+
+Modelo da lista de obstáculos de pista (PROVADO no disasm):
+
+  elemento = ponteiro no vetor do nó; campos:
+    el+0x80 = record { vptr, +8 obstáculo, +0x10 pos }
+    el+0x88 = dono (objeto jogo — veículo/carreta)
+    el+0x90 = posição na pista (float)
+  nó de pista:
+    +0x18 vetor principal { data+0x20, size+0x28, cap+0x30 }
+    +0x48 vetor secundário { data+0x50, size+0x58 }
+    +0x74 = flags de dirty (or 1 = re-sort, or 9 = alterado)
+    +0x78 = próximo nó (cadeia); +0x10 bit 21 = flag de ramo
+
+  As 3 operações da lista (chamadas DIRETAS, não vtable):
+    REGISTRAR      = 0x1412B7A20 — cresce o vetor, insere o
+                     elemento na posição ordenada. arg2 =
+                     record do elemento, xmm2 = posição.
+                     16 callers; um (0x1412C9FD1) registra
+                     ~4 elementos por chamada = veículo se
+                     registra em todos os nós que ocupa.
+    REPOSICIONAR   = 0x1412B7DD0 — elemento já registrado
+                     que mudou de posição; borbolha dentro
+                     do vetor lendo el+0x88 (dono) e lendo
+                     [dono+0x10] para o flag de direção.
+    DESREGISTRAR   = 0x1412B8190 — remove por record ptr;
+                     12 callers.
+
+------------------------------------------------------------
+
+F1 - CRASH: reposicionar lê dono morto/nulo
+    Site: exe+0x12B7F6F = `mov ecx,[rax+0x10]` dentro do
+    loop de borbolha de 0x12B7DD0; rax=[el+0x88]=0.
+    Também já visto: exe+0x12B8B64 (mesmo padrão no
+    comparador), exe+0x12B7B13 (dono selvagem).
+    Causa PROVADA: elemento com dono morto permanece na
+    lista (o dono morreu sem passar pelo desregistrar); a
+    guarda estava DESARMADA no instante (F4) e o hook fn135
+    chama a original sem __try mesmo com guarda armada.
+    FECHA QUANDO: nenhum leitor de el+0x88→[dono+0x10]
+    executa sem proteção E o dono morto não permanece na
+    lista (a raiz: o caminho de morte do dono não chama
+    desregistrar — mapear e reparar na origem).
+
+F2 - CRESCIMENTO da lista sem devolução
+    Medido: el 0->106 monotônico, own 12->33, ours=0,
+    mortos=0 (TODOS VIVOS — a hipótese "cadáveres" morreu).
+    ~3,2 elementos por dono = compatível com veículo
+    registrando nos ~3-4 nós que ocupa.
+    NÃO PROVADO qual das duas causas:
+      a) acúmulo legítimo — carretas paradas na pista viram
+         obstáculo, IA não passa, fila de tráfego cresce;
+      b) vazamento — algum caller registra sem desregistrar
+         (16 callers de registrar x 12 de desregistrar).
+    FECHA QUANDO: medir taxa de registrar x desregistrar
+    (contadores nas chamadas 0x12B7A20 e 0x12B8190).
+    Se reg>>unreg = vazamento -> achar o caller desbalanceado.
+    Se balanceado = fila de tráfego -> decisão de design
+    (carreta parada na pista bloqueia a IA mesmo).
+
+F3 - FPS 60->8 progressivo com tráfego
+    Medido: fps 58->8; jw 181->984/s; upd/rend ~250ms/s.
+    Correlação com F2 confirmada; CAUSA não separada —
+    pode ser a lista inchada (custo por leitor x veículo)
+    OU o próprio volume de veículos acumulados (fila).
+    FECHA QUANDO: F2 resolvido e custo por frame medido
+    antes/depois. Não corrigir "por cima" sem a medida.
+
+F4 - GUARDA desarma e reabre os leitores
+    Medido: `lane guard: desligado` às 14:02:15, crash 14s
+    depois. A política arma só com carreta solta — mas
+    donos de elementos morrem pelo TRÁFEGO continuamente,
+    inclusive com o conjunto completo.
+    FECHA QUANDO: política de armamento cobrir a janela
+    real de risco (enquanto o sistema estiver ativo) SEM
+    poda por-frame — a combinação poda-contínua + guarda
+    permanente já foi tentada e REJEITADA (regressão F-A).
+
+------------------------------------------------------------
+
+REGRESSÕES — abordagens já rejeitadas, NÃO repetir:
+
+F-A) Poda a cada frame a partir do loop de update
+     (correção 14): prune_lane_containers é ESCRITOR —
+     iterava/mutava os vetores 60x/s na thread de update
+     enquanto a simulação lia os mesmos vetores durante
+     engates. Resultado: morte instantânea no 1º engate
+     (sessão 14:33). Poda só serializada dentro de hook
+     ou em janela curta armada por evento — como sempre foi.
+
+F-B) Hook do comparador 0x12B8AC0 com 6 args inferidos
+     (fn282): assinatura especulativa, rejeitada. Antes de
+     reinstalar, validar TODOS os call sites.
+
+F-C) Censo mortos=/guarda permanente junto com F-A: o
+     pacote inteiro foi rejeitado junto. mortos=0 medido
+     está correto como DADO, mas as peças rejeitadas não
+     voltam sem aprovação explícita.
+
+INSTRUMENTAÇÃO que enganou (corrigir quando medir F2):
+  - `ins` conta só chamadas com guarda armada (contador
+    depois do early-return) — ins=0/s durante crescimento
+    era guarda desligada, não "outro caminho".
+  - registrar 0x12B7A20 não tem contador nenhum — era por
+    ele que a lista crescia, invisível.
+
+============================================================
+ENGENHARIA REVERSA DO TRÁFEGO (19/11) — MODELO CORRIGIDO
+============================================================
+
+O modelo anterior ("el+0x88 = dono") estava ERRADO. O disasm
+completo mostra:
+
+ELEMENTO = o objeto ocupante inteiro (veículo/carreta/
+obstáculo), com uma HANDLE de pista embutida. A handle tem
+vptr próprio: { vptr, nó@+0x08, pos@+0x10 }. Offset da handle
+dentro do ocupante depende da classe:
+
+  estático (tipo 0xFFF): handle em el+0x80
+    -> el+0x80 = vptr da handle
+       el+0x88 = NÓ onde está registrado   (NÃO é "dono")
+       el+0x90 = posição na pista (chave de ordenação)
+  dinâmico:  handle em el+0x10 (el+0x18=nó, el+0x20=pos)
+
+Nó de pista tem DOIS vetores: +0x18 = estáticos,
++0x48 = dinâmicos. O registrador escolhe pela vfunc de tipo
+da handle (call [rax+8] -> 0xFFF = estático).
+
+API nativa (chamadas diretas):
+  registrar    0x1412B7A20  (nó, record, pos) — append
+               ordenado; 16 callers TODOS dinâmicos (+0x10)
+  reg. estático: wrapper 0x1412E7EF0 (handle, nó, pos) —
+               44 callers; passa a handle inteira como record
+  mover        0x1412E7F60  (remove+registra nó novo)
+  reposicionar 0x1412B7DD0  — borbolha dentro do vetor;
+               lê el+0x88 (nó) e [nó+0x10] bit21 = direção
+  desregistrar 0x1412B8190  (nó, handle) — splice do vetor
+  wrapper unreg 0x1408A54B0 — remove(nó,handle); handle.nó=0
+  fábrica elem. 0x1412DC2F0 — aloca elemento, guarda no
+               vetor privado do ocupante em obj+0x38/+0x40
+
+Classes estáticas (vfunc type == 0xFFF): 6 vtables —
+0x142410C70, 0x142412718, 0x1424128C0, 0x142413200,
+0x1424133E0, 0x1424137D0 — todas gravadas em obj+0x80 por
+construtores. Um deles (fn 0x14128E740) é objeto GRANDE
+(+0x410/+0x428) = classe de veículo -> el PODE ser a
+própria carreta/veículo.
+
+CORREÇÃO DO CENSO (o que medíamos errado):
+  el+0x88 é NÓ, não dono ->
+    own=33 era "33 nós distintos", não donos;
+    ours=0 era nó comparado com carreta — nunca bate;
+    mortos=0 era legibilidade de nó+0x10 — sempre legível.
+  -> os dados "todos vivos / não são nossos" eram inválidos.
+  Forma certa de identificar: ler el (o ocupante) —
+  is_trailer_obj(el) / comparar com canon.
+
+CRASH 0x12B7F6F reinterpretado:
+  rax=[el+0x88]=handle.nó=0 -> elemento cujo ocupante já se
+  desregistrou (wrapper zera handle.nó) mas cuja entrada
+  ficou ÓRFÃ no vetor. Órfão nasce quando remove() falha
+  porque handle.nó já estava errado — ex.: corrompido por
+  escrita externa.
+
+NÓS SOMOS UM SUSPEITO DE CRIAR ÓRFÃOS:
+  lane_kill_owner + os sweeps escrevem
+  `el+0x88 = lane_dead_owner` = handle.nó do elemento.
+  Se o elemento estiver VIVO (match errado do fuzzy
+  lane_owner_refs, que compara nó~carreta por varredura),
+  o desregistro nativo seguinte faz remove(sentinela) ->
+  falha -> handle.nó=0 -> entrada órfã no vetor real ->
+  crash no próximo leitor. O veneno não remove nada — só
+  marca. Combinado com a observação do usuário (FPS cai A
+  CADA MANOBRA, e lane_kill_owner roda em engate/desengate/
+  rebuild), o padrão "órfão por manobra" é consistente.
+
+RESSALVA sobre el=106: o censo só conta containers
+rastreados (descobertos via hooks). Parte do crescimento
+0->106 é a DESCOBERTA progressiva de nós, não registro
+novo. Só medindo regxunreg + identidade de el se separa
+vazamento real de mundo normal.
+
+DIREÇÃO DE CORREÇÃO (a propor):
+  1. Censo passa a classificar por el (ocupante):
+     is_trailer_obj(el)/canon -> "ours" de verdade;
+     handle.nó ilegível/zero + vptr inválido -> morto.
+  2. PARAR de escrever em el+0x88 (handle.nó): o veneno só
+     deve acontecer JUNTO do memmove (ou nunca — o memmove
+     já remove). lane_kill_owner, como está, corrompe
+     handles vivos e fabrica órfãos.
+  3. O match de "elemento nosso" deve testar el (ocupante),
+     nunca el+0x88 (nó).
+
+=== TENTATIVA REJEITADA (2026-01): correção "+0x88/handle.nó" ===
+
+O que foi feito (e revertido pelo usuário):
+  - Censo passou a classificar por el (ocupante) em vez de own (el+0x88).
+  - lane_kill_owner passou a remover via memmove em vez de
+    escrever lane_dead_owner em el+0x88.
+  - As escritas el+0x88=lane_dead_owner foram tiradas da
+    poda, do sweep e do hook de scan.
+
+Status: REVERTIDO integralmente pelo usuário — o código
+voltou a escrever el+0x88=lane_dead_owner nos 3 pontos e
+a identificar por el+0x88.
+
+Aprendizado registrado: essa alteração, na forma feita,
+não é a correção aceita. Não reaplicar.
+
+PERGUNTA EM ABERTO para a próxima correção:
+  A direção que o usuário pediu desde o início é outra:
+  lista PERSISTENTE — cada carreta tem UMA linha e o
+  plugin só troca o STATUS (conectada/desconectada/
+  estacionada), em vez de inserir/remover/marcar.
+  A engenharia reversa mostrou que a lista nativa é do
+  jogo (um elemento por ocupante por nó). O que falta
+  mapear: como o plugin mantém a PRÓPRIA lista de
+  registros (a tabela de conexões A0-A4/B-E) sem depender
+  de varrer/corromper a lista nativa.
+
+=== CORREÇÃO APLICADA (2026-01): ficha correta + tabela nossa ===
+
+Autorizado pelo usuário. Três mudanças:
+  1. dead_els[256] — tabela do plugin com ponteiros de
+     elementos mortos. lane_kill_owner marca aí, SEM
+     escrever em objeto do jogo.
+  2. Match por ocupante: el == carreta ou ponteiro pra
+     carreta dentro de el (não mais o campo +0x88, que é
+     o nó).
+  3. Nos 3 pontos de splice (poda, sweep, hook scan) a
+     escrita vira a ficha correta: el+0x88 = 0 — igual ao
+     unregister nativo (entrada fora + nó zerado).
+  4. lane_element_dead checa a tabela antes dos testes de
+     validade.
+
+Critério de fechamento: desatrelar/atrelar repetido com
+tráfego sem crash e sem órfãos com nó zerado crescendo.
+
+=== DIAGNÓSTICO CONFIRMADO (2026-01): multiplicador de obstáculos = gerenciador de fichas errado ===
+
+Método: engenharia reversa do exe (disassembly), cruzada
+com os logs de health (`lane el=` crescendo 15, 28, 42, 55)
+e o dump do registry (`records=0` sempre).
+
+O que acontece, provado peça por peça:
+
+  1. A fábrica de fichas funciona. `validated_va` resolve
+     corretamente pra `0x14070A160` (assinatura bate nos
+     bytes do exe). Ela aloca registro de `0x198`, grava a
+     carreta em `+0x178` e insere via `0x140B85700`.
+
+  2. A inserção `0x140B85700` grava a ficha no slot
+     "corrente" (`mgr+0x560`) e a registra na lista
+     `mgr+0x740` via vfunc+8 do próprio registro. Ficha
+     antiga que já está na lista FICA — não é removida.
+
+  3. O gerenciador que a fábrica usa é o global em
+     `exe+0x3715010`. TODAS as quatro fábricas de registro
+     `0x198` encontradas (`0x14070A160`, `0x1407A26A0`,
+     `0x1407D4760`, `0x1408008D0`) inserem nesse mesmo
+     gerenciador — ele é o dono real das fichas.
+
+  4. O plugin vigia a lista no gerenciador
+     `exe+0x3714FB0` — que é o GERENCIADOR DE TRÁFEGO
+     (sentinela 023, usado por traffic_detach_tail).
+     Objeto diferente. A lista dele está sempre vazia:
+     o log mostra `records=0` em todas as sessões.
+
+  5. Resultado: a ficha nasce no gerenciador certo, mas
+     `parked_record_listed` procura na lista errada ->
+     nunca acha -> `wants_record` fica true -> retry a
+     cada 20 ticks, pra sempre. Cada retry cria UMA ficha
+     nova (alocação nova, ponteiro novo — a dedupe da
+     inserção compara ponteiro de registro, não carreta)
+     que fica acumulada na lista do gerenciador certo.
+
+  6. Cada ficha registra a carreta como obstáculo de
+     pista. O número `lane el=` sobe sem parar não porque
+     o tráfego multiplica nem porque o jogo re-registra —
+     é o PRÓPRIO plugin criando fichas duplicadas sem
+     parar (3 carretas x ~3/segundo = o ritmo observado).
+     O tráfego só agrava: cada veículo da IA consulta a
+     lista de obstáculos a cada tick, então a lista
+     inchada derruba o FPS e vira alvo do travamento.
+
+Solução (autorizada): apontar a sentinela 252
+(`parked_record_mgr`, hoje `exe+0x3714FB0`) para
+`exe+0x3715010` — o gerenciador onde a fábrica insere.
+
+Efeito esperado:
+  - `parked_record_listed` acha a ficha na 1a tentativa ->
+    retry para -> UMA ficha por carreta = 3 fichas total.
+  - `parked_record_unlist` volta a remover de verdade no
+    reengate (hoje opera numa lista vazia, não remove
+    nada) -> sem obstáculo órfão.
+  - `dump_native_registry` passa a mostrar `records=3`.
+
+Nota: a suposição antiga do ENDERECOS.md
+("traffic = parked_record = 0x143714FB0") está errada —
+são dois gerenciadores distintos no exe atual. O
+ENDEREÇOS.md deve ser atualizado junto com a correção.
+
+Critério de fechamento: desatrelar na rua com tráfego ->
+`lane el=` estabiliza em número pequeno, `records=3`, FPS
+estável; reengate -> fichas removidas, sem órfãos, sem
+AppHang.
+
+=== CORRECAO APLICADA (2026-01): despachante nativo para T1/T2 ===
+
+Diagnostico (verificado por diff main x atual + git log):
+
+- Na versao main (1.61), o fim do `disconnect_now` chamava
+  `native_detach_via_slot(trailer)` para TODA carreta sem junta —
+  T0, T1 e T2 passavam pelo despachante nativo de desengate uma
+  vez. E essa passagem que converte a carreta de "veiculo vivo do
+  comboio" em "obstaculo estacionado registrado" pro trafego.
+- No port 1.62 (commit 9403501) a chamada foi restringida a
+  `parent_is_truck` — so a T0 (solta direto do cavalo) passava
+  pelo despachante. T1/T2, soltas no meio da corrente, nunca
+  eram convertidas: ficavam com o registro dinamico do comboio
+  em movimento.
+- Objeto dinamico e o que o jogo re-registra na pista a cada
+  tick — medido: `lane el` subindo sem parar (15, 28, 42, 55),
+  `mortos=0` (elementos VIVOS), ~5000 re-sorts/s a 85 bindings.
+- O medo que motivou a restricao (o despachante limpa o `towed`
+  do cavalo quando a carreta e do meio) ja estava tratado na
+  propria funcao: ela recoloca `truck+0x1580` quando o nativo
+  zera e ainda existe carreta engatada.
+
+Correcao: removida a restricao `parent_is_truck` da chamada —
+igual a main. A funcao ja usava os enderecos do patch atual
+(`game_actor_trailer`, `truck+0x1580`, despachante via hook) e
+ja rodava com `sever_phys_claims` antes/depois + `__try`.
+
+Criterio de fechamento: desatrelar T1/T2 na rua com trafego ->
+`lane el` estabiliza (1 obstaculo por carreta solta), FPS
+estavel, reengates sem crash e sem despachante rasgar o
+registro das carretas que continuam atreladas.
+
+### Recorrencia da mesma sessao — conjunto travado apos soltar T2
+
+Sintoma (usuario): soltou T2, o conjunto inteiro ficou ancorado
+— o cavalo nao puxava. T2 estacionou certo; quem travou foi
+T0/T1.
+
+Causa provada no disasm do despachante `0x1405DBCE0`: ele nao
+sabe que so uma carreta do meio foi solta — faz a contabilidade
+completa de "cavalo sem carreta":
+
+- `set_towed(truck,0,null)` 2x (`0x1406420B0`) -> `truck+0x1580=0`
+- `pre_detach(truck,T2)` (`0x1408641B0`) -> solta a quinta roda
+  (`[truck+0x1278]` vfunc+0x38) e liga `truck+0xE5C=1`
+- `truck+0x14B8=0` (estado de engate -> "sem carreta")
+- `truck+0x4C4=0` (progresso do engate)
+- `distribute_towed_mass(truck,0,0)` (`0x140857880`)
+
+Com `+0x14B8=0` e a garra aberta, o jogo trata T0/T1 como
+desengatadas -> freios de mola travam -> conjunto parado.
+Na 1.61 a manutencao por-frame reescrevia `+0x14B8=5` (aqui
+morta: exige `*traffic_game_state==2`, le 5 em jogo).
+
+Bug adicional encontrado: o restore de `+0x1580` lia o campo
+DEPOIS do despachante — sempre nulo -> restore nunca disparava
+(codigo morto, tambem na main).
+
+Correcao: capturar ANTES do despachante (`kept_towed`,
+`kept_state`, `kept_prog`, `kept_jaw`) e, quando a carreta que
+ficou na roda continua engatada, restaurar tudo:
+`+0x1580` re-pin + `+0x14B8`/`+0x4C4`/`+0xE5C` ao valor
+capturado + `distribute_towed_mass(truck, kept_towed+0x4B8, 0)`
+— mesmos valores que o engate nativo escreve (`+0x14B8=5`,
+`+0x4C4=1.0`, massa de `carreta+0x4B8`).
+
+============================================================
+REGRA PERMANENTE — RECORD NUNCA E ESCRITO FORA DA T0
+============================================================
+
+Por ordem direta do usuario (fato definitivo, nao reabrir):
+
+  - NAO existe possibilidade de colocar record em nenhuma
+    carreta alem da T0. O record de trailer+0x1158 so existe
+    na T0 (vem do save-load). Nenhum record e escrito em
+    nenhuma outra carreta — nunca.
+  - Proibido tentar criar record para T1/T2 de qualquer
+    forma: nem chamando funcoes nativas (lookup de dominio,
+    0x14160E240 create, 0x140345F40 assign, 0x140428480
+    alvo-de-pose, 0x141617400 bind, 0x141611AC0/0x141612E70
+    registro de canal — essa linha inteira foi tentada em
+    4 builds, crashou as 4 vezes e foi revertida), nem
+    montando a estrutura na mao.
+  - O unico mecanismo que existe para carreta solta na rua
+    e a VISIBILIDADE: a carreta some ou se mantem; o
+    trafego a ve ou nao a ve. Nada mais existe.
+
+============================================================
+DESATRELAMENTO MANUAL — DESPACHANTE NATIVO DESATIVADO (2026-11-23)
+============================================================
+
+Por ordem do usuario: o despachante nativo de desengate
+(exe+0x5DBD20) foi desativado em TODOS os caminhos do plugin
+— dentro e fora de empresa roda o MESMO script manual, que
+escreve o estado de desengate na ordem do despachante sem
+chama-lo.
+
+Mapeamento completo do despachante (desassembly):
+
+  1. set_towed(cavalo,0)       — zera +0x1580 e avisa os 12
+     ouvintes em cavalo+0x1090..+0x10E8 (vfunc+0xF0 cada)
+  2. pre_detach(cavalo,carreta) se +0x14B8 != 0 — abre a garra
+  3. vfunc_disconnect (vfunc 99) — solta a junta
+  4. cavalo+0x14B8=0 e +0x4C4=0 — estado/progresso de engate
+  5. set_towed(cavalo,0) de novo + distribute_towed_mass(0,0)
+  6. [traffic_mgr+0x2B30] vfunc+0x140 — inicio da troca de
+     composicao (o plugin chamava o slot VIZINHO +0x138 —
+     provavel off-by-one do port 1.61->1.62)
+  7. carreta+0x1168=1 SO se +0x1158 existir (T1/T2 nunca)
+  8. vfunc+0x328 — apoio/estado estacionado
+  9. rebuild_lines(cavalo,carreta) = 0x140866440 — recursivo,
+     desce a CADEIA INTEIRA marcando acessorios de conexao
+ 10. apply_cables(cavalo,0,modo)
+ 11. som de desengate (refcounted, emissor ator+0x1D40->+0x1F0)
+ 12. [traffic_mgr+0x2B30] vfunc+0x1E8 — fim da troca
+ 13. 0x1405E10F0 (massa do veiculo via gerenciador) ->
+     0x1408389A0(cavalo+0x1F8,0,massa) — recalculo do chassi
+
+Extra (a montante, NAO e do despachante): a tecla T passa
+pela maquina 0x1405D7DC0, que grava +0x14B8=2, liga +0x25A=1
+na cadeia e dispara o evento @@trailer_decoupling@@ — e o
+evento (nao o despachante) que a entrega de carga escuta.
+
+Implementacao (arquivo novo src/windows/trailer_detach.cpp):
+
+  - fn284 trailer_manual_detach(trailer,parent,parent_is_truck)
+    — mesmo script para T0/T1/T2, empresa ou rodovia
+  - cobre todos os passos do despachante + as pecas do plugin
+    (marcas, cabos, freio, ancora, unhide, rebuild de claims)
+  - slots exatos do gerenciador +0x140/+0x1E8 (nao +0x138/+0x1E0)
+  - recalculo de massa do chassi via 0x1405E10F0+0x1408389A0
+    resolvidos por assinatura (fn282/fn283)
+  - estado do cavalo so e tocado quando parent_is_truck —
+    desatrelamento do meio nao polui +0x14B8/+0x4C4/+0x1580
+    (a poluicao que exigia o restore morreu junto com o
+    despachante)
+  - disconnect_now (fn173) roteia tudo para a rotina manual
+  - hk_detach_dispatch_raw (fn191, tecla T): dl!=0 -> manual;
+    dl==0 (ramo de engate do mesmo despachante) -> original
+  - native_detach_via_slot removida por completo
+
+## 2025-11-23 (sessao 2) — consulta sem vigia + desengate pendente da tecla T
+
+Causa raiz do crash/crescimento de lane el confirmada por disassembly:
+
+- elementos de obstaculo mortos ficam na lista: o destrutor nativo
+  (0x1412C631E) zera elemento+0x88 (dono) mas NAO tira o elemento do
+  vetor do no {+0x20 arr,+0x28 count}
+- a consulta "obstaculo mais proximo" 0x1412B8AC0 (vfunc do no,
+  assinatura igual ao scan: node,flags,lo,hi,out -> elemento+0x80)
+  itera o vetor e le [dono+0x10] SEM checar nulo -> AV -> memcpy final
+- logs do teste: ins=0/s (insert hook nunca chamado) e ours=0 (nenhum
+  elemento e das nossas carretas) — os elementos mortos sao do proprio
+  trafego, nao inseridos por nos
+- tecla T: o chamador exe+0x96A1D6 chama o despachante SEMPRE com
+  dl=0 (tick de estado); o desengate real e deferido pela maquina
+  0x1405D7DC0 que grava cavalo+0x14B8=2 e trailer+0x25A=1 na cadeia —
+  a rotina manual nunca rodava nesse caminho
+
+Correcoes:
+
+  - fn285 hk_lane_obstacle_query @0x1412B8AC0 — saneia o vetor do no
+    antes da consulta (remove elementos com dono nulo/morto)
+  - fn286 lane_sanitize_node — bloco de limpeza extraido do scan e
+    reutilizado pelos dois hooks
+  - fn191 dl==0: se cavalo+0x14B8==2 (desengate pendente) e a carreta
+    rebocada tem junta viva, roda trailer_manual_detach ANTES do
+    original; o tick nativo depois ve +0x14B8==0 e nao agenda o
+    teardown deferido — a tecla T passa pelo mesmo script do plugin
+  - trailer_manual_detach limpa trailer+0x25A (flag de desengate
+    pendente gravada pela maquina da tecla T) ao marcar as carretas
+  - re-arm da poda de elementos mortos: lane_dead_pending() rodava
+    TODO FRAME (O(elementos)) re-armando a janela de 40 frames —
+    agora verifica 1x a cada 60 frames e faz UMA varredura, em vez
+    de poda continua; os hooks de consulta limpam o resto no caminho
+
+## 2025-11-23 (sessao 3) — sentinela faltando + guard desarmando
+
+Log do teste pos-correcoes: desatrelar ficou limpo (junta=0 em todos),
+mas ao ATRELAR o FPS caia de novo e lane el subia 19->108.
+
+Causas encontradas:
+
+  - hk_lane_obstacle_query NUNCA instalou: faltava a entrada na tabela
+    va_sentinels — validated_va(0x1412B8AC0) logava "endereco fixo nao
+    confirmado" e desligava o recurso. O leitor mais chamado do jogo
+    continuava cruzando elementos mortos.
+  - lane_obstacle_insert_hook existia escrito mas NUNCA era registrado
+    — por isso ins=0/s em todos os logs (nao e que nao insiram; o
+    contador nao existia).
+  - lane guard desarmava com dead_pending()==0 mas containers
+    monitorados ainda tinham elementos vivos — com o guard off os
+    hooks passavam direto e os mortos voltavam a acumular sem faxina.
+  - sim_dead_frames (sd=) subia ate 172 com det=0: a thread de fisica
+    engasgava percorrendo cadeias de nos mortos — o custo do frame
+    estava dentro do codigo nativo, nao nos hooks.
+
+Correcoes:
+
+  - sentinela 285 adicionada p/ 0x1412B8AC0 (assinatura 18 bytes:
+    48 8b c4 48 89 58 08 48 89 70 18 55 57 41 56 48 8d 68 a8)
+  - lane_obstacle_insert_hook agora e registrado (validated_va do
+    par 269 0x14094DFC0->0x1412B7DD0) — o contador ins= passa a
+    medir de verdade e o filtro de link corrompido fica ativo
+  - desarme do lane guard: so desliga quando o censo dos containers
+    monitorados zera (sem obstaculo nenhum por perto); com qualquer
+    elemento presente o guard continua sanitizando a cada leitura
+
+## 2025-11-23 (sessao 4) — o devorador era nosso: prune dentro do insert
+
+Log pos-sentinela: todos os 5 hooks de lane ativos. No desatrelamento
+da T2 com trafego: fps=10, ins=118/s, e o timing do hook mostrou
+0.10ms no insert nativo contra 756ms/s no NOSSO wrapper.
+
+  - hk_lane_obstacle_insert chamava prune_lane_containers() a cada
+    insert com a janela armada — varredura global O(mundo) com
+    VirtualQuery por container + log por elemento morto, ~6ms por
+    chamada em rajada de 118 inserts/s. Trocado por
+    lane_sanitize_node(node): limpa so o no recebido.
+  - removido o log por elemento podado dentro de
+    prune_lane_containers (I/O de arquivo no hot path).
+  - lane_containers/lane_nodes/cache lane_known_nodes NUNCA eram
+    limpos: apos save-load ficavam ponteiros mortos; endereco
+    reutilizado fazia a faxina escrever dentro de objeto vivo —
+    causa provavel do crash no load. Novo lane_tracking_reset()
+    chamado por reset_trailer_state.
+  - ins=77~118/s sao bursts naturais: trafego entrando na bolha e
+    re-registro apos troca de composicao — nao e multiplicacao nossa.
+    ours=0 confirma: as carretas nunca viram elementos de lane.
+
+## 2025-11-23 (sessao 5) — faxina re-armada infinitamente + falso hook-break
+
+Log: ins chegou a ~3000/s sustentado, upd=237ms/s, fps=8.
+
+  - lane_prune_frames=40/120 significava prune_lane_containers()
+    TODO FRAME ate zerar — varredura global com VirtualQuery +
+    probes SEH por elemento. Todos os 8 pontos de arme agora
+    usam =1 (uma varredura por evento).
+  - "hook break on cN" disparava apos CADA desatrelamento
+    manual: a manutencao via canon_was_jointed && !jointed e
+    tratava como quebra externa — re-armava a faxina e matava
+    donos sem checar se foi o plugin. Agora pula carretas com
+    is_detached/is_plugin_detached/detached_idx.
+  - ins=3000/s = churn nativo de residencia do trafego
+    (carros re-registrando obstaculo ao andar/mudar de faixa
+    perto das carretas paradas) — o custo era o nosso wrapper
+    e a faxina, nao as insercoes em si.
+
+## 2025-11-23 (sessao 6) — crashes da noite: mapping errado + corte em elemento de lane
+
+### Crash ao DESATRELAR (~20:37, empresa e rua) — RESOLVIDO
+- Sintoma: TODO desatrelamento falhava — `falha 0xC0000005 na funcao
+  176 (traffic_detach_tail) +0x3CF`, 19x, AV lendo rbx+0x328
+  (addr=0x201cd8ff188). O tracer abortava o dispatch e o detach
+  nao acontecia.
+- Causa raiz: erro de copia na tabela va_sentinels do commit
+  9403501 (migracao 1.62.3.3) — traffic_manager_global
+  (0x1436AF7C8) foi remapeado para 0x143714FB0, o MESMO endereco
+  do parked_record_mgr (0x1436AF828). O codigo lia o registro de
+  parked como traffic manager, pegava lixo em mgr+0x2B30 e fazia
+  vcall nele -> +0x328 fora do objeto.
+- Por que so hoje: so explode quando registry+0x2B30 esta
+  preenchido — dependia do estado interno, nao do reboot/driver
+  NVIDIA (coincidencia).
+- Correcao: traffic_manager_global restaurado para 0x143714F50
+  (parked fica +0x60 adiante em FB0).
+
+### Crash ao ATRELAR EM CADEIA (~21:11, T1->T2) — RESOLVIDO
+- Sequencia: desatrelou T2,T1,T0; atrelou T2, moveu, atrelou T1,
+  desatrelou T2, reatrelou T1, foi atrelar T1 em T2 -> crash.
+- Prova: `stale parent edge cut` disparou em 0x18b08fcff38 e
+  0x18b08fd0188 — enderecos que o lane dump lista como ELEMENTOS
+  DE FAIXA (rec_vtbl +0x12BF67C). O corte escreveu na malha de
+  trafego -> chuva de `falha fora do plugin em 0x7FF9EF4F2A96`
+  (dezenas) -> crash nativo.
+- Mesma assinatura do crash anterior: exe+0x11F0D8 lendo
+  [rcx+0x34] com rcx=0x0000020900000000 (ponteiro truncado —
+  os 4 bytes baixos zerados pela escrita do float +0x74).
+- Correcao aplicada nos 3 sitios de corte de aresta:
+  - hk_phys_link stale-cut: exige +0x68==filho E +0x210==filho
+    (o linker nativo mantem os dois em sincronia; elemento de
+    lane nao tem essa coincidencia dupla).
+  - phys_node_cut_edge: mesma dupla prova.
+  - Removida a escrita de +0x74 (4 bytes de zero que truncavam
+    ponteiros) nos 3 locais — cosmética, o mantenedor re-escreve.
+
+### Acumulo de elementos de lane (15->28->42->55) — MECANISMO
+- Nao sao carros de IA: acumula ate no acostamento sem trafego.
+  Sao registros de obstaculo que o no de lane re-registra a cada
+  reconstrucao (vfunc4 = 0x1412CABD0). A remocao oficial
+  (vfunc5 = 0x1412B3850, desregistra cada registro e zera as
+  listas) so roda na destruicao do no — por isso so zera quando
+  o jogador sai da area.
+- ins~2000/s = reordenacao por posicao suja, ~30x/s por elemento,
+  custo quadratico no caminho serial -> fps ancora em ~50 com
+  el~40 (com el=0 o mesmo jogo vai a 160).
+- Correcao instalada: lane_native_clear() chama a vfunc5 nativa
+  quando uma lista passa de 24 ou o censo total passa de 40
+  (lane_clear_all_nodes). O jogo recria so o necessario.
+
+## Sessao 7 - crash em thread de fisica ao engatar T0 (22:07)
+- Falha: exe+0x12909E0, leitura de obj+0x228 com sub-registro nulo,
+  em thread worker (pilha termina em RtlUserThreadStart).
+- +0x228 nao e campo que o plugin escreve. Log: 863x re-chain do
+  pino de visibilidade em T2 engatada - provavel corrida de escrita
+  nos elos slave lidos pela thread de fisica.
+- Mitigacao: pino de visibilidade so re-encadeia carreta solta
+  (joint==nullptr). Re-chain em carreta engatada removido.
+- Limpeza nativa de lanes (vfunc5) revertida por suspeita de
+  corrida equivalente na lista de obstaculos.

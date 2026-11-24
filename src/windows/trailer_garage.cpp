@@ -8,6 +8,9 @@ namespace br_carretas
     // 166 - por tick: limpa marcas de carretas destruídas (garagem/recall)
     void garage_update()
     {
+        // pausada durante o load: o respawn mata os objetos e recria - as
+        // marcas tem que sobreviver pra ser restauradas nos slots novos
+        if ( load_game_active() ) return;
         for ( uint32_t i = 0; i < max_trailers; ++i )
         {
             void* t = canon[ i ];

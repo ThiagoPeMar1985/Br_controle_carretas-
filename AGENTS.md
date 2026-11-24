@@ -2,6 +2,29 @@
 
 Plugin de controle de carretas para ETS2. Multiplayer.
 
+## LEI DE ESCRITA — uma escrita por evento; o jogo lê (ordem do usuário)
+
+- **ESTADO se escreve UMA VEZ, no evento.** Estacionou em tal local =
+  uma escrita. Atrelou no cavalo = uma escrita. Atrelou na carreta =
+  uma escrita. Desatrelou = uma escrita. O jogo **lê** o estado que o
+  plugin montou — o plugin não re-escreve estado por frame, nunca.
+- **Escrita contínua só existe para CONTROLE contínuo** — as features
+  vendidas que seguem o input do jogador em tempo real: freio
+  (`+0x760`), direção (`+0x6B8`), ar (`+0x1148`), máscara de roda
+  (`+0x2BC`), propagação de luzes. Isso é controle, não estado.
+- **Manutenção por-frame é só LEITURA (vigia).** Se a leitura provar
+  que um estado nosso sumiu, re-escreve UMA vez. Se o jogo zerar o
+  mesmo estado 3 vezes seguidas, ele está dizendo que aquele estado é
+  inválido no modelo dele: o plugin registra o conflito no log e PARA
+  de re-escrever (pin_retry). Guerra de escrita = proibida.
+- **Rearme só no evento** (atrelar/desatrelar): o estado mudou, o jogo
+  pode aceitar o claim antes rejeitado.
+- Escritas por evento hoje: atrelamento (post_connect_committed),
+  desatrelamento (trailer_manual_detach), claims no evento
+  (rebuild_parked_claim_links), record de estacionado (fábrica, uma
+  vez), slot do ator (no engate). Cortes de aresta física: só no
+  evento de link (hk_phys_link) ou na detecção de ciclo.
+
 ## Build
 
 ```sh
@@ -17,6 +40,20 @@ Game log: `C:\Users\PC\Documents\Euro Truck Simulator 2\game.log.txt`.
 Caution: `build/` keeps absolute paths in CMakeCache — after copying/moving the
 project folder, delete `build/` and reconfigure or it compiles the old tree.
 Runtime offsets live in `src/prism/offsets.hpp` (`.pdata` at VA `0x143749000` in the current exe; re-derive function ranges from the PE headers if it changes).
+
+## REGRA DURA — record só existe na T0
+
+- `trailer+0x1158` (o record de estado estacionado) existe **somente na
+  T0** — é criado pelo save-load do jogo, nunca em runtime.
+- **É impossível dar record a T1/T2 ou a qualquer outra carreta.** O
+  jogo não tem caminho nativo para isso e o plugin não deve tentar de
+  nenhuma forma: nem chamando fábricas/funções nativas (lookup de
+  domínio, create, assign, fábrica do alvo-de-pose, bind de contexto,
+  registro de canal — essa linha inteira foi tentada, crashou e foi
+  revertida), nem construindo a estrutura byte a byte na mão.
+- O único mecanismo disponível para carreta solta na rua é a
+  **visibilidade**: a carreta some ou se mantém; o tráfego a vê ou não
+  a vê. Nada mais existe.
 
 ## Chase camera (camera 2) — vehicle_behind_rotation_camera
 
@@ -189,3 +226,25 @@ Dead ends kept for reference — do NOT reuse:
   live there.
 - The earlier `0x1405AB850` "getter" is actually a record builder, not a
   value reader.
+
+## Corrente física de junções (phys chain) — RE 1.62.x
+
+- Nó: `+0x60` up, `+0x68` down, `+0x74` distância, `+0x88` dono físico,
+  `+0xF0` host (resolve par via vfuncs `+0x30`/`+0x8`), `+0x210` filho registrado,
+  `+0x208` owner que decide o filho desejado.
+- Linker nativo `0x1412BE360` (`parent, child`): escreve `child+0x60=parent`,
+  `parent+0x68=child`, `+0x74`, `parent+0x210=child`. NÃO tira o filho da
+  posição antiga. Com `child=0` limpa `parent+0x68/+0x74/+0x210` e `oldchild+0x60`.
+- Mantenedor por nó `0x1412B9ADA` (roda por frame): pergunta ao owner
+  `node+0x208->vfunc+0x30()` quem deveria estar abaixo; compara com
+  `node+0x210->+0xF0->vfunc+0x8()`; se difere faz unlink+link via `vfunc+0x98`.
+  Depois chama `child->vfunc+0x18` (joint_walk) e `0x1412B59E0` (chain_accum).
+- Todo `phys_link` observado tem `p=topo` — religações de nós do meio que
+  ressurgem arestas NÃO passam pelo linker hookado (slot+0x98 de outras
+  classes de nó resolve para outra impl).
+- `+0x60` de nós do meio NÃO é consistente nem em corrente saudável — o jogo
+  só mantém `+0x68/+0x210` autoritários; não usar `child+0x60 != pai` como
+  critério de aresta inválida.
+- Hosts de junção resolvem `o30/o8` dinamicamente (leem trailer_slave na
+  hora) — claims estacionados do plugin materializam nós de junção e
+  arestas na corrente; por isso claims errados viram arestas erradas.

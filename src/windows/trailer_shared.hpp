@@ -77,7 +77,7 @@ namespace br_carretas
         // 022 - geometria de mangueira (por frame)
         { 0x1408653A0, 0x1408653f0, ( const uint8_t* )"\x48\x89\x5c\x24\x08\x48\x89\x6c\x24\x10\x48\x89\x74\x24\x18\x57\x48\x83\xec\x60", 20 },
         // 023 - gerenciador de tráfego (dado)
-        { 0x1436AF7C8, 0x143714FB0, nullptr, 0 },
+        { 0x1436AF7C8, 0x143714F50, nullptr, 0 },
         // 024 - estado do jogo (dado: 2 = no mundo)
         { 0x143051820, 0x14273B008, nullptr, 0 },
         // 025 - cvar g_trailer_cables_mode (dado)
@@ -114,8 +114,9 @@ namespace br_carretas
         { 0x1405E14D1, 0x1405dfe20, ( const uint8_t* )"\x48\x89\x74\x24\x18\x48\x89\x7c\x24\x20\x55\x48\x8d\x6c\x24\xa9\x48\x81\xec\x90", 20 },
         // 251 - fábrica de registro de carreta estacionada
         { 0x1407B69E0, 0x14070a160, ( const uint8_t* )"\x48\x89\x5c\x24\x08\x48\x89\x74\x24\x18\x57\x48\x83\xec\x20\x48\x8b\x35\x9a\xae", 20 },
-        // 252 - gerenciador de registros estacionados (dado)
-        { 0x1436AF828, 0x143714FB0, nullptr, 0 },
+        // 252 - gerenciador de registros estacionados (dado) - o real, onde a
+        // fabrica insere (FALHAS: o 0x...FB0 e o gerenciador de trafego, vazio)
+        { 0x1436AF828, 0x143715010, nullptr, 0 },
         // 253 - purecall do CRT - alvo do crash tracer
         { 0x141D23610, 0x141d57200, ( const uint8_t* )"\x48\x83\xec\x28\x48\x8b\x05\xed\xf1\x33\x01\x48\x85\xc0\x74\x06\xff\x15\xa2\xc6", 20 },
         // 254 - RIP da leitura de curva de navegação (emula xmm5=0)
@@ -136,6 +137,14 @@ namespace br_carretas
         { 0x14096AAB0, 0x14096aab0, ( const uint8_t* )"\x48\x83\xec\x48\x8b\x51\x14\x48\x8b\x49\x08\xff\xca\x48\x3b\x51\x10\x73", 17 },
         // 271 - lane_obstacle_scan - varredura linear de obstáculos do nó
         { 0x1412B85A0, 0x1412b85a0, ( const uint8_t* )"\x48\x8b\xc4\x48\x89\x58\x08\x48\x89\x70\x18\x55\x57\x41\x56\x48\x8d\x68\xb8", 18 },
+        // 272 - chain_accum - somador recursivo da corrente física (+0x68)
+        { 0x141248750, 0x141248750, ( const uint8_t* )"\x40\x53\x48\x83\xec\x20\x48\x8b\xd9\x48\x8b\x49\x68\x48\x85\xc9\x75\x0b\xf3\x0f", 20 },
+        // 273 - lane_obstacle_sort - reordena a lista de obstáculos por posição
+        { 0x1412B7A20, 0x1412b7a20, ( const uint8_t* )"\x40\x53\x56\x48\x83\xec\x68\x8b\x41\x10\x48\x8b\xda\x0f\x29\x74\x24\x50\x48\x8b", 20 },
+        // 285 - lane_obstacle_query - consulta do obstáculo mais próximo (lia dono sem checar nulo)
+        { 0x1412B8AC0, 0x1412b8ac0, ( const uint8_t* )"\x48\x8b\xc4\x48\x89\x58\x08\x48\x89\x70\x18\x55\x57\x41\x56\x48\x8d\x68\xa8", 18 },
+        // 286 - chain_maint - mantenedor por-nó: re-deriva +0x68 do owner e chama joint_walk
+        { 0x1412B9AC0, 0x1412b9ac0, ( const uint8_t* )"\x48\x8b\xc4\x53\x55\x57\x48\x81\xec\xa0\x00\x00\x00\x81\xa1\x44\x02\x00\x00\x37", 20 },
     };
 
     // 030 - confere o endereço fixo contra a assinatura (cache por chamada)
@@ -321,6 +330,8 @@ namespace br_carretas
     inline std::shared_ptr< CFunctionHook > lane_obstacle_insert_hook = nullptr;
     inline std::shared_ptr< CFunctionHook > lane_obstacle_resolve_hook = nullptr;
     inline std::shared_ptr< CFunctionHook > lane_obstacle_scan_hook = nullptr;
+    inline std::shared_ptr< CFunctionHook > lane_obstacle_query_hook = nullptr;
+    inline std::shared_ptr< CFunctionHook > lane_obstacle_sort_hook = nullptr;
     inline std::shared_ptr< CFunctionHook > combo_length_hook = nullptr;
     inline std::shared_ptr< CFunctionHook > cam_set_target_hook = nullptr;
     inline std::shared_ptr< CFunctionHook > cam_update_hook = nullptr;
@@ -333,6 +344,8 @@ namespace br_carretas
     inline std::shared_ptr< CFunctionHook > rebuild_lines_hook = nullptr;
     inline std::shared_ptr< CFunctionHook > joint_walk_hook = nullptr;
     inline std::shared_ptr< CFunctionHook > phys_link_hook = nullptr;
+    inline std::shared_ptr< CFunctionHook > chain_accum_hook = nullptr;
+    inline std::shared_ptr< CFunctionHook > chain_maint_hook = nullptr;
     inline std::shared_ptr< CFunctionHook > purecall_hook = nullptr;
     inline std::shared_ptr< CFunctionHook > trigger_action_hook = nullptr;
     inline std::shared_ptr< CFunctionHook > trailer_disconnect_hook = nullptr;
@@ -367,7 +380,7 @@ namespace br_carretas
     {
         if ( !settings::g_settings.cargo_restore ) return;
         lane_guard_on.store( true, std::memory_order_release );
-        lane_prune_frames = 40;
+        lane_prune_frames = 1;
     }
 
     // 042 - marca a carreta como desatrelada
@@ -441,9 +454,50 @@ namespace br_carretas
 
     inline bool canon_was_jointed[ max_trailers ] = {};
 
+    // lei de escrita: tentativas consecutivas do pino no mesmo claim -
+    // o jogo zerando 3x seguidas = estado invalido no modelo dele, para de brigar
+    inline uint32_t pin_retry[ max_trailers ] = {};
+    inline uint32_t pin_retry_fallback = 0;
+    inline void* pin_last_tail[ max_trailers ] = {};
+    inline void* pin_last_tail_fallback = nullptr;
+
     inline bool lines_torn[ max_trailers ] = {};
 
     inline std::atomic< bool > native_chain_call_active{ false };
+
+    inline std::atomic< int > phys_link_dump{ 0 };
+
+    inline std::atomic< uint64_t > phys_log_until{ 0 };
+
+    inline std::atomic< uint64_t > maint_calls{ 0 };
+
+    inline uint64_t maint_seen_gen = 0;
+    inline void* maint_seen[ 256 ] = {};
+    inline uint64_t maint_seen_at[ 256 ] = {};
+
+    inline void* ins_links_seen[ 64 ] = {};
+
+    inline void arm_phys_log()
+    {
+        phys_log_until.store( GetTickCount64() + 90000, std::memory_order_release );
+        ++maint_seen_gen;
+        for ( void*& s : maint_seen ) s = nullptr;
+        for ( void*& s : ins_links_seen ) s = nullptr;
+    }
+
+    inline void* phys_last_parent = nullptr;
+    inline void* phys_last_child = nullptr;
+
+    inline void* phys_seen_parents[ 8 ] = {};
+    inline void* phys_node_of[ max_trailers ] = {};
+
+    // registra pai visto em phys_link - ponto de entrada pra andar a corrente
+    inline void note_phys_parent( void* p )
+    {
+        if ( p == nullptr ) return;
+        for ( const void* s : phys_seen_parents ) if ( s == p ) return;
+        for ( void*& s : phys_seen_parents ) if ( s == nullptr ) { s = p; return; }
+    }
 
     inline std::recursive_mutex claim_write_mutex;
 
@@ -880,6 +934,16 @@ namespace br_carretas
 
     inline std::atomic< bool > parking_brake_on{ false };
     inline std::atomic< bool > parking_brake_known{ false };
+    inline std::atomic< float > truck_speed_mps{ 0.f };
+    inline std::atomic< bool > truck_speed_known{ false };
+    // trava de desengate: so com o veiculo parado (velocidade ~0 m/s);
+    // sem telemetria de velocidade, libera (fail-open)
+    inline bool truck_stopped()
+    {
+        if ( !truck_speed_known.load( std::memory_order_relaxed ) ) return true;
+        const float s = truck_speed_mps.load( std::memory_order_relaxed );
+        return s > -0.05f && s < 0.05f;
+    }
     inline uint64_t cargo_seq_ms = 0;
     inline bool cargo_respawn_done = false;
 

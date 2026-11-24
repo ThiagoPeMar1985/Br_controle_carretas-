@@ -6,7 +6,7 @@ crashar ou falhar, o número diz exatamente qual função é, sem ambiguidade.
 | Arquivo | Faixa |
 |---------|-------|
 | src/windows/trailer_shared.hpp | 001–064, 236–271 |
-| src/windows/trailer_manipulation.cpp | 065–107 |
+| src/windows/trailer_manipulation.cpp | 065–107, 277–280 |
 | src/windows/trailer_steering.cpp | 108–114 |
 | src/windows/trailer_loadunload.cpp | 115–118 |
 | src/windows/trailer_loadstate.cpp | 119–143, 235, 274–276 |
@@ -20,6 +20,7 @@ crashar ou falhar, o número diz exatamente qual função é, sem ambiguidade.
 | src/windows/trailer_brake.cpp | 204–216 |
 | src/windows/trailer_axles.cpp | 217–223 |
 | src/windows/trailer_air.cpp | 224–234 |
+| src/windows/trailer_connections.hpp | (tabela) |
 
 ## src/windows/trailer_shared.hpp
 
@@ -274,6 +275,10 @@ de bytes; se não bater no exe, aquele recurso desliga sozinho:
 | 274 | `lane_kill_owner` | mata elementos de lane-obstacle cujo dono é o objeto dado ou o contém |
 | 275 | `lane_census` | censo dos elementos de lane-obstacle: total, donos únicos, ligados a canon |
 | 276 | `lane_owner_refs` | verifica se o objeto-dono referencia a carreta em algum campo |
+| 277 | `conn_observe` | trailer_manipulation.cpp | lê junta/pai de cada carreta e grava o físico na tabela de conexões |
+| 278 | `conn_commit` | trailer_manipulation.cpp | reescreve a corrente inteira a partir da tabela de conexões |
+| 279 | `conn_mark_parked` | trailer_manipulation.cpp | marca na tabela um claim escrito fora do commit |
+| 280 | `conn_reset` | trailer_manipulation.cpp | zera a tabela de conexões (reset de estado) |
 
 ## src/windows/trailer_camera.cpp
 

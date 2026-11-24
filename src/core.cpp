@@ -26,14 +26,25 @@ namespace br_carretas
     {
         static FILE* f = nullptr;
         static std::string path;
-        if ( f == nullptr && path.empty() )
+        static uint32_t calls = 0;
+        if ( path.empty() )
         {
             const char* profile = getenv( "USERPROFILE" );
             path = std::string( profile != nullptr ? profile : "." ) +
                 "\\Documents\\Euro Truck Simulator 2\\br_carretas_debug.log";
-            f = fopen( path.c_str(), "a" );
         }
-        if ( f == nullptr ) return;
+        if ( f == nullptr )
+        {
+            f = fopen( path.c_str(), "w" );
+            if ( f == nullptr ) return;
+        }
+        if ( ( ++calls & 0xFF ) == 0 &&
+             GetFileAttributesA( path.c_str() ) == INVALID_FILE_ATTRIBUTES )
+        {
+            fclose( f );
+            f = fopen( path.c_str(), "w" );
+            if ( f == nullptr ) return;
+        }
         SYSTEMTIME st;
         GetLocalTime( &st );
         fprintf( f, "%02d:%02d:%02d.%03d %s\n",

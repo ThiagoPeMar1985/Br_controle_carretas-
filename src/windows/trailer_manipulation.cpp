@@ -1,5 +1,6 @@
 #include "trailer_manipulation.hpp"
 #include "trailer_coupling_internal.hpp"
+#include "trailer_connections.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -192,6 +193,7 @@ namespace br_carretas
     {
 
         sever_all_claims();
+        lane_tracking_reset();
         const bool carry = carry_arm_tick != 0 && GetTickCount64() - carry_arm_tick < 15000;
         bool carry_keep[ max_trailers ] = {};
         bool was_head[ max_trailers ] = {};
@@ -229,6 +231,7 @@ namespace br_carretas
         }
         for ( auto& c : canon ) c = nullptr;
         for ( auto& c : canon_ee8 ) c = nullptr;
+        for ( auto& n : phys_node_of ) n = nullptr;
         for ( auto& j : canon_was_jointed ) j = false;
         for ( auto& j : canon_jointless_frames ) j = 0;
         for ( auto& j : lines_torn ) j = false;
@@ -237,6 +240,7 @@ namespace br_carretas
             edge.owner.store( nullptr, std::memory_order_release );
             edge.child.store( nullptr, std::memory_order_release );
         }
+        conn_reset();
         for ( auto& d : detached_trailers ) d = nullptr;
         for ( auto& d : plugin_detached ) d = nullptr;
         for ( auto& f : detached_idx ) f = false;
@@ -488,6 +492,38 @@ namespace br_carretas
     }
 
     // 085 - update por frame: assinatura da cadeia + sub-sistemas
+    // no stall da sim: caminha as correntes com conjunto de vistos - ciclo ou
+    // profundidade anormal nomeia a travada (leitura pura, 1x por episodio)
+    static void dump_chain_walks_on_stall()
+    {
+        static uint32_t stall_dumps = 0;
+        if ( stall_dumps >= 4 ) return;
+        ++stall_dumps;
+        for ( uint32_t i = 0; i < max_trailers && canon[ i ] != nullptr; ++i )
+        {
+            void* t = canon[ i ];
+            if ( !readable_ptr( t ) || !is_trailer_obj( t ) ) continue;
+            void* seen[ 16 ] = {};
+            uint32_t n = 0;
+            void* cur = readable_ptr( static_cast< uint8_t* >( t ) + prism::offsets::trailer_slave )
+                ? prism::offsets::field< void* >( t, prism::offsets::trailer_slave ) : nullptr;
+            std::string path;
+            bool ciclo = false;
+            while ( cur != nullptr && n < 16 && readable_ptr( cur ) )
+            {
+                bool dup = false;
+                for ( uint32_t k = 0; k < n; ++k ) dup |= seen[ k ] == cur;
+                if ( dup ) { ciclo = true; break; }
+                seen[ n++ ] = cur;
+                path += fmt::format( "->{:p}", cur );
+                if ( !readable_ptr( static_cast< uint8_t* >( cur ) + prism::offsets::trailer_slave ) ) break;
+                cur = prism::offsets::field< void* >( cur, prism::offsets::trailer_slave );
+            }
+            CCore::g_instance->info( "sim stall: chain walk c{} profundidade={}{}{}",
+                i, n, path, ciclo ? " CICLO!" : "" );
+        }
+    }
+
     void CTrailerManipulation::update_impl()
     {
 
@@ -495,6 +531,24 @@ namespace br_carretas
 
         license::refresh();
         if ( !license::active() ) return;
+
+        // padrao nativo: tudo engatado, nada destacado, sem orfaos - o jogo
+        // se mantem sozinho e o plugin nao vigia (ordem do usuario)
+        const auto native_pattern = [ & ]()
+        {
+            for ( uint32_t i = 0; i < max_trailers && canon[ i ] != nullptr; ++i )
+            {
+                void* t = canon[ i ];
+                if ( !readable_ptr( t ) || !is_trailer_obj( t ) || joint( t ) == nullptr ||
+                     is_detached( t ) || is_plugin_detached( t ) ) return false;
+            }
+            for ( auto* p : pending_orphans )
+                if ( p != nullptr ) return false;
+            return true;
+        };
+
+        // despejo unico de memoria dos veiculos (leitura pura, arquivo proprio)
+        if ( canon[ 0 ] != nullptr ) memdump_world();
 
         static uint64_t idle_sig = ~0ull;
         static uint32_t active = 0;
@@ -550,20 +604,37 @@ namespace br_carretas
             void* t = canon[ i ];
             if ( plausible_object( t ) && ( joint( t ) == nullptr || detached_idx[ i ] ) ) any_loose = true;
         }
-        if ( settings::g_settings.cargo_restore && ( any_loose || lane_prune_frames > 0 ) )
+        // a guarda arma so por EVENTO (arm_lane_guard no desengate) ou na
+        // janela de prune - o estado "carreta solta" re-armava a cada frame
+        // e a toll do hook voltava perpetua (a espiral que derrubava o FPS)
+        if ( settings::g_settings.cargo_restore && lane_prune_frames > 0 )
         {
             lane_guard_on.store( true, std::memory_order_release );
         }
         else if ( lane_guard_on.load( std::memory_order_acquire ) )
         {
-            if ( settings::g_settings.cargo_restore && lane_dead_pending() > 0 )
-            {
-                lane_prune_frames = 40;
-            }
-            else
+            static uint32_t guard_check = 0;
+            if ( !settings::g_settings.cargo_restore )
             {
                 lane_guard_on.store( false, std::memory_order_release );
                 CCore::g_instance->info( "lane guard: desligado" );
+            }
+            else if ( ++guard_check >= 60 )
+            {
+                guard_check = 0;
+                if ( lane_dead_pending() > 0 )
+                {
+                    prune_lane_containers();
+                }
+                else
+                {
+                    // o censo nunca chega a el=0 com trafego (o proprio guarda
+                    // re-armava a janela de prune com el>40 = espiral perpetua
+                    // de sanitizacao em cada insert) - sem mortos pendentes, a
+                    // guarda nao tem trabalho: desliga
+                    lane_guard_on.store( false, std::memory_order_release );
+                    CCore::g_instance->info( "lane guard: desligado" );
+                }
             }
         }
 
@@ -627,11 +698,12 @@ namespace br_carretas
         pt[ 3 ] = __rdtsc();
         if ( wake ) gc_detached_marks();
         watch_sim_heartbeat();
+        if ( sim_dead_frames == 30 ) dump_chain_walks_on_stall();
         pt[ 4 ] = __rdtsc();
 
         auto* game_actor = CCore::g_instance->get_game_actor();
 
-        if ( !cargo_freeze() )
+        if ( !cargo_freeze() && !native_pattern() )
         {
             lift_axles_update( game_actor );
             suspension_update();
@@ -831,6 +903,11 @@ namespace br_carretas
             CCore::g_instance->warning( "Puxe o freio de mão para desengatar a carreta {}", i + 1 );
             return;
         }
+        if ( !truck_stopped() )
+        {
+            CCore::g_instance->warning( "Pare o veículo completamente para desengatar a carreta {}", i + 1 );
+            return;
+        }
         void* truck = nullptr;
         if ( auto* game_actor = CCore::g_instance->get_game_actor() )
         {
@@ -936,6 +1013,11 @@ namespace br_carretas
         if ( !handbrake_ok() )
         {
             CCore::g_instance->warning( "Puxe o freio de mão para engatar a carreta {}", i + 1 );
+            return;
+        }
+        if ( !truck_stopped() )
+        {
+            CCore::g_instance->warning( "Pare o veículo completamente para engatar a carreta {}", i + 1 );
             return;
         }
         if ( queue_op( pending_kind::connect, trailer, truck, true, 0 ) )
@@ -1539,14 +1621,104 @@ namespace br_carretas
         ImGui::EndChild();
     }
 
-    // 101 - reescreve os links slave das peças estacionadas
-    void rebuild_parked_claim_links()
+    // 277 - lê junta/pai de cada carreta e grava o físico nas conexões
+    void conn_observe()
     {
-        std::lock_guard< std::recursive_mutex > claim_lk( claim_write_mutex );
+        void* truck = nullptr;
+        if ( auto* game_actor = CCore::g_instance->get_game_actor() )
+        {
+            truck = prism::offsets::field< void* >( game_actor, prism::offsets::game_actor_truck );
+        }
+        for ( uint32_t i = 0; i < max_trailers; ++i )
+        {
+            void* t = canon[ i ];
+            conn_record& a = conns[ conn_a( i ) ];
+            conn_record* e = i > 0 ? &conns[ conn_t( i ) ] : nullptr;
+            if ( a.right != t )
+            {
+                a.left = truck;
+                a.right = t;
+                a.st = conn_state::off;
+            }
+            if ( e != nullptr && e->right != t )
+            {
+                e->left = canon[ i - 1 ];
+                e->right = t;
+                e->st = conn_state::off;
+            }
+            void* p = nullptr;
+            if ( t != nullptr && is_trailer_obj( t ) && joint( t ) != nullptr &&
+                 readable_ptr( static_cast< uint8_t* >( t ) + prism::offsets::trailer_parent ) )
+            {
+                p = prism::offsets::field< void* >( t, prism::offsets::trailer_parent );
+            }
+            conn_record* hit = nullptr;
+            if ( p != nullptr && p == truck ) hit = &a;
+            else if ( p != nullptr && is_trailer_obj( p ) ) hit = e != nullptr ? e : &a;
+            if ( hit != nullptr )
+            {
+                hit->left = p;
+                hit->st = conn_state::linked;
+            }
+            if ( hit != &a && a.st == conn_state::linked ) a.st = conn_state::off;
+            if ( hit != e && e != nullptr && e->st == conn_state::linked ) e->st = conn_state::off;
+        }
+        for ( uint32_t i = 0; i < conns_total; ++i )
+        {
+            if ( conns[ i ].right == nullptr ) continue;
+            if ( canon_index_of( conns[ i ].right ) < 0 ) conns[ i ] = {};
+        }
+    }
+
+    // 279 - marca na tabela o claim owner->child escrito fora do commit
+    void conn_mark_parked( void* owner, void* child )
+    {
+        const int ci = canon_index_of( child );
+        if ( ci < 0 ) return;
+        conn_record& r = conn_slot_of( ci, owner );
+        if ( r.st == conn_state::linked ) return;
+        r.left = owner;
+        r.st = conn_state::parked;
+    }
+
+    // 291 - regra da floresta (memoria 00:42): escrita de claim que fecha
+    // ciclo corrompe o grafo e o jogo DESTROI as carretas - recusa e registra
+    bool claim_link_write_safe( void* src, void* dst )
+    {
+        if ( src == nullptr || dst == nullptr || src == dst ) return false;
+        void* seen[ max_trailers ] = {};
+        uint32_t sn = 0;
+        for ( void* c = dst; c != nullptr && readable_ptr( c ) && sn < max_trailers; )
+        {
+            if ( c == src ) return false;
+            bool dup = false;
+            for ( uint32_t k = 0; k < sn; ++k ) dup |= seen[ k ] == c;
+            if ( dup ) break;
+            seen[ sn++ ] = c;
+            if ( !readable_ptr( static_cast< uint8_t* >( c ) + prism::offsets::trailer_slave ) ) break;
+            c = prism::offsets::field< void* >( c, prism::offsets::trailer_slave );
+        }
+        slave_link_write( src, dst );
+        return true;
+    }
+
+    // 280 - zera a tabela de conexões (reset de estado)
+    void conn_reset()
+    {
+        for ( auto& c : conns ) c = {};
+    }
+
+    // 278 - reescreve a corrente inteira a partir da tabela de conexões
+    void conn_commit()
+    {
         if ( native_chain_call_active.load( std::memory_order_acquire ) ||
              canon_age < 90 || !canon_all_trailer_objs() || cargo_freeze() )
         {
             return;
+        }
+        for ( auto& c : conns )
+        {
+            if ( c.st == conn_state::parked ) c.st = conn_state::off;
         }
         void* live[ max_trailers ] = {};
         bool parkedish[ max_trailers ] = {};
@@ -1579,14 +1751,66 @@ namespace br_carretas
             ? prism::offsets::field< void* >( truck, 0x1580 ) : nullptr;
         const bool towing = towed != nullptr && joint( towed ) != nullptr;
 
+        bool has_real[ max_trailers ] = {};
+        void* claimed[ max_trailers * 2 ] = {};
+        uint32_t cn = 0;
+        for ( uint32_t i = 0; i < ln; ++i )
+        {
+            void* t = live[ i ];
+            for ( uint32_t j = 0; j < ln; ++j )
+            {
+                void* cand = live[ j ];
+                if ( cand == t || joint( cand ) == nullptr ||
+                     prism::offsets::field< void* >( cand, prism::offsets::trailer_parent ) != t )
+                {
+                    continue;
+                }
+                bool dup = false;
+                for ( uint32_t k = 0; k < cn; ++k ) dup |= claimed[ k ] == cand;
+                if ( dup ) continue;
+                claimed[ cn++ ] = cand;
+                has_real[ i ] = true;
+                void** slave = &prism::offsets::field< void* >( t, prism::offsets::trailer_slave );
+                if ( *slave != cand ) claim_link_write_safe( t, cand );
+                clear_claim_edge( t );
+                break;
+            }
+        }
+
         for ( uint32_t i = ln; i-- > 0; )
         {
-            if ( towing ) continue;
-            void** slave = &prism::offsets::field< void* >( live[ i ], prism::offsets::trailer_slave );
-            void* want = ( i + 1 < ln ) ? live[ i + 1 ] : nullptr;
-            if ( *slave != want ) slave_link_write( live[ i ], want );
-            if ( parkedish[ i ] ) set_claim_edge( live[ i ], want );
-            else clear_claim_edge( live[ i ] );
+            if ( towing || has_real[ i ] ) continue;
+            void* t = live[ i ];
+            void** slave = &prism::offsets::field< void* >( t, prism::offsets::trailer_slave );
+            void* want = nullptr;
+            for ( uint32_t j = i + 1; j < ln; ++j )
+            {
+                void* cand = live[ j ];
+                if ( joint( cand ) != nullptr ) continue;
+                bool dup = false;
+                for ( uint32_t k = 0; k < cn; ++k ) dup |= claimed[ k ] == cand;
+                if ( dup ) continue;
+                want = cand;
+                break;
+            }
+            if ( want != nullptr ) claimed[ cn++ ] = want;
+            if ( *slave != want ) claim_link_write_safe( t, want );
+            if ( parkedish[ i ] ) set_claim_edge( t, want );
+            else clear_claim_edge( t );
+        }
+        if ( !towing )
+        {
+            for ( uint32_t i = 0; i < ln; ++i )
+            {
+                if ( !parkedish[ i ] ) continue;
+                void* pred = i > 0 ? live[ i - 1 ] : nullptr;
+                conn_record& r = conn_slot_of( canon_index_of( live[ i ] ), pred );
+                if ( r.st != conn_state::linked )
+                {
+                    r.left = pred;
+                    r.st = conn_state::parked;
+                }
+            }
         }
         if ( towing )
         {
@@ -1595,10 +1819,13 @@ namespace br_carretas
             for ( uint32_t i = 0; i < ln; ++i )
                 if ( !parkedish[ i ] ) last_live = live[ i ];
             void* next = nullptr;
+            void* parked_seq[ max_trailers ] = {};
+            uint32_t pn = 0;
             for ( uint32_t i = ln; i-- > 0; )
             {
                 if ( !parkedish[ i ] ) continue;
                 void* t = live[ i ];
+                if ( joint( t ) != nullptr ) continue;
                 void** sl = &prism::offsets::field< void* >( t, prism::offsets::trailer_slave );
 
                 if ( prism::offsets::field< void* >( t, prism::offsets::trailer_parked_state ) != nullptr &&
@@ -1609,9 +1836,10 @@ namespace br_carretas
                     clear_claim_edge( t );
                     continue;
                 }
-                if ( *sl != next ) slave_link_write( t, next );
+                if ( *sl != next ) claim_link_write_safe( t, next );
                 set_claim_edge( t, next );
                 next = t;
+                if ( pn < max_trailers ) parked_seq[ pn++ ] = t;
             }
             void* anchor = last_live != nullptr ? last_live : towed;
 
@@ -1626,8 +1854,38 @@ namespace br_carretas
                 anchor = s;
             }
             void** sl = &prism::offsets::field< void* >( anchor, prism::offsets::trailer_slave );
-            if ( *sl != next ) slave_link_write( anchor, next );
+            if ( *sl != next ) claim_link_write_safe( anchor, next );
             set_claim_edge( anchor, next );
+            void* pred = anchor;
+            for ( uint32_t k = pn; k-- > 0; )
+            {
+                void* t = parked_seq[ k ];
+                conn_record& r = conn_slot_of( canon_index_of( t ), pred );
+                if ( r.st != conn_state::linked )
+                {
+                    r.left = pred;
+                    r.st = conn_state::parked;
+                }
+                pred = t;
+            }
+        }
+
+        for ( uint32_t i = 0; i < max_trailers && canon[ i ] != nullptr; ++i )
+        {
+            void* t = canon[ i ];
+            if ( t == nullptr || !readable_ptr( t ) ) continue;
+            void* s = prism::offsets::field< void* >( t, prism::offsets::trailer_slave );
+            if ( s == nullptr || s == t || !is_trailer_obj( s ) || joint( s ) == nullptr )
+            {
+                continue;
+            }
+            if ( prism::offsets::field< void* >( s, prism::offsets::trailer_parent ) == t )
+            {
+                continue;
+            }
+            slave_link_write( t, nullptr );
+            clear_claim_edge( t );
+            CCore::g_instance->info( "claim falso removido: {:p} soltou {:p}", t, s );
         }
 
         if ( auto* game_actor = CCore::g_instance->get_game_actor() )
@@ -1637,11 +1895,39 @@ namespace br_carretas
         }
     }
 
+    // 101 - reescreve os links slave das peças estacionadas
+    void rebuild_parked_claim_links()
+    {
+        std::lock_guard< std::recursive_mutex > claim_lk( claim_write_mutex );
+        // evento mudou o estado: o jogo pode aceitar claim antes rejeitado
+        for ( auto& r : pin_retry ) r = 0;
+        pin_retry_fallback = 0;
+        conn_observe();
+        conn_commit();
+        sever_phys_claims();
+    }
+
     // 102 - reescan da cadeia + manutenção (links, linhas, marcas)
     void CTrailerManipulation::refresh_trailer_chain()
     {
         std::lock_guard< std::recursive_mutex > claim_lk( claim_write_mutex );
         if ( canon_dead() ) reset_trailer_state();
+
+        // padrao nativo: tudo engatado, nada destacado, sem orfaos - o jogo
+        // se mantem sozinho e o plugin nao vigia (ordem do usuario)
+        const auto native_pattern = [ & ]()
+        {
+            for ( uint32_t i = 0; i < max_trailers && canon[ i ] != nullptr; ++i )
+            {
+                void* t = canon[ i ];
+                if ( !readable_ptr( t ) || !is_trailer_obj( t ) || joint( t ) == nullptr ||
+                     is_detached( t ) || is_plugin_detached( t ) ) return false;
+            }
+            for ( auto* p : pending_orphans )
+                if ( p != nullptr ) return false;
+            return true;
+        };
+        const bool nativo = native_pattern();
 
         orphan_teardown_tick();
 
@@ -1899,6 +2185,27 @@ namespace br_carretas
             bool any_parked = false;
             for ( uint32_t i = 0; i < ln; ++i ) any_parked |= parkedish[ i ];
 
+            // slot do ator velho apos desengate: a tecla T re-engataria a carreta
+            // que acabou de soltar. So limpar com a maquina de acoplamento ociosa
+            if ( !native_chain_call_active.load( std::memory_order_acquire ) )
+            {
+                if ( auto* game_actor = CCore::g_instance->get_game_actor() )
+                {
+                    void* truck = readable_ptr( game_actor )
+                        ? prism::offsets::field< void* >( game_actor, prism::offsets::game_actor_truck ) : nullptr;
+                    void* slot = readable_ptr( game_actor )
+                        ? prism::offsets::field< void* >( game_actor, prism::offsets::game_actor_trailer ) : nullptr;
+                    const bool machine_idle = truck == nullptr || !readable_ptr( truck ) ||
+                        prism::offsets::field< uint32_t >( truck, prism::offsets::truck_coupling_state ) == 0;
+                    if ( slot != nullptr && readable_ptr( slot ) && machine_idle &&
+                         joint( slot ) == nullptr &&
+                         ( is_detached( slot ) || is_plugin_detached( slot ) ) )
+                    {
+                        prism::offsets::field< void* >( game_actor, prism::offsets::game_actor_trailer ) = nullptr;
+                    }
+                }
+            }
+
             if ( any_parked && canon_age >= 15 && canon_all_trailer_objs() &&
                  !native_chain_call_active.load( std::memory_order_acquire ) )
             {
@@ -1915,12 +2222,13 @@ namespace br_carretas
                 for ( uint32_t i = 0; i < ln; ++i )
                 {
                     const bool jointed = joint( live[ i ] ) != nullptr;
-                    if ( canon_was_jointed[ i ] && !jointed )
+                    if ( canon_was_jointed[ i ] && !jointed &&
+                         !is_detached( live[ i ] ) && !is_plugin_detached( live[ i ] ) &&
+                         !detached_idx[ i ] )
                     {
                         CCore::g_instance->info( "hook break on c{} - hose teardown", i );
 
-                        lane_prune_frames = 40;
-                        lane_kill_owner( live[ i ] );
+                        lane_prune_frames = 1;
 
                         [&]()
                         {
@@ -1951,8 +2259,6 @@ namespace br_carretas
                     }
                 }
 
-                rebuild_parked_claim_links();
-
                 for ( uint32_t i = 0; i < ln; ++i )
                 {
                     void* seen[ max_trailers ] = {}; uint32_t sn = 0;
@@ -1982,10 +2288,48 @@ namespace br_carretas
                     }
                 }
 
+                if ( !nativo )
                 {
+                    // regra provada no log (23:58:19): o jogo ACEITA a carreta
+                    // com record como RAIZ da corrente de claims (T0->T1->T2
+                    // sobrevive em todo estado) e REJEITA claim de entrada nela
+                    // (T1->T0 zerado 3x seguidas)
                     void* head = nullptr;
                     if ( auto* game_actor = CCore::g_instance->get_game_actor() )
                         head = prism::offsets::field< void* >( game_actor, prism::offsets::game_actor_trailer );
+                    // a junta e a verdade da caminhada: o slot mente (o jogo o
+                    // consome/troca apos o engate) e a caminhada perdia a
+                    // carreta engatada -> o pino a re-claimava e brigava consigo
+                    if ( auto* ga2 = CCore::g_instance->get_game_actor() )
+                    {
+                        void* trk = readable_ptr( ga2 )
+                            ? prism::offsets::field< void* >( ga2, prism::offsets::game_actor_truck ) : nullptr;
+                        void* twd = trk != nullptr && readable_ptr( trk )
+                            ? prism::offsets::field< void* >( trk, 0x1580 ) : nullptr;
+                        if ( twd != nullptr && readable_ptr( twd ) && joint( twd ) != nullptr )
+                            head = twd;
+                    }
+                    // claim de entrada em carreta engatada e aresta invalida: o
+                    // jogo esconde quem a carrega (log 09:54: T2->T0 sobreviveu
+                    // ao engate - escrita pos-evento - e escondeu a T2)
+                    if ( head != nullptr && readable_ptr( head ) && is_trailer_obj( head ) &&
+                         joint( head ) != nullptr )
+                    {
+                        for ( uint32_t j = 0; j < max_trailers && canon[ j ] != nullptr; ++j )
+                        {
+                            void* q = canon[ j ];
+                            if ( q == nullptr || q == head || !readable_ptr( q ) ||
+                                 !is_trailer_obj( q ) ) continue;
+                            if ( readable_ptr( static_cast< uint8_t* >( q ) + prism::offsets::trailer_slave ) &&
+                                 prism::offsets::field< void* >( q, prism::offsets::trailer_slave ) == head )
+                            {
+                                slave_link_write( q, nullptr );
+                                clear_claim_edge( q );
+                                CCore::g_instance->info(
+                                    "pin: claim de entrada em engatada cortado {:p} soltou {:p}", q, head );
+                            }
+                        }
+                    }
                     void* vis[ max_trailers ] = {}; uint32_t vn = 0;
                     void* tail = nullptr;
                     for ( void* t = head; t != nullptr && vn < max_trailers; )
@@ -1994,26 +2338,158 @@ namespace br_carretas
                         for ( uint32_t k = 0; k < vn; ++k ) dup |= vis[ k ] == t;
                         if ( dup || !is_trailer_obj( t ) ) break;
                         vis[ vn++ ] = t;
-                        tail = t;
                         t = prism::offsets::field< void* >( t, prism::offsets::trailer_slave );
                     }
+                    for ( uint32_t k = vn; k-- > 0; )
+                    {
+                        if ( prism::offsets::field< void* >( vis[ k ], prism::offsets::trailer_parked_state ) == nullptr )
+                        {
+                            tail = vis[ k ];
+                            break;
+                        }
+                    }
+                    bool tail_from_fallback = false;
                     if ( tail == nullptr )
                     {
-
+                        // ancora do claim: primeiro engatado (a combinacao e o
+                        // que o jogo caminha); sem engatado, o primeiro vivo -
+                        // o record da T0 ancora a caminhada do jogo nas soltas
                         for ( uint32_t i = 0; i < ln && tail == nullptr; ++i )
-                            if ( is_trailer_obj( live[ i ] ) ) tail = live[ i ];
+                        {
+                            if ( is_trailer_obj( live[ i ] ) && joint( live[ i ] ) != nullptr )
+                            {
+                                tail = live[ i ];
+                            }
+                        }
+                        for ( uint32_t i = 0; i < ln && tail == nullptr; ++i )
+                        {
+                            if ( is_trailer_obj( live[ i ] ) )
+                            {
+                                tail = live[ i ];
+                            }
+                        }
                         if ( tail != nullptr )
+                        {
                             vis[ vn++ ] = tail;
+                            tail_from_fallback = true;
+                        }
                     }
-                    for ( uint32_t i = 0; i < ln && tail != nullptr; ++i )
+                    // a raiz vinda do fallback nao pode ter claim de entrada:
+                    // estender por ela fechava ciclo com os claims antigos na
+                    // direcao contraria (44x bloqueados - log 08:57 - e o
+                    // pisca-pisca da guerra com o proprio pino)
+                    if ( tail != nullptr && tail_from_fallback )
                     {
-                        bool seen = false;
-                        for ( uint32_t k = 0; k < vn; ++k ) seen |= vis[ k ] == live[ i ];
-                        if ( seen || !is_trailer_obj( live[ i ] ) ) continue;
-                        CCore::g_instance->info( "visibility pin: re-chained unreachable trailer {:p}", live[ i ] );
-                        slave_link_write( tail, live[ i ] );
-                        set_claim_edge( tail, live[ i ] );
-                        tail = live[ i ];
+                        for ( uint32_t j = 0; j < max_trailers && canon[ j ] != nullptr; ++j )
+                        {
+                            void* q = canon[ j ];
+                            if ( q == nullptr || q == tail || !readable_ptr( q ) ||
+                                 !is_trailer_obj( q ) ) continue;
+                            if ( readable_ptr( static_cast< uint8_t* >( q ) + prism::offsets::trailer_slave ) &&
+                                 prism::offsets::field< void* >( q, prism::offsets::trailer_slave ) == tail )
+                            {
+                                slave_link_write( q, nullptr );
+                                clear_claim_edge( q );
+                                CCore::g_instance->info(
+                                    "pin: claim de entrada na raiz cortado {:p} soltou {:p}", q, tail );
+                            }
+                        }
+                    }
+                    // 2 passadas (sem record primeiro, com record POR ULTIMO) em
+                    // rodadas: orfa fora da corrente faz o jogo esconder o conjunto
+                    for ( int round = 0; round < 3; ++round )
+                    {
+                    bool progressed = false;
+                    for ( int pass = 0; pass < 2 && tail != nullptr; ++pass )
+                    {
+                        for ( uint32_t i = 0; i < ln && tail != nullptr; ++i )
+                        {
+                            void* t = live[ i ];
+                            const bool has_rec = prism::offsets::field< void* >(
+                                t, prism::offsets::trailer_parked_state ) != nullptr;
+                            if ( pass == 0 && has_rec ) continue;
+                            if ( pass == 1 && !has_rec ) continue;
+                            bool seen = false;
+                            for ( uint32_t k = 0; k < vn; ++k ) seen |= vis[ k ] == t;
+                            if ( seen || !is_trailer_obj( t ) || joint( t ) != nullptr )
+                            {
+                                continue;
+                            }
+                            // lei de escrita: claim rejeitado pelo jogo nao se
+                            // re-escreve em guerra - 3 tentativas e o conflito
+                            // fica registrado, a escrita para
+                            const int ci = canon_index_of( t );
+                            uint32_t& rt = ( ci >= 0 ) ? pin_retry[ ci ] : pin_retry_fallback;
+                            void*& last_tl = ( ci >= 0 ) ? pin_last_tail[ ci ] : pin_last_tail_fallback;
+                            if ( last_tl != tail ) { rt = 0; last_tl = tail; }
+                            if ( rt >= 3 )
+                            {
+                                if ( rt == 3 )
+                                {
+                                    ++rt;
+                                    CCore::g_instance->warning(
+                                        "visibility pin: jogo rejeita claim {:p}->{:p} - parando de reescrever",
+                                        tail, t );
+                                }
+                                continue;
+                            }
+                            // regra provada nos 5 casos (RE: nenhum zerador
+                            // direto existe - o jogo valida o GRAFO): slave tem
+                            // de ser floresta - 1 incoming por carreta, nenhum
+                            // ciclo. Ciclo PRIMEIRO: escrita ignorada nao pode
+                            // cortar o incoming antigo (senao o pino destroi a
+                            // propria corrente a cada rodada)
+                            bool closes_cycle = false;
+                            {
+                                void* seen2[ max_trailers ] = {};
+                                uint32_t sn2 = 0;
+                                for ( void* c = t; c != nullptr && readable_ptr( c ) && sn2 < max_trailers; )
+                                {
+                                    if ( c == tail ) { closes_cycle = true; break; }
+                                    bool dup2 = false;
+                                    for ( uint32_t k2 = 0; k2 < sn2; ++k2 ) dup2 |= seen2[ k2 ] == c;
+                                    if ( dup2 ) break;
+                                    seen2[ sn2++ ] = c;
+                                    if ( !readable_ptr( static_cast< uint8_t* >( c ) + prism::offsets::trailer_slave ) ) break;
+                                    c = prism::offsets::field< void* >( c, prism::offsets::trailer_slave );
+                                }
+                            }
+                            if ( closes_cycle )
+                            {
+                                CCore::g_instance->warning(
+                                    "pin: escrita {:p}->{:p} fecharia ciclo - ignorada", tail, t );
+                                continue;
+                            }
+                            for ( uint32_t j = 0; j < max_trailers && canon[ j ] != nullptr; ++j )
+                            {
+                                void* q = canon[ j ];
+                                if ( q == nullptr || q == tail || q == t ||
+                                     !readable_ptr( q ) || !is_trailer_obj( q ) ) continue;
+                                if ( readable_ptr( static_cast< uint8_t* >( q ) + prism::offsets::trailer_slave ) &&
+                                     prism::offsets::field< void* >( q, prism::offsets::trailer_slave ) == t )
+                                {
+                                    slave_link_write( q, nullptr );
+                                    clear_claim_edge( q );
+                                    CCore::g_instance->info(
+                                        "pin: incoming antigo cortado {:p} soltou {:p}", q, t );
+                                }
+                            }
+                            ++rt;
+                            CCore::g_instance->info( "visibility pin: re-chained unreachable trailer {:p}", t );
+                            slave_link_write( tail, t );
+                            set_claim_edge( tail, t );
+                            conn_mark_parked( tail, t );
+                            tail = t;
+                            if ( vn < max_trailers ) vis[ vn++ ] = t;
+                            progressed = true;
+                        }
+                    }
+                    if ( !progressed ) break;
+                    }
+                    for ( uint32_t k = 0; k < vn; ++k )
+                    {
+                        const int ci = canon_index_of( vis[ k ] );
+                        if ( ci >= 0 ) pin_retry[ ci ] = 0;
                     }
                 }
 
@@ -2265,6 +2741,10 @@ namespace br_carretas
             fn_index_add( fn_addr_of( &trailer_maintenance_ready ), 79, "trailer_maintenance_ready" );
             fn_index_add( fn_addr_of( &update_fault_filter ), 83, "update_fault_filter" );
             fn_index_add( fn_addr_of( &rebuild_parked_claim_links ), 101, "rebuild_parked_claim_links" );
+            fn_index_add( fn_addr_of( &conn_observe ), 277, "conn_observe" );
+            fn_index_add( fn_addr_of( &conn_commit ), 278, "conn_commit" );
+            fn_index_add( fn_addr_of( &conn_mark_parked ), 279, "conn_mark_parked" );
+            fn_index_add( fn_addr_of( &conn_reset ), 280, "conn_reset" );
             fn_index_add( fn_addr_of( &trigger_native_sleep ), 105, "trigger_native_sleep" );
             fn_index_add( fn_addr_of( &update_sleep_release ), 106, "update_sleep_release" );
             return true;
