@@ -703,7 +703,7 @@ namespace br_carretas
 
         auto* game_actor = CCore::g_instance->get_game_actor();
 
-        if ( !cargo_freeze() && !native_pattern() )
+        if ( !cargo_freeze() )
         {
             lift_axles_update( game_actor );
             suspension_update();
