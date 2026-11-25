@@ -253,8 +253,11 @@ namespace br_carretas
             __try
             {
                 auto& f = prism::offsets::field< float >( t, prism::offsets::trailer_suspension_height );
-                const float want = static_cast< float >( settings::g_settings.suspension_height[ i ] ) / 50.f;
-                if ( f < 0.3f || f > 2.3f || std::fabs( f - want ) < 0.005f )
+                const int stored = settings::g_settings.suspension_height[ i ];
+                const float want = stored <= 50
+                    ? 0.5f + stored * 0.01f
+                    : stored * 0.02f;
+                if ( !std::isfinite( f ) || f < 0.f || f > 4.f || std::fabs( f - want ) < 0.005f )
                 {
                     suspension_dirty.fetch_and( ~bit, std::memory_order_release );
                     continue;
@@ -607,15 +610,18 @@ namespace br_carretas
                 selection = lift.native_axles & lift.steer_axles;
             }
 
-            for ( uint32_t a = 0; a < lift.axle_count; ++a )
+            if ( selection != lift.applied_mask )
             {
-                flags[ a ] = ( ( selection >> a ) & 1 ) != 0
-                    ? lift.orig_flags[ a ]
-                    : static_cast< uint8_t >( 0 );
-            }
+                for ( uint32_t a = 0; a < lift.axle_count; ++a )
+                {
+                    flags[ a ] = ( ( selection >> a ) & 1 ) != 0
+                        ? lift.orig_flags[ a ]
+                        : static_cast< uint8_t >( 0 );
+                }
 
-            prism::offsets::field< uint32_t >( controller, prism::offsets::lift_controller_axle_mask ) = selection;
-            lift.applied_mask = selection;
+                prism::offsets::field< uint32_t >( controller, prism::offsets::lift_controller_axle_mask ) = selection;
+                lift.applied_mask = selection;
+            }
         }
 
         {

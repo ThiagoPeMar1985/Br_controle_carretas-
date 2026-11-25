@@ -1299,3 +1299,246 @@ feito funcao por funcao (o metodo do usuario, nao o atalho do checkout):
   sem mecanismo meu
 
 Documento de apoio criado: `CARREGAMENTO E DESCARREGAMENTO.md`
+
+## 18:20 — Eixos e suspensão mortos: a trava do "padrão nativo" engoliu as features
+
+Sintoma do usuario: painel "Sem dados de eixo" nas 3 carretas (todas com
+eixo levantavel real - o botao nativo erguia) e "Salvar altura" sem
+efeito (suspw+0 a sessao inteira).
+
+Diagnostico (leitura ao vivo com o jogo aberto - live_axles.py):
+- Controlador de eixo presente nas 3 (carreta+0x6C8), estado=3 (eixos
+  erguidos), mask=0x1, count=2
+- Array de flags VIVO nos offsets antigos: chassi+0x5C8=ptr valido,
+  +0x5D0=2, flags = 01 00 (eixo 0 levantavel) nas 3 carretas
+- Suspeita anterior (offsets 0x5C8/0x5D0 mortos no 1.62.3.3) era
+  FALSA - o scan linear do .text morria no primeiro byte invalido e
+  reportava "zero referencias" errado
+
+Causa real: `trailer_manipulation.cpp:706` rodava
+`lift_axles_update` + `suspension_update` DENTRO de
+`!cargo_freeze() && !native_pattern()`. native_pattern() = verdadeiro
+quando tudo esta engatado/nada solto/sem orfaos - ou seja, o estado
+normal de jogo matou as duas features (a trava foi feita pra vigia de
+corrente, nao pra features). Reparo: gate reduzido a `!cargo_freeze()`.
+
+Suspensão - limites reais extraidos do exe (0x14085cc39):
+- O campo trailer+0x4D4 opera em [0.5, 2.0] (comiss vs 0.5 e 2.0 no
+  clamp nativo); escrever 0.0 afundava a carreta no chao e a trava
+  de sanidade (f<0.3) impedia resgatar (presa pra sempre)
+- Régua remapeada: 0->0.5 (piso do jogo), 50->1.0, 100->2.0 (teto)
+- Trava de sanidade agora rejeita so valor insano (não-finito,
+  <0, >4) - permite resgatar carreta afundada
+
+Teclas (settings.cpp): "Selecionar carreta N p/ engate (T)" estava
+errado - a tecla ATRELA direto no cavalo. Renomeado:
+"Atrelar carreta 2 no cavalo" / "Atrelar carreta 3 no cavalo".
+
+## 18:25 — FPS despencou (24-35): a LEI DE ESCRITA violada por frame
+
+Depois do reparo acima, o loop de eixos das carretas passou a rodar no
+estado normal - e ele REESCREVIA flags[eixo] + mascara do controlador
+TODO FRAME, sem checar se mudou. A secao do cavalo no mesmo arquivo ja
+fazia certo (so escreve quando difere). Ordem do usuario: o jogo recebe
+a decisao dele QUANDO ele decide (clique), nunca por frame.
+
+Reparo: os writes de flags/mascara das carretas agora dentro de
+`selection != applied_mask` - escrita unica no evento, identico a
+secaoo do cavalo. A deteccao (leituras) continua por frame - e o que
+alimenta o painel.
+
+Sinais do periodo ruim no health: sim stall duas vezes (heartbeat
+morto 30+ frames), worst=76ms, fps 34.7. Custos medidos do plugin por
+frame seguiam pequenos - o churn era no lado do jogo.
+
+## 18:29 — Crash 0xC0000374 (heap) ao desatrelar T0 no posto — RESOLVIDO
+
+Sintoma: clicou Desatrelar T0, o detach rodou (77 elementos de lane
+despejados, pin re-encadeou) e o processo morreu no meio. WER: heap
+corruption em ntdll - nao uma AV, escrita errada muito antes.
+
+Causa raiz (provada por RE + codigo, nao suposicao):
+- `prune_lane_containers` rodava na thread de RENDER fazendo memmove +
+  *count + carimbos dentro dos vetores de lane do jogo, enquanto a
+  thread de SIM rebuildava os mesmos vetores (ins=722/s). Sem trava:
+  o plugin lia o ponteiro do array, o jogo realocava e liberava o
+  antigo, o memmove caia no bloco morto -> free-list corrompida ->
+  0xC0000374 segundos depois. readable_ptr/__try NAO detectam heap
+  liberado - a pagina continua mapeada.
+- `lane_kill_owner` em carreta ENGATADA (coupling) ainda alimentava a
+  guerra matar/re-registrar - a tempestade de 722 inserts/s que comia
+  o FPS antes do clique era isso.
+- RE do exe confirmou: insert (0x1412B7DD0) e scan (0x1412B85A0) leem
+  el+0x88 -> owner+0x10 sem checar nulo - a protecao e necessaria,
+  mas o jogo so desregistra elemento na destruicao do no (vfunc5,
+  FALHAS) - elemento morto fica na lista ate o rebuild natural.
+
+Reparo (o defeito deixa de existir, nao e mitigado):
+- Mortas: prune_lane_containers, lane_cap_mark, lane_kill_owner,
+  lane_dead_pending, lane_owner_refs + os 2 call-sites do kill no
+  coupling (orfa + varredura de engatada). Fim de TODA escrita em
+  estrutura de lane fora dos hooks - fim da guerra junto.
+- lane_sanitize_node virou carimbo unico atomico (el+0x88=dono-falso)
+  rodando so dentro dos hooks (serializado com o jogo), com prova de
+  vida: so escreve se el+0x00 for vtable dentro do exe - elemento
+  liberado falha na checagem e sua memoria nunca e tocada.
+- Desarme da guarda nao consulta mais censo de mortos (elemento morto
+  nao exige trabalho - o hook carimba na proxima passada do jogo).
+- Mantido: tracking (leitura), resolve->elemento-falso, sort guard,
+  dump, censo do health.
+
+## 19:23 — Crash 0xC0000025: o teto de lane recriou a guerra — REVERTIDO
+
+O teto de 24 elementos por no chamava a vfunc5 nativa (wipe total) ->
+o jogo re-registrava os ~70 elementos -> passava de 24 -> wipe de novo
+= ciclo infinito apaga/re-registra. Prova no log: ins=1166/s com 203
+elementos tipo=0xFFF - a MESMA tempestade do kill, agora pela via
+nativa. Morreu no meio do desatrelamento T2,T1,T0 (det=2 no ultimo
+health). Licao: qualquer remocao em massa - nossa ou nativa - vira
+guerra contra o re-registro do jogo. Populacao viva de lane e custo
+do jogo, nao se toca.
+
+## 19:50 — Tempestade pos desatrelar/atrelar: auto-limitante (NAO e guerra)
+
+ins=1574/s -> 1250/s -> 0 em ~30s. E o rebuild legitimo dos registros de
+obstaculo da NOSSA corrente: dump mostrou 66 dos ~85 elementos com o MESMO
+dono (nós de junção do combo). Morre sozinha; nao se remove nada (guerra
+provada 2x). FPS ancora no residuo ~70 = custo nativo.
+
+## Correções aplicadas (build pendente - jogo aberto)
+
+1. Guarda de lane nao desarma mais por tempo fixo: desarma so quando
+   lane_any_dead() nao achar elemento morto nos containers rastreados.
+   O crash das 19:37 nasceu 1.2s APOS o desarme, com 2 mortos na lista.
+2. crash_tracer resolve o modulo da falha via VirtualQuery->AllocationBase
+   ->GetModuleFileNameA: loga "falha 0x... em modulo.dll +0xoff" no lugar
+   de "fora do plugin". Proximo crash dira de quem e o codigo que morre.
+
+## Crash 19:37 (rodovia) — assinatura AV no exe
+
+WER: modulo eurotrucks2.exe, 0xC0000005. Codigo nativo caminhou buffer
+liberado byte a byte (addr 0x3ba9d302ee..ff, contador rdi 0x12->0x1,
+base r8=0x3ba9d2aed8) ~1.2s apos desatrelar T2 + 2 purecalls (vfunc 140
+em objeto liberado). NAO era iteracao de lane (byte-walk, nao ptr-walk) -
+mortos de lane na hora podem ser coincidentes. Aguardando nome do modulo
+na proxima ocorrencia.
+
+## Crash 20:22 (desatrelamento) — DIAGNOSTICADO ao nivel de instrucao
+
+Tracer novo pegou: 2x purecall (exe+0x1295554, +0x12959E2) depois falha
+0xC0000005 em eurotrucks2.exe +0x12959E5 — mov rdx,[rax] com rax=0.
+Mecanismo PROVADO: o varredor de registros de lane (exe~0x1295xxx) chama
+vfunc[8] de um registro cuja fonte morreu no desatrelamento; a purecall
+hook engolia e devolvia nullptr; a instrucao seguinte lia [nullptr].
+Pilha: 0x1295CFF <- 0x12B724B (mantenedor de nos fisicos) <- 0x129564C
+<- 0x1292FFC <- 0x1292950 <- 0x129149E.
+FIX instalado: hk_purecall devolve &purecall_fake (vfunc-tipo retorna 0
+= "pula esse registro") para rvas 0x1290000-0x1296000 e 0x12B0000-0x12C0000
+— cobre o varredor de lane inteiro e o mantenedor de fisica. Mesma
+tecnica do elemento-falso da guarda, agora pra qualquer consulta a
+objeto morto dentro dessas familias.
+
+## ~20:52 — CARRETA FANTASMA: mecanismo provado e limpeza instalada
+Sintoma do usuario: trafego parava pra sempre no ponto exato do
+desatrelamento, como se a carreta continuasse la ("carreta fantasma").
+
+Prova ao vivo (experimento desatrelar/reatrelar/mover):
+- Os registros de obstaculo NAO carregam ponteiro da carreta (varredura
+  de todos os campos do registro: zero refs pra dentro de trailers).
+- O fantasma = ELEMENTO APOSENTADO ainda no vetor do no de lane:
+  el+0 nao e vtable (slot reciclado) MAS o registro embutido em
+  el+0x80 continua com vtable valida, dono valido e posicao valida -
+  o trafego le como obstaculo real e para.
+- O detector lane_element_dead (dono+registro) nao pega esse caso:
+  dono e registro parecem vivos. O teste certo e el+0 sem vtable.
+- Remocao manual do vetor (memmove+cnt--+flag +0x74|=9, replicando o
+  unregister nativo 0x1412B8190) = trafego destravou na hora. PROVADO.
+
+Implementado (instalado 20:52): lane_sanitize_node agora trata os
+dois casos - elemento com vtable morta+dono morto = carimbo (como
+antes); elemento aposentado (el+0 sem vtable) com registro embutido
+vivo (el+0x80 com vtable do exe) = remove do vetor do no replicando
+o unregister nativo, 1 por passada, dentro dos hooks serializados.
+
+RE do unregister nativo (0x1412B8190): unregister(node, link=el+0x80):
+acha el+0x80 no vetor +0x20/+0x28, memmove, count--, +0x74|=9; o
+jogo so o chama por caminhos que nao cobrem elementos aposentados.
+
+Crash dump (instalado 21:53): crash_tracer ganhou dedupe por
+(rip,code) - 24 unicos, repeticoes suprimidas (mata a enxurrada de
+2692 linhas vista no shutdown das 21:45). Novo crash_dump_write
+(fn236) grava em Documents\Euro Truck Simulator 2\br_carretas_crash.txt
+via WriteFile puro (handle pre-aberto, sem heap/CRT): code, rip com
+modulo+offset, tipo de acesso + endereco faltoso, 16 regs, dump de
+16 qwords de rcx/rbx/rdi/r11 e pilha (rsp scan, exe+/dll+ offsets).
+
+Crashes de hoje (Event Viewer): 21:28 exe+0x12B7ECC = varredura de
+obstaculos em velocidade lendo el+0x88 (dono) morto num vetor
+r11+8/+0x10 - mesma doenca do fantasma, container diferente.
+21:45 exe+0x1E577B = crash no DESLIGAMENTO (indice corrompido em
+tabela global), nao relacionado a gameplay.
+
+## 25/11 — Crash no desatrelamento pelo botao + carga reunindo: mesma causa
+
+Crash 12:46:30 (botao Desatrelar C1): detach completou limpo; 40ms
+depois AV em exe+0x153E9DB - call [rax+0x60] (vfunc 12 = "meu indice")
+num elemento de vetor de 2 entradas cuja vtable era lixo
+(0xA6685F3FA6685FC0). A funcao re-arquiva itens registrados numa
+tabela por indice ([r14+idx*8+0x18]) e faz OR das flags dos
+registros no pai (+0x118 / +0x20). Registro velho na lista do jogo.
+
+Causa raiz (carga + crash): o detach marcava a CORRENTE INTEIRA como
+solta (mark_detached/mark_plugin_detached + detached_idx em C1, C2
+e C3). Marcadas, C2/C3 entravam nos caminhos de carreta solta:
+a carga as tratava como cabeca de secao propria e as reunia; os
+pinos/claims de visibilidade gravavam estado nelas, deixando
+registro velho na lista que o jogo varre.
+
+Correcao: o laco continua andando a corrente so para zerar +0x25A
+(pendente de desengate que a maquina da tecla T liga na corrente
+inteira - cancelamento correto), mas mark_detached/
+mark_plugin_detached agora so na carreta pedida. Somado ao slot
+do ator mantido (correcao do botao: ator continua apontando pra
+T0, carretas visiveis).
+
+## 25/11 — Carretas separadas somem apos soltar T0: elo de claim cortado e ninguem re-escreve
+
+Cenario: separou T2, separou T1, soltou T0 ~200m longe -> T1/T2 sumiram
+da tela (so T0 visivel). Reatrelar tambem escondia.
+
+Varredura global de memoria (sem valores fixos): os 3 objetos VIVOS.
+T0 no slot do ator com rec+parked=1+regd=1 e slave=0 (elo de saida
+CORTADO); T1->T2 intacto. Gerenciador de parked-records 0x0, traffic
+state 5. Quem corta e o JOGO (modelo provado: zera elo de saida de
+carreta estacionada com registro). O elo fica cortado porque:
+- conn_commit (que re-escreve a corrente) roda SO NO EVENTO
+  (rebuild_parked_claim_links) - nada por frame;
+- o pino de visibilidade pula alvo marcado plugin-detached.
+
+Prova: escrevendo T0->T1 direto na memoria as carretas voltaram na
+posicao onde estavam e o elo FICOU (jogo aceita, nao zera de novo).
+
+Correcao (fn308 vigia_claims, trailer_manipulation.cpp): manutencao
+por frame le os elos registrados em synthetic_edges; elo nosso que
+sumiu volta UMA vez; 3 cortes seguidos = conflito, registra no log
+e para (padrao pin_retry). Rearme no evento (rebuild_parked_claim_links
+zera losses/stopped). Desligado na carga (cargo_freeze) e em chamada
+nativa (native_chain_call_active). synthetic_slave_edge ganhou
+losses/stopped. INDICE.md: faixa 308 + entrada da funcao.
+
+## 25/11 (2) — Vigia não atuou no teste 14:39: o desengate da tecla T apaga o registro do elo
+
+Teste 14:38-14:39 (DLL nova com fn308): separou T2/T1 pelo botao e soltou
+T0 pela TECLA T -> T1/T2 sumiram de novo. Log sem nenhuma linha do
+vigia. Causa: o desengate da tecla T e ASSINCRONO - fn191 despacha
+(junta ainda viva, rebuild roda cedo demais), o jogo quebra depois
+dentro do fn182 (vfunc99), cuja caminhada corta o elo c0->c1 (slave
+jointless = "bad") e faz clear_claim_edge - o elo fica cortado E sem
+registro; o vigia so conserta elo registrado -> cego. O caminho do
+botao (fn284) re-escreve no fim; o da tecla T nao tinha esse fim.
+
+Correcao: fn182 agora termina com rebuild_parked_claim_links() -
+a corrente volta a ser escrita e registrada right-after do teardown
+assincrono. No caminho do botao o rebuild fica bloqueado pelo guarda
+native_chain_call_active (sem trabalho duplicado). Vigia (fn308)
+cobre os cortes que o jogo fizer depois.

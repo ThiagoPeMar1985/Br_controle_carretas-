@@ -7,6 +7,7 @@
 #include "imgui.h"
 
 #include "core.hpp"
+#include "windows/trailer_shared.hpp"
 #include "hooks/function_hook.hpp"
 #include "backends/imgui_impl_win32.h"
 #include "backends/imgui_impl_dx11.h"
@@ -121,18 +122,47 @@ namespace br_carretas
         }
     }
 
+    // medidor de frame: gap entrada-a-entrada (producao) vs tempo dentro do Present (entrega)
     HRESULT hk_present( IDXGISwapChain* swap_chain, const UINT sync_interval, const UINT flags )
     {
+        const bool outer = ( present_depth == 0 );
+        const uint64_t t0 = __rdtsc();
+        static uint64_t prev = 0;
+        if ( outer )
+        {
+            if ( prev != 0 ) pp_gap_tsc += t0 - prev;
+            prev = t0;
+        }
         on_present( swap_chain );
+        const uint64_t tin = __rdtsc();
         const auto hr = present_hook->get_original< present_fn >()( swap_chain, sync_interval, flags );
+        if ( outer )
+        {
+            pp_in_tsc += __rdtsc() - tin;
+            ++pp_count;
+        }
         --present_depth;
         return hr;
     }
 
     HRESULT hk_present1( IDXGISwapChain1* swap_chain, const UINT sync_interval, const UINT flags, const DXGI_PRESENT_PARAMETERS* params )
     {
+        const bool outer = ( present_depth == 0 );
+        const uint64_t t0 = __rdtsc();
+        static uint64_t prev = 0;
+        if ( outer )
+        {
+            if ( prev != 0 ) pp_gap_tsc += t0 - prev;
+            prev = t0;
+        }
         on_present( swap_chain );
+        const uint64_t tin = __rdtsc();
         const auto hr = present1_hook->get_original< present1_fn >()( swap_chain, sync_interval, flags, params );
+        if ( outer )
+        {
+            pp_in_tsc += __rdtsc() - tin;
+            ++pp_count;
+        }
         --present_depth;
         return hr;
     }

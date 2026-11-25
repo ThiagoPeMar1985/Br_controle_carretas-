@@ -67,6 +67,9 @@ namespace br_carretas
     extern int anchor_settle[ max_trailers ];
     extern int anchor_age[ max_trailers ];
     extern int anchor_delay[ max_trailers ];
+    extern int anchor_fixes[ max_trailers ];
+    extern void* anchor_prev_slave[ max_trailers ];
+    extern bool anchor_prev_slave_j[ max_trailers ];
     extern bool record_tried[ max_trailers ];
     extern int record_retry[ max_trailers ];
     extern uint8_t record_quiet[ max_trailers ];
@@ -78,6 +81,7 @@ namespace br_carretas
     extern tp_slot_t tp_log[ 16 ];
     extern int tp_n;
     extern bool tp_active;
+    extern bool in_actor_tp;
     extern float3_t tp_snap[ max_trailers ];
     extern quat_t tp_snap_q[ max_trailers ];
     extern bool tp_snap_ok[ max_trailers ];
@@ -109,13 +113,11 @@ namespace br_carretas
     bool trailer_maintenance_ready();
     void sanitize_slave_walk( void* );
     void sanitize_phys_walk( void* );
-    void prune_lane_containers();
     void lane_sanitize_node( void* );
     void lane_tracking_reset();
-    int lane_kill_owner( void* );
     void lane_dump_refs( void* );
-    int lane_dead_pending();
     void lane_census( int&, int&, int& );
+    bool lane_any_dead();
     void native_park_detached( void* );
     void dump_native_registry();
     void memdump_world();
@@ -165,6 +167,7 @@ namespace br_carretas
     void* hk_lane_obstacle_scan( void*, uint32_t, float, float, float* );
     void* hk_lane_obstacle_query( void*, uint32_t, float, float, float* );
     uint8_t hk_lane_obstacle_sort( void*, void*, float );
+    void lane_sweep_containers();
     void hk_pre_detach( void*, void* );
     void hk_detach_dispatch( void*, uint8_t, uint64_t );
     void hk_detach_dispatch_raw( void*, uint8_t, uint64_t );
@@ -184,6 +187,7 @@ namespace br_carretas
     void enforce_chase_camera_anchor();
     void restore_parked();
     void restore_parked_if_enabled();
+    void loadunload_reset();
     void light_watch_tick();
     void* find_trailer_actor( void*, void* );
     void sample_provider_vtbl( void* );

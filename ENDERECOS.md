@@ -119,6 +119,9 @@ Também são sensíveis à versão — a struct da carreta pode mudar entre vers
 | `trailer+0x760` | fator de freio real | alvo do "carreta freia mais" |
 | `trailer+0x764` | flag de freio forçado | |
 | `trailer+0x6B8`/`+0x6C0` | ângulo/dados de eixo direcional | |
+| `trailer+0x6C8` | controlador de eixo levantável | `+0x38` máscara, `+0x3C` estado — **verificado ao vivo 1.62.3.3** |
+| `trailer+0x200`→`+0x5C8`/`+0x5D0` | array de flags por eixo (chassi) | ptr + count — **verificado ao vivo 1.62.3.3**, flags `01 00` |
+| `trailer+0x4D4` | altura da suspensão | faixa real **0.5–2.0** (clamp nativo `0x14085cc39`); 1.0 = normal; abaixo de 0.5 afunda |
 | `trailer+0x1158`/`+0x1168`/`+0x1228` | estado estacionado | record só na T0 (save-load); **nunca criar para T1/T2** |
 | `trailer+0x1160`/`+0x1254`/`+0xFD0` | brace / manivela | |
 | `truck+0x14B8` | estado de engate (5 = engatado) | |

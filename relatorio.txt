@@ -1,0 +1,5 @@
+19:30:05 !! esperando eurotrucks2.exe...
+19:30:05 !! conectado pid=1848 (0 containers de lane)
+19:30:05 ok fps=? el=? mortos=0 carimb=0 semdono=0 maxno=0 donos=0
+19:30:06 ok fps=? el=? mortos=0 carimb=0 semdono=0 maxno=0 donos=0
+19:30:07 ok fps=58 el=? mortos=0 carimb=0 semdono=0 maxno=0 donos=0 ins=0/s jnt=3 det=0 orph=0

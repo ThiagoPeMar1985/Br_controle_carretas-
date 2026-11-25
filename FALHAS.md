@@ -103,6 +103,40 @@ descriptor (métodos de classe registrados por RVA par).
 Guarda em uso: só escrever se o valor atual está em 0.3..2.3 (evita tocar
 objeto reciclado/de outra classe na lista).
 
+## 4b. RESOLVIDO — suspensão afunda no 0 e trava o resgate (24-11)
+
+- A régua 0..100 escrevia `stored/50` direto: régua no 0 = `0.0` escrito,
+  ABAIXO do piso real do campo (0.5) — a carreta atravessava o chão.
+- A guarda `f < 0.3f || f > 2.3f` olhava o valor ATUAL: com f=0.0 ela
+  recusava qualquer escrita — a carreta afundada ficava presa pra sempre.
+- Reparo: a régua mapeia os limites reais do jogo — 0→0.5, 50→1.0,
+  100→2.0. A guarda passou a rejeitar só valor insano (não-finito, <0,
+  >4) — carreta afundada volta a subir pela régua.
+
+## 4c. RESOLVIDO — trava do "padrão nativo" matou eixos + suspensão (24-11)
+
+- Sintoma: "Sem dados de eixo" nas 3 carretas e "Salvar altura" morto
+  (suspw+0). Leitura ao vivo provou TUDO no lugar: controlador `+0x6C8`,
+  flags `chassi+0x5C8/+0x5D0` = `01 00`, suspensão `+0x4D4` = 1.0.
+- Causa: `lift_axles_update` + `suspension_update` dentro de
+  `!cargo_freeze() && !native_pattern()` — native_pattern é verdadeiro no
+  estado normal de jogo (tudo engatado), então as features nunca rodavam.
+  A trava foi criada pra vigia de corrente, não pra feature.
+- Reparo: o gate ficou só `!cargo_freeze()`.
+- LIÇÃO: o scan linear do .text morre no primeiro byte inválido —
+  "zero referências a offset X" por esse método NÃO prova campo morto.
+  Só per-function ou leitura ao vivo.
+
+## 4d. RESOLVIDO — churn de escrita por frame nos eixos (24-11)
+
+- Depois do reparo 4c, o loop de eixos das carretas rodava no estado
+  normal — e reescrevia `flags[eixo]` + `controlador+0x38` TODO FRAME sem
+  checar se mudou (a seção do cavalo já escrevia só na diferença).
+- Reparo: writes de flags/máscara dentro de `selection != applied_mask`
+  — escrita única no evento (clique), zero escrita em frame parado.
+  Ordem do usuário: o jogo recebe a decisão quando ele decide, nunca por
+  frame.
+
 ## 5. Causa raiz do crash de ciclo — FECHADA
 
 A amostragem ficou obsoleta: a causa foi provada por disassembly + log
@@ -1481,3 +1515,41 @@ Log: ins chegou a ~3000/s sustentado, upd=237ms/s, fps=8.
   (joint==nullptr). Re-chain em carreta engatada removido.
 - Limpeza nativa de lanes (vfunc5) revertida por suspeita de
   corrida equivalente na lista de obstaculos.
+
+### Corrupcao de heap no desatrelamento (0xC0000374) — RESOLVIDO
+- Sintoma: crash no desengate, WER acusando corrupcao de heap em
+  ntdll - o estouro vinha segundos depois da escrita errada, entao o
+  tracer nunca via a falha nascer.
+- Causa raiz: escritas do plugin em vetores de lane do jogo feitas
+  NA THREAD DE RENDER (prune_lane_containers: memmove + *count +
+  carimbos el+0x88) correndo contra a thread de SIM rebuildando os
+  mesmos vetores (tempestade ins=722/s). Ponteiro de array lido ->
+  jogo realoca e libera -> memmove cai no bloco morto -> free-list
+  corrompida. readable_ptr/__try sao inuteis contra heap liberado
+  (pagina continua mapeada) - o defeito era estrutural, nao azar.
+- Agravante: lane_kill_owner em carreta engatada matava registros
+  que o jogo re-criava = guerra + churn de FPS antes do crash.
+- Licao: proteger com checagem de mapeamento nao basta para
+  estruturas alheias - heap liberado passa em toda checagem e a
+  escrita corrompe em silencio. Mutacao de container do jogo so e
+  segura DENTRO do hook (serializado com o dono) e com prova de vida
+  do objeto alvo (vtable em faixa do exe antes de escrever).
+- Correcao: zero escrita em estruturas de lane fora dos hooks. Nos
+  hooks: carimbo unico atomico el+0x88=dono-falso, so apos validar
+  el+0x00 como vtable do exe. Funcoes mortas: prune_lane_containers,
+  lane_cap_mark, lane_kill_owner, lane_dead_pending, lane_owner_refs.
+
+### FPS ancorado pela populacao de obstaculos de lane — SEM SOLUCAO
+- Correlacao medida duas vezes (documento antigo + sessao de hoje):
+  el=0 -> 160fps, el~40 -> ~50fps, el~80 -> ~20fps. Os elementos sao
+  registros vivos e legitimos do jogo - o custo e da propria iteracao
+  nativa sobre listas que so esvaziam na destruicao do no.
+- TENTADO E REVERTIDO (19:23, crash 0xC0000025): teto de 24 chamando a
+  remocao nativa (vfunc5) dentro do hook do insert. A lista natural do
+  no carrega ~70 elementos; o wipe zerava, o jogo re-registrava tudo,
+  passava de 24 de novo = ciclo infinito apaga/re-registra (medido:
+  ins=1166/s, 203 elementos tipo=0xFFF). Crashou no meio de
+  desatrelar T2,T1,T0 (det=2 no ultimo health).
+- Licao definitiva: QUALQUER remocao em massa de obstaculos de lane -
+  nossa ou da funcao nativa do jogo - vira guerra contra o re-registro.
+  A populacao viva e custo inerente do jogo; nao se toca nela.

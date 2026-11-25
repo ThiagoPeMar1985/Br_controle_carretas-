@@ -105,13 +105,13 @@ namespace br_carretas
 
         for ( void* t = trailer; t != nullptr; )
         {
-            mark_detached( t );
-            mark_plugin_detached( t );
             prism::offsets::field< uint8_t >( t, 0x25A ) = 0;
             void* next = prism::offsets::field< void* >( t, prism::offsets::trailer_slave );
             if ( next == t || next == trailer ) break;
             t = ( next != nullptr && joint( next ) != nullptr ) ? next : nullptr;
         }
+        mark_detached( trailer );
+        mark_plugin_detached( trailer );
         const int di = canon_index_of( trailer );
         if ( di >= 0 ) detached_idx[ di ] = true;
 

@@ -596,8 +596,8 @@ namespace br_carretas
         return EXCEPTION_EXECUTE_HANDLER;
     }
 
-    // estrutura do record: elos da lista de estacionados do jogo
-    // (next/prev/indice) - a ordem REAL que os claims precisam seguir
+    // 302 - elos da lista de estacionados do jogo (next/prev/indice) -
+    // a ordem REAL que os claims precisam seguir
     void dump_record_links()
     {
         for ( uint32_t i = 0; i < max_trailers && canon[ i ] != nullptr; ++i )
@@ -657,6 +657,7 @@ namespace br_carretas
         }
     }
 
+    // 303 - despeja game_actor, caminhão e carretas no memdump (uma vez)
     void memdump_world()
     {
         static bool done = false;
@@ -826,179 +827,88 @@ namespace br_carretas
         return dead;
     }
 
-    constexpr uint64_t lane_el_cap = 24;
-
-    // 289 - marca os elementos mais distantes como mortos quando a lista estoura
-    void lane_cap_mark( void** elements, const uint64_t n )
+    // 134 - algum elemento morto ainda registrado nos containers rastreados
+    bool lane_any_dead()
     {
-        const uint64_t to_kill = n - lane_el_cap;
-        for ( uint64_t t = 0; t < to_kill; ++t )
+        for ( auto& c : lane_containers )
         {
-            float worst = -1.0e30f;
-            uint64_t wi = ~0ull;
-            for ( uint64_t i = 0; i < n; ++i )
-            {
-                void* el = elements[ i ];
-                if ( el == nullptr || !readable_ptr( el ) ) continue;
-                if ( *reinterpret_cast< void** >( static_cast< uint8_t* >( el ) + 0x88 ) ==
-                     lane_dead_owner ) continue;
-                const float p = *reinterpret_cast< float* >(
-                    static_cast< uint8_t* >( el ) + 0x90 );
-                if ( p > worst ) { worst = p; wi = i; }
-            }
-            if ( wi == ~0ull ) return;
-            *reinterpret_cast< void** >( static_cast< uint8_t* >( elements[ wi ] ) + 0x88 ) =
-                lane_dead_owner;
-        }
-    }
-
-    // 134 - poda elementos mortos dos containers de lane
-    void prune_lane_containers()
-    {
-        static uint32_t ci = 0;
-        static uint64_t ei = ~0ull;
-        uint32_t budget = lane_prune_frames > 0 ? 2048 : 512;
-        while ( budget > 0 && ci < 128 )
-        {
-            void*& c = lane_containers[ ci ];
             if ( c == nullptr || !readable_ptr( c ) ||
-                 !readable_ptr( static_cast< uint8_t* >( c ) + 0x10 ) )
-            {
-                c = nullptr;
-                ++ci;
-                ei = ~0ull;
-                continue;
-            }
-            void** elements = *reinterpret_cast< void*** >( static_cast< uint8_t* >( c ) + 8 );
+                 !readable_ptr( static_cast< uint8_t* >( c ) + 0x10 ) ) continue;
+            void** elements_arr = *reinterpret_cast< void*** >( static_cast< uint8_t* >( c ) + 8 );
             auto* count = reinterpret_cast< uint64_t* >( static_cast< uint8_t* >( c ) + 0x10 );
-            if ( elements == nullptr || !readable_ptr( elements ) ||
-                 *count == 0 || *count > 0x10000 )
-            {
-                c = nullptr;
-                ++ci;
-                ei = ~0ull;
-                continue;
-            }
-            bool done = false;
+            if ( elements_arr == nullptr || !readable_ptr( elements_arr ) ||
+                 *count == 0 || *count > 0x10000 ) continue;
             __try
             {
-                uint64_t n = *count;
-                if ( n > lane_el_cap ) lane_cap_mark( elements, n );
-                if ( ei == ~0ull || ei >= n ) ei = n - 1;
-                while ( budget > 0 )
-                {
-                    --budget;
-                    void* el = elements[ ei ];
-                    if ( lane_element_dead( el ) )
-                    {
-                        if ( el != nullptr && readable_ptr( el ) )
-                            *reinterpret_cast< void** >( static_cast< uint8_t* >( el ) + 0x88 ) =
-                                lane_dead_owner;
-                        std::memmove( &elements[ ei ], &elements[ ei + 1 ],
-                                      ( n - ei - 1 ) * sizeof( void* ) );
-                        --n;
-                        *count = n;
-
-                        if ( n > 0 ) elements[ n ] = elements[ n - 1 ];
-                        if ( n == 0 || ei >= n ) { done = true; break; }
-
-                    }
-                    else if ( ei == 0 ) { done = true; break; }
-                    else { --ei; }
-                }
-            }
-            __except ( EXCEPTION_EXECUTE_HANDLER )
-            {
-
-                c = nullptr;
-                ++ci;
-                ei = ~0ull;
-                continue;
-            }
-            if ( done )
-            {
-                ++ci;
-                ei = ~0ull;
-            }
-        }
-        if ( ci >= 128 ) { ci = 0; ei = ~0ull; }
-        auto sweep = []( void* obj )
-        {
-            if ( obj == nullptr || !readable_ptr(
-                     static_cast< uint8_t* >( obj ) + 0x28 ) ) return;
-            __try
-            {
-                void** elements = *reinterpret_cast< void*** >(
-                    static_cast< uint8_t* >( obj ) + 0x20 );
-                auto* count = reinterpret_cast< uint64_t* >(
-                    static_cast< uint8_t* >( obj ) + 0x28 );
-                if ( elements == nullptr || !readable_ptr( elements ) ||
-                     *count > 0x10000 ) return;
-                uint64_t n = *count;
-                if ( n > lane_el_cap ) lane_cap_mark( elements, n );
-                for ( uint64_t i = 0; i < n; ++i )
-                {
-                    void* el = elements[ i ];
-                    if ( el == nullptr || !lane_element_dead( el ) ) continue;
-                    if ( readable_ptr( el ) )
-                        *reinterpret_cast< void** >( static_cast< uint8_t* >( el ) + 0x88 ) =
-                            lane_dead_owner;
-                    std::memmove( &elements[ i ], &elements[ i + 1 ],
-                                  ( n - i - 1 ) * sizeof( void* ) );
-                    --n;
-                    *count = n;
-                    --i;
-                }
+                for ( uint64_t i = 0; i < *count; ++i )
+                    if ( lane_element_dead( elements_arr[ i ] ) ) return true;
             }
             __except ( EXCEPTION_EXECUTE_HANDLER ) {}
-        };
-        for ( auto& c : lane_containers ) sweep( c );
-        for ( auto& nd : lane_nodes ) sweep( nd );
-    }
-
-    // 276 - o objeto-dono referencia a carreta em algum campo (até 768 bytes)
-    bool lane_owner_refs( void* own, void* trailer )
-    {
-        if ( own == trailer ) return true;
-        if ( !readable_ptr( own ) ) return false;
-        const auto* lo = static_cast< uint8_t* >( trailer );
-        void* subs[ 4 ] = {};
-        __try
-        {
-            subs[ 0 ] = prism::offsets::field< void* >( trailer, 0x150 );
-            subs[ 1 ] = prism::offsets::field< void* >( trailer, 0xA0 );
-            subs[ 2 ] = prism::offsets::field< void* >( trailer, 0x1158 );
         }
-        __except ( EXCEPTION_EXECUTE_HANDLER ) {}
-        __try
-        {
-            void** f = reinterpret_cast< void** >( own );
-            for ( int i = 0; i < 96; ++i )
-            {
-                const auto* p = static_cast< uint8_t* >( f[ i ] );
-                bool hit = p >= lo && p < lo + 0x2800;
-                for ( int s = 0; !hit && s < 3; ++s )
-                {
-                    hit = subs[ s ] != nullptr && f[ i ] == subs[ s ];
-                }
-                if ( hit )
-                {
-                    static int ref_logged = 0;
-                    if ( ref_logged++ < 6 )
-                    {
-                        CCore::g_instance->info(
-                            "lane owner {:p} referencia {:p} em +0x{:X} (ptr +0x{:X})",
-                            own, trailer, i * 8, p - lo );
-                    }
-                    return true;
-                }
-            }
-        }
-        __except ( EXCEPTION_EXECUTE_HANDLER ) {}
         return false;
     }
 
-    // 275 - censo dos elementos de lane-obstacle: total, donos únicos, ligados a canon
+    // 307 - carimba dono-falso nos elementos mortos dos containers rastreados:
+    // leitores nativos sem gancho deixam de achar dono nulo. sem VirtualQuery -
+    // a leitura protegida e mais barata que perguntar ao kernel todo frame
+    void lane_sweep_containers()
+    {
+        for ( auto& c : lane_containers )
+        {
+            if ( c == nullptr ) continue;
+            __try
+            {
+                void** arr = *reinterpret_cast< void*** >( static_cast< uint8_t* >( c ) + 8 );
+                auto* cnt = reinterpret_cast< uint64_t* >( static_cast< uint8_t* >( c ) + 0x10 );
+                if ( arr == nullptr || cnt == nullptr ) continue;
+                uint64_t n = *cnt;
+                if ( n == 0 || n > 0x10000 ) continue;
+                for ( uint64_t k = 0; k < n; ++k )
+                {
+                    void* el = arr[ k ];
+                    if ( el == nullptr ) continue;
+                    bool remove = false;
+                    const char* why = "morto";
+                    __try
+                    {
+                        const uint64_t vt = *reinterpret_cast< const uint64_t* >( el );
+                        if ( vt < exe_base() || vt >= exe_base() + 0x4000000 )
+                        {
+                            const uint64_t rvt = *reinterpret_cast< const uint64_t* >(
+                                static_cast< uint8_t* >( el ) + 0x80 );
+                            if ( rvt >= exe_base() && rvt < exe_base() + 0x4000000 )
+                            {
+                                remove = true;
+                                why = "fantasma";
+                            }
+                        }
+                        else if ( *reinterpret_cast< void** >(
+                                static_cast< uint8_t* >( el ) + 0x88 ) != lane_dead_owner &&
+                            lane_element_dead( el ) )
+                        {
+                            *reinterpret_cast< void** >( static_cast< uint8_t* >( el ) + 0x88 ) =
+                                lane_dead_owner;
+                            CCore::g_instance->info(
+                                "lane morto carimbado: el {:p} no container {:p}", el, c );
+                        }
+                    }
+                    __except ( EXCEPTION_EXECUTE_HANDLER ) { remove = true; }
+                    if ( remove )
+                    {
+                        std::memmove( arr + k, arr + k + 1, ( n - k - 1 ) * sizeof( void* ) );
+                        arr[ n - 1 ] = nullptr;
+                        *cnt = --n;
+                        --k;
+                        CCore::g_instance->info(
+                            "lane {} removido: el {:p} do container {:p}", why, el, c );
+                    }
+                }
+            }
+            __except ( EXCEPTION_EXECUTE_HANDLER ) { c = nullptr; }
+        }
+    }
+
+    // 292 - censo dos elementos de lane-obstacle: total, donos únicos, ligados a canon
     void lane_census( int& elements, int& owners, int& ours )
     {
         elements = owners = ours = 0;
@@ -1140,7 +1050,7 @@ namespace br_carretas
         }
     }
 
-    // 287 - o ponteiro referencia uma carreta canon (corpo ou sub-objetos)
+    // 293 - o ponteiro referencia uma carreta canon (corpo ou sub-objetos)
     int lane_ptr_canon( const void* p )
     {
         if ( p == nullptr ) return -1;
@@ -1246,70 +1156,7 @@ namespace br_carretas
         CCore::g_instance->info( "lane dump: {} elementos varridos p/ trailer {:p}", idx, trl );
     }
 
-    // 274 - mata elementos de lane-obstacle cujo dono é o objeto dado ou o contém
-    int lane_kill_owner( void* owner )
-    {
-        if ( owner == nullptr ) return 0;
-        int killed = 0;
-        for ( auto& c : lane_containers )
-        {
-            if ( c == nullptr || !readable_ptr( c ) ||
-                 !readable_ptr( static_cast< uint8_t* >( c ) + 0x10 ) ) continue;
-            void** elements = *reinterpret_cast< void*** >( static_cast< uint8_t* >( c ) + 8 );
-            auto* count = reinterpret_cast< uint64_t* >( static_cast< uint8_t* >( c ) + 0x10 );
-            if ( elements == nullptr || !readable_ptr( elements ) ||
-                 *count == 0 || *count > 0x10000 ) continue;
-            __try
-            {
-                const uint64_t n = *count;
-                for ( uint64_t i = 0; i < n; ++i )
-                {
-                    void* el = elements[ i ];
-                    if ( el == nullptr || !readable_ptr( el ) ) continue;
-                    void* own = *reinterpret_cast< void** >( static_cast< uint8_t* >( el ) + 0x88 );
-                    if ( lane_owner_refs( own, owner ) )
-                    {
-                        *reinterpret_cast< void** >( static_cast< uint8_t* >( el ) + 0x88 ) =
-                            lane_dead_owner;
-                        ++killed;
-                    }
-                }
-            }
-            __except ( EXCEPTION_EXECUTE_HANDLER ) {}
-        }
-        return killed;
-    }
-
-    // conta elementos mortos ainda linkados nas estruturas rastreadas
-    int lane_dead_pending()
-    {
-        int dead = 0;
-        auto count_dead = [ & ]( void* obj, uintptr_t arr_off, uintptr_t cnt_off )
-        {
-            if ( obj == nullptr || !readable_ptr(
-                     static_cast< uint8_t* >( obj ) + cnt_off ) ) return;
-            __try
-            {
-                void** arr = *reinterpret_cast< void*** >(
-                    static_cast< uint8_t* >( obj ) + arr_off );
-                auto* cnt = reinterpret_cast< uint64_t* >(
-                    static_cast< uint8_t* >( obj ) + cnt_off );
-                if ( arr == nullptr || !readable_ptr( arr ) ||
-                     *cnt == 0 || *cnt > 0x10000 ) return;
-                const uint64_t n = *cnt;
-                for ( uint64_t i = 0; i < n; ++i )
-                {
-                    if ( lane_element_dead( arr[ i ] ) ) ++dead;
-                }
-            }
-            __except ( EXCEPTION_EXECUTE_HANDLER ) {}
-        };
-        for ( auto& c : lane_containers ) count_dead( c, 8, 0x10 );
-        for ( auto& nd : lane_nodes ) count_dead( nd, 0x20, 0x28 );
-        return dead;
-    }
-
-    // 277 - registra o container {+8 array,+0x10 count} achado num handle de consulta
+    // 294 - registra o container {+8 array,+0x10 count} achado num handle de consulta
     void lane_track_container( void* c )
     {
         if ( c == nullptr ) return;
@@ -1323,7 +1170,7 @@ namespace br_carretas
         }
     }
 
-    // 278 - registra o nó {+0x20 array,+0x28 count} lido pela varredura
+    // 295 - registra o nó {+0x20 array,+0x28 count} lido pela varredura
     void lane_track_node( void* n )
     {
         if ( n == nullptr ) return;
@@ -1342,7 +1189,7 @@ namespace br_carretas
         __except ( EXCEPTION_EXECUTE_HANDLER ) {}
     }
 
-    // registra o container de elementos do nó para a poda e o kill por dono
+    // 296 - registra o nó e o container dele para a poda
     void lane_register_node( void* node )
     {
         lane_node_cache_t* free_slot = nullptr;
@@ -1375,7 +1222,7 @@ namespace br_carretas
         }
     }
 
-    // zera o tracking de lane — ponteiros ficam mortos após save-load
+    // 297 - zera o tracking de lane — ponteiros ficam mortos após save-load
     void lane_tracking_reset()
     {
         for ( auto& c : lane_containers ) c = nullptr;
@@ -1386,7 +1233,9 @@ namespace br_carretas
     }
 
     using lane_obstacle_insert_fn = uint8_t __fastcall( void* /*node*/, void* /*link*/, float /*pos*/ );
-    // 135 - hook: sanitiza o container antes do insert nativo
+    // 135 - hook: sanitiza o container antes do insert nativo (o wipe por
+    // vfunc5 foi removido: zerar a lista dispara re-registro total do jogo =
+    // tempestade apaga/re-registra - a populacao viva e custo do jogo, nao nosso)
     uint8_t __fastcall hk_lane_obstacle_insert( void* node, void* link, float pos )
     {
         if ( !lane_guard_on.load( std::memory_order_acquire ) )
@@ -1478,7 +1327,7 @@ namespace br_carretas
     }
 
     using lane_obstacle_resolve_fn = void* __fastcall( void* /*handle*/ );
-    // 279 - hook: elemento morto vira o elemento-fantasma, e o container entra na poda
+    // 298 - hook: elemento morto vira o elemento-fantasma, e o container entra na poda
     void* __fastcall hk_lane_obstacle_resolve( void* handle )
     {
         if ( !lane_guard_on.load( std::memory_order_acquire ) )
@@ -1501,28 +1350,48 @@ namespace br_carretas
     }
 
     using lane_obstacle_scan_fn = void* __fastcall( void* /*node*/, uint32_t /*flags*/, float /*lo*/, float /*hi*/, float* /*out*/ );
-    // arranca elementos mortos do vetor do nó {+0x20 arr,+0x28 count}
+    // 299 - carimba dono-falso nos elementos mortos e arranca do vetor do nó
+    // os aposentados com registro embutido vivo (obstáculo fantasma)
     void lane_sanitize_node( void* node )
     {
         lane_track_node( node );
         void** arr = *reinterpret_cast< void*** >( static_cast< uint8_t* >( node ) + 0x20 );
         auto* cnt = reinterpret_cast< uint64_t* >( static_cast< uint8_t* >( node ) + 0x28 );
-        uint64_t n = ( arr != nullptr && cnt != nullptr ) ? *cnt : 0;
+        const uint64_t n = ( arr != nullptr && cnt != nullptr ) ? *cnt : 0;
         if ( arr == nullptr || n == 0 || n >= 0x10000 ) return;
-        for ( uint64_t k = n; k-- > 0; )
+        for ( uint64_t k = 0; k < n; ++k )
         {
             void* el = arr[ k ];
+            if ( el == nullptr || !readable_ptr( el ) ) continue;
+            const uint64_t vt = *reinterpret_cast< const uint64_t* >( el );
+            if ( vt < exe_base() || vt >= exe_base() + 0x4000000 )
+            {
+                __try
+                {
+                    const uint64_t rvt = *reinterpret_cast< const uint64_t* >(
+                        static_cast< uint8_t* >( el ) + 0x80 );
+                    if ( rvt >= exe_base() && rvt < exe_base() + 0x4000000 )
+                    {
+                        std::memmove( arr + k, arr + k + 1, ( n - k - 1 ) * sizeof( void* ) );
+                        arr[ n - 1 ] = nullptr;
+                        *cnt = n - 1;
+                        *reinterpret_cast< uint64_t* >(
+                            static_cast< uint8_t* >( node ) + 0x74 ) |= 9;
+                        CCore::g_instance->info(
+                            "lane fantasma removido: el {:p} do no {:p}", el, node );
+                        return;
+                    }
+                }
+                __except ( EXCEPTION_EXECUTE_HANDLER ) {}
+                continue;
+            }
             if ( !lane_element_dead( el ) ) continue;
-            if ( el != nullptr )
-                *reinterpret_cast< void** >( static_cast< uint8_t* >( el ) + 0x88 ) =
-                    lane_dead_owner;
-            std::memmove( arr + k, arr + k + 1, ( n - k - 1 ) * sizeof( void* ) );
-            --n;
+            *reinterpret_cast< void** >( static_cast< uint8_t* >( el ) + 0x88 ) =
+                lane_dead_owner;
         }
-        *cnt = n;
     }
 
-    // 280 - hook: arranca elementos mortos da lista do nó antes da varredura nativa
+    // 300 - hook: arranca elementos mortos da lista do nó antes da varredura nativa
     void* __fastcall hk_lane_obstacle_scan( void* node, uint32_t flags, float lo, float hi, float* out )
     {
         if ( !lane_guard_on.load( std::memory_order_acquire ) )
@@ -1534,7 +1403,7 @@ namespace br_carretas
         return lane_obstacle_scan_hook->get_original< lane_obstacle_scan_fn >()( node, flags, lo, hi, out );
     }
 
-    // 285 - hook: a consulta do obstáculo mais próximo lia dono sem checar nulo
+    // 301 - hook: a consulta do obstáculo mais próximo lia dono sem checar nulo
     void* __fastcall hk_lane_obstacle_query( void* node, uint32_t flags, float lo, float hi, float* out )
     {
         if ( !lane_guard_on.load( std::memory_order_acquire ) )
@@ -1600,6 +1469,192 @@ namespace br_carretas
         }
     }
 
+    // 304 - resolve RIP para o modulo dono do codigo (nome + offset interno)
+    const char* crash_module_of( uint64_t rip, uint64_t& out_off )
+    {
+        static char name[ 64 ] = {};
+        MEMORY_BASIC_INFORMATION mbi = {};
+        if ( VirtualQuery( reinterpret_cast< const void* >( rip ), &mbi, sizeof( mbi ) ) == 0 ||
+             mbi.AllocationBase == nullptr )
+        {
+            return nullptr;
+        }
+        char path[ MAX_PATH ] = {};
+        if ( GetModuleFileNameA( static_cast< HMODULE >( mbi.AllocationBase ), path, MAX_PATH ) == 0 )
+            return nullptr;
+        const char* base = path;
+        for ( const char* p = path; *p; ++p ) if ( *p == '\\' || *p == '/' ) base = p + 1;
+        const size_t n = strlen( base ) < sizeof( name ) - 1 ? strlen( base ) : sizeof( name ) - 1;
+        memcpy( name, base, n ); name[ n ] = 0;
+        out_off = rip - reinterpret_cast< uint64_t >( mbi.AllocationBase );
+        return name;
+    }
+
+    // 305 - abre o arquivo de crash uma vez e devolve o handle reutilizado
+    //       pelo gravador à prova de falhas
+    HANDLE crash_file_handle()
+    {
+        static HANDLE h = []() -> HANDLE
+        {
+            const char* profile = getenv( "USERPROFILE" );
+            std::string path = std::string( profile != nullptr ? profile : "." ) +
+                "\\Documents\\Euro Truck Simulator 2\\br_carretas_crash.txt";
+            HANDLE fh = CreateFileA( path.c_str(), FILE_APPEND_DATA,
+                FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_ALWAYS,
+                FILE_ATTRIBUTE_NORMAL, nullptr );
+            if ( fh != INVALID_HANDLE_VALUE && GetFileSize( fh, nullptr ) == 0 )
+            {
+                const char* hdr = "=== br_carretas crash dump ===\n";
+                DWORD wr = 0;
+                WriteFile( fh, hdr, static_cast< DWORD >( strlen( hdr ) ), &wr, nullptr );
+            }
+            return fh;
+        }();
+        return h;
+    }
+
+    struct crash_buf_t
+    {
+        char p[ 16384 ];
+        int n = 0;
+        void str( const char* s ) { while ( *s && n < static_cast< int >( sizeof( p ) ) - 2 ) p[ n++ ] = *s++; }
+        void digits( uint64_t v )
+        {
+            char t[ 18 ];
+            int i = 17;
+            t[ i ] = 0;
+            do { t[ --i ] = "0123456789ABCDEF"[ v & 0xF ]; v >>= 4; } while ( v );
+            str( t + i );
+        }
+        void hex( uint64_t v ) { str( "0x" ); digits( v ); }
+        void dec( uint64_t v )
+        {
+            char t[ 20 ];
+            int i = 19;
+            t[ i ] = 0;
+            do { t[ --i ] = static_cast< char >( '0' + v % 10 ); v /= 10; } while ( v );
+            str( t + i );
+        }
+        void flush( HANDLE h )
+        {
+            DWORD wr = 0;
+            WriteFile( h, p, static_cast< DWORD >( n ), &wr, nullptr );
+            n = 0;
+        }
+    };
+
+    // 236 - gravador de crash à prova de falhas: WriteFile puro, sem heap nem CRT;
+    //       um registro por falha única (rip+code), com registradores, objeto e pilha
+    void crash_dump_write( EXCEPTION_POINTERS* ep )
+    {
+        static crash_buf_t b = {};
+        const HANDLE h = crash_file_handle();
+        if ( h == INVALID_HANDLE_VALUE ) return;
+        const uint64_t rip = ep->ContextRecord != nullptr ? ep->ContextRecord->Rip : 0;
+        const uint64_t exe_base = reinterpret_cast< uint64_t >( GetModuleHandle( nullptr ) );
+        static uint64_t exe_end = 0;
+        static uint64_t dll_base = 0, dll_end = 0;
+        if ( exe_end == 0 )
+        {
+            const auto* dos = reinterpret_cast< const IMAGE_DOS_HEADER* >( exe_base );
+            const auto* nt = reinterpret_cast< const IMAGE_NT_HEADERS64* >( exe_base + dos->e_lfanew );
+            exe_end = exe_base + nt->OptionalHeader.SizeOfImage;
+            MEMORY_BASIC_INFORMATION mb = {};
+            if ( VirtualQuery( reinterpret_cast< const void* >( &crash_dump_write ), &mb, sizeof( mb ) ) != 0 )
+            {
+                dll_base = reinterpret_cast< uint64_t >( mb.AllocationBase );
+                MEMORY_BASIC_INFORMATION m2 = {};
+                uint64_t a = dll_base;
+                while ( VirtualQuery( reinterpret_cast< const void* >( a ), &m2, sizeof( m2 ) ) != 0 &&
+                        m2.AllocationBase == mb.AllocationBase ) a += m2.RegionSize;
+                dll_end = a;
+            }
+        }
+        b.str( "\n=== falha " ); b.hex( ep->ExceptionRecord->ExceptionCode );
+        b.str( " rip=" ); b.hex( rip );
+        uint64_t moff = 0;
+        if ( const char* mod = crash_module_of( rip, moff ) )
+        {
+            b.str( " (" ); b.str( mod ); b.str( "+0x" ); b.digits( moff ); b.str( ")" );
+        }
+        b.str( " tick=" ); b.dec( GetTickCount64() );
+        if ( const auto* fe = fn_index_lookup( rip ) )
+        {
+            b.str( " fn" ); b.dec( fe->num ); b.str( " " ); b.str( fe->name );
+        }
+        if ( ep->ExceptionRecord->NumberParameters > 1 )
+        {
+            b.str( "\n  acesso=" );
+            b.str( ep->ExceptionRecord->ExceptionInformation[ 0 ] == 0 ? "leitura" :
+                   ep->ExceptionRecord->ExceptionInformation[ 0 ] == 1 ? "escrita" : "execucao" );
+            b.str( " endereco=" ); b.hex( ep->ExceptionRecord->ExceptionInformation[ 1 ] );
+        }
+        if ( ep->ContextRecord != nullptr )
+        {
+            const CONTEXT* c = ep->ContextRecord;
+            const uint64_t regs[] = { c->Rax, c->Rbx, c->Rcx, c->Rdx, c->Rsi, c->Rdi,
+                                      c->Rbp, c->Rsp, c->R8, c->R9, c->R10, c->R11,
+                                      c->R12, c->R13, c->R14, c->R15 };
+            const char* rn[] = { "rax", "rbx", "rcx", "rdx", "rsi", "rdi",
+                                 "rbp", "rsp", "r8", "r9", "r10", "r11",
+                                 "r12", "r13", "r14", "r15" };
+            b.str( "\n  regs:" );
+            for ( int i = 0; i < 16; ++i )
+            {
+                b.str( " " ); b.str( rn[ i ] ); b.str( "=" ); b.hex( regs[ i ] );
+            }
+            void* objs[ 4 ] = { reinterpret_cast< void* >( c->Rcx ),
+                                reinterpret_cast< void* >( c->Rbx ),
+                                reinterpret_cast< void* >( c->Rdi ),
+                                reinterpret_cast< void* >( c->R11 ) };
+            const char* on[] = { "rcx", "rbx", "rdi", "r11" };
+            for ( int o = 0; o < 4; ++o )
+            {
+                void* node = objs[ o ];
+                bool dup = false;
+                for ( int d = 0; d < o; ++d ) if ( objs[ d ] == node ) dup = true;
+                if ( dup ) continue;
+                __try
+                {
+                    if ( !readable_ptr( node ) ) continue;
+                    b.str( "\n  " ); b.str( on[ o ] ); b.str( " dump:" );
+                    const uint64_t* q = static_cast< const uint64_t* >( node );
+                    for ( int k = 0; k < 16; ++k )
+                    {
+                        b.str( " +0x" ); b.digits( k * 8 );
+                        b.str( "=" ); b.hex( q[ k ] );
+                    }
+                }
+                __except ( EXCEPTION_EXECUTE_HANDLER ) {}
+            }
+            __try
+            {
+                b.str( "\n  pilha:" );
+                const auto* sp = reinterpret_cast< const uint64_t* >( c->Rsp );
+                int n = 0;
+                for ( int k = 0; k < 128 && n < 24; ++k )
+                {
+                    const uint64_t v = sp[ k ];
+                    if ( v >= exe_base && v < exe_end )
+                    {
+                        b.str( " [rsp+" ); b.dec( k * 8 ); b.str( "]=exe+0x" );
+                        b.digits( v - exe_base );
+                        ++n;
+                    }
+                    else if ( v >= dll_base && v < dll_end )
+                    {
+                        b.str( " [rsp+" ); b.dec( k * 8 ); b.str( "]=dll+0x" );
+                        b.digits( v - dll_base );
+                        ++n;
+                    }
+                }
+            }
+            __except ( EXCEPTION_EXECUTE_HANDLER ) {}
+        }
+        b.str( "\n" );
+        b.flush( h );
+    }
+
     // 235 - tratador de exceções: loga código, RIP, registradores e a função numerada
     LONG WINAPI crash_tracer( EXCEPTION_POINTERS* ep )
     {
@@ -1631,6 +1686,28 @@ namespace br_carretas
             return EXCEPTION_CONTINUE_EXECUTION;
         }
 
+        static volatile LONG crash_seen_n = 0;
+        static uint64_t crash_seen_rip[ 24 ] = {};
+        static DWORD crash_seen_code[ 24 ] = {};
+        bool new_fault = true;
+        for ( LONG i = 0; i < crash_seen_n && i < 24; ++i )
+        {
+            if ( crash_seen_rip[ i ] == rip && crash_seen_code[ i ] == code )
+            {
+                new_fault = false;
+                break;
+            }
+        }
+        if ( new_fault )
+        {
+            const LONG s = InterlockedIncrement( &crash_seen_n ) - 1;
+            if ( s < 24 ) { crash_seen_rip[ s ] = rip; crash_seen_code[ s ] = code; }
+            else new_fault = false;
+        }
+        if ( !new_fault ) return EXCEPTION_CONTINUE_SEARCH;
+
+        crash_dump_write( ep );
+
         if ( const auto* fe = fn_index_lookup( rip ) )
         {
             CCore::g_instance->warning( "falha 0x{:X} na função {} ({}) +0x{:X}",
@@ -1638,7 +1715,11 @@ namespace br_carretas
         }
         else
         {
-            CCore::g_instance->warning( "falha 0x{:X} fora do plugin em 0x{:X}", code, rip );
+            uint64_t moff = 0;
+            if ( const char* mod = crash_module_of( rip, moff ) )
+                CCore::g_instance->warning( "falha 0x{:X} em {} +0x{:X} (rip=0x{:X})", code, mod, moff, rip );
+            else
+                CCore::g_instance->warning( "falha 0x{:X} fora do plugin em 0x{:X}", code, rip );
         }
 
         if ( !settings::g_settings.debug_logs ) return EXCEPTION_CONTINUE_SEARCH;
@@ -1730,6 +1811,7 @@ namespace br_carretas
         static PVOID h = AddVectoredExceptionHandler( 1, crash_tracer );
         if ( h != nullptr )
         {
+            crash_file_handle();
             CCore::g_instance->info( "crash tracer installed" );
         }
     }
@@ -1770,6 +1852,8 @@ namespace br_carretas
             }
         }
         if ( rva >= 0x927C60 && rva < 0x927CBF ) return &purecall_fake;
+        if ( rva >= 0x1290000 && rva < 0x1296000 ) return &purecall_fake;
+        if ( rva >= 0x12B0000 && rva < 0x12C0000 ) return &purecall_fake;
         return nullptr;
     }
 
@@ -1912,15 +1996,27 @@ namespace br_carretas
                 continue;
             }
 
-            if ( anchor_delay[ i ] < 7 )
-            {
-                ++anchor_delay[ i ];
-                continue;
-            }
             if ( !anchor_valid[ i ] )
             {
-                anchor_valid[ i ] = hook_world( t, anchor_xform[ i ] );
-                anchor_home[ i ] = anchor_xform[ i ];
+                hook_xform_t xf{};
+                if ( !hook_world( t, xf ) ) continue;
+                ++anchor_delay[ i ];
+                if ( anchor_delay[ i ] < 600 )
+                {
+                    const float hx = xf.pos.x - anchor_home[ i ].pos.x;
+                    const float hy = xf.pos.y - anchor_home[ i ].pos.y;
+                    const float hz = xf.pos.z - anchor_home[ i ].pos.z;
+                    if ( hx * hx + hy * hy + hz * hz > 0.002f * 0.002f )
+                    {
+                        anchor_home[ i ] = xf;
+                        anchor_settle[ i ] = 0;
+                        continue;
+                    }
+                    if ( anchor_delay[ i ] < 7 || ++anchor_settle[ i ] < 3 ) continue;
+                }
+                anchor_valid[ i ] = true;
+                anchor_xform[ i ] = xf;
+                anchor_home[ i ] = xf;
                 anchor_settle[ i ] = 0;
                 anchor_age[ i ] = 0;
                 anchor_settling[ i ] = true;
@@ -2072,23 +2168,32 @@ namespace br_carretas
             fn_index_add( fn_addr_of( &find_trailer_provider ), 127, "find_trailer_provider" );
             fn_index_add( fn_addr_of( &cache_trailer_actor ), 128, "cache_trailer_actor" );
             fn_index_add( fn_addr_of( &factory_fault_filter ), 129, "factory_fault_filter" );
+            fn_index_add( fn_addr_of( &dump_record_links ), 302, "dump_record_links" );
+            fn_index_add( fn_addr_of( &memdump_write_obj ), 290, "memdump_write_obj" );
+            fn_index_add( fn_addr_of( &memdump_world ), 303, "memdump_world" );
             fn_index_add( fn_addr_of( &dump_native_registry ), 130, "dump_native_registry" );
             fn_index_add( fn_addr_of( &parked_record_listed ), 131, "parked_record_listed" );
             fn_index_add( fn_addr_of( &parked_record_unlist ), 132, "parked_record_unlist" );
             fn_index_add( fn_addr_of( &lane_element_dead ), 133, "lane_element_dead" );
-            fn_index_add( fn_addr_of( &prune_lane_containers ), 134, "prune_lane_containers" );
+            fn_index_add( fn_addr_of( &lane_any_dead ), 134, "lane_any_dead" );
+            fn_index_add( fn_addr_of( &lane_census ), 292, "lane_census" );
+            fn_index_add( fn_addr_of( &lane_ptr_canon ), 293, "lane_ptr_canon" );
+            fn_index_add( fn_addr_of( &lane_dump_refs ), 288, "lane_dump_refs" );
+            fn_index_add( fn_addr_of( &lane_track_container ), 294, "lane_track_container" );
+            fn_index_add( fn_addr_of( &lane_track_node ), 295, "lane_track_node" );
+            fn_index_add( fn_addr_of( &lane_register_node ), 296, "lane_register_node" );
+            fn_index_add( fn_addr_of( &lane_tracking_reset ), 297, "lane_tracking_reset" );
             fn_index_add( fn_addr_of( &hk_lane_obstacle_insert ), 135, "hk_lane_obstacle_insert" );
-            fn_index_add( fn_addr_of( &lane_kill_owner ), 274, "lane_kill_owner" );
-            fn_index_add( fn_addr_of( &lane_census ), 275, "lane_census" );
-            fn_index_add( fn_addr_of( &lane_owner_refs ), 276, "lane_owner_refs" );
-            fn_index_add( fn_addr_of( &lane_track_container ), 277, "lane_track_container" );
-            fn_index_add( fn_addr_of( &lane_track_node ), 278, "lane_track_node" );
-            fn_index_add( fn_addr_of( &hk_lane_obstacle_resolve ), 279, "hk_lane_obstacle_resolve" );
-            fn_index_add( fn_addr_of( &hk_lane_obstacle_scan ), 280, "hk_lane_obstacle_scan" );
+            fn_index_add( fn_addr_of( &hk_lane_obstacle_resolve ), 298, "hk_lane_obstacle_resolve" );
+            fn_index_add( fn_addr_of( &lane_sweep_containers ), 307, "lane_sweep_containers" );
+            fn_index_add( fn_addr_of( &lane_sanitize_node ), 299, "lane_sanitize_node" );
+            fn_index_add( fn_addr_of( &hk_lane_obstacle_scan ), 300, "hk_lane_obstacle_scan" );
+            fn_index_add( fn_addr_of( &hk_lane_obstacle_query ), 301, "hk_lane_obstacle_query" );
             fn_index_add( fn_addr_of( &hk_lane_obstacle_sort ), 281, "hk_lane_obstacle_sort" );
-            fn_index_add( fn_addr_of( &lane_sanitize_node ), 286, "lane_sanitize_node" );
-            fn_index_add( fn_addr_of( &hk_lane_obstacle_query ), 285, "hk_lane_obstacle_query" );
             fn_index_add( fn_addr_of( &native_park_detached ), 136, "native_park_detached" );
+            fn_index_add( fn_addr_of( &crash_module_of ), 304, "crash_module_of" );
+            fn_index_add( fn_addr_of( &crash_file_handle ), 305, "crash_file_handle" );
+            fn_index_add( fn_addr_of( &crash_dump_write ), 236, "crash_dump_write" );
             fn_index_add( fn_addr_of( &crash_tracer ), 235, "crash_tracer" );
             fn_index_add( fn_addr_of( &install_crash_tracer ), 137, "install_crash_tracer" );
             fn_index_add( fn_addr_of( &purecall_null_vfunc ), 138, "purecall_null_vfunc" );

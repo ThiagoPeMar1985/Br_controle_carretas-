@@ -21,6 +21,7 @@ namespace br_carretas
     uint64_t last_tick_ms = 0;
     uint64_t canon_dead_since = 0;
     bool reload_detached[ max_trailers ] = {};
+    bool reload_ok[ max_trailers ] = {};
     hook_xform_t reload_xf[ max_trailers ] = {};
     uint64_t reload_pending_ms = 0;
 
@@ -129,8 +130,9 @@ namespace br_carretas
                     reload_pending_ms = now_ms;
                     for ( uint32_t i = 0; i < max_trailers; ++i )
                     {
+                        reload_ok[ i ] = hold_ok[ i ];
                         reload_detached[ i ] = hold_ok[ i ] && !hold_jointed[ i ];
-                        if ( reload_detached[ i ] ) reload_xf[ i ] = hold_xf[ i ];
+                        reload_xf[ i ] = hold_xf[ i ];
                     }
                     CCore::g_instance->info( "cargo respawn: parked layout held across world reload" );
                 }
@@ -209,21 +211,47 @@ namespace br_carretas
             {
                 reload_pending_ms = 0;
                 for ( auto& f : reload_detached ) f = false;
+                for ( auto& f : reload_ok ) f = false;
             }
             else if ( canon_age >= 90 )
             {
                 reload_pending_ms = 0;
+                bool in_sec = false;
                 for ( uint32_t i = 0; i < max_trailers; ++i )
                 {
-                    if ( !reload_detached[ i ] ) continue;
-                    reload_detached[ i ] = false;
+                    if ( reload_detached[ i ] )
+                    {
+                        reload_detached[ i ] = false;
+                        void* t = canon[ i ];
+                        in_sec = t != nullptr && is_trailer_obj( t );
+                        if ( !in_sec ) continue;
+                        detached_idx[ i ] = true;
+                        parked_xform[ i ] = reload_xf[ i ];
+                        parked_xform_valid[ i ] = true;
+                        carry_hold[ i ] = true;
+                        carry_brake_frames = 900;
+                        continue;
+                    }
+                    if ( !in_sec ) continue;
                     void* t = canon[ i ];
-                    if ( t == nullptr || !is_trailer_obj( t ) ) continue;
-                    detached_idx[ i ] = true;
-                    parked_xform[ i ] = reload_xf[ i ];
-                    parked_xform_valid[ i ] = true;
-                    carry_hold[ i ] = true;
-                    carry_brake_frames = 900;
+                    void* prev = canon[ i - 1 ];
+                    bool linked = false;
+                    if ( t != nullptr && is_trailer_obj( t ) && prev != nullptr )
+                    {
+                        __try
+                        {
+                            linked =
+                                prism::offsets::field< void* >( t, prism::offsets::trailer_parent ) == prev ||
+                                prism::offsets::field< void* >( prev, prism::offsets::trailer_slave ) == t;
+                        }
+                        __except ( EXCEPTION_EXECUTE_HANDLER ) {}
+                    }
+                    in_sec = linked;
+                    if ( in_sec && reload_ok[ i ] )
+                    {
+                        parked_xform[ i ] = reload_xf[ i ];
+                        parked_xform_valid[ i ] = true;
+                    }
                 }
                 CCore::g_instance->info( "cargo respawn: parked slots re-marked after world reload" );
             }

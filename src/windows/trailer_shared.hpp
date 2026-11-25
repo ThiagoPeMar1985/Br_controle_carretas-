@@ -373,6 +373,8 @@ namespace br_carretas
     }
 
     inline std::atomic< bool > lane_guard_on{ false };
+
+    inline uint64_t pp_count = 0, pp_gap_tsc = 0, pp_in_tsc = 0;
     extern uint32_t lane_prune_frames;
 
     // ponto único de arm - checkbox desligado nunca arma a guarda
@@ -555,6 +557,7 @@ namespace br_carretas
     alignas( 64 ) inline uint64_t sim_heartbeat = 0;
     alignas( 64 ) inline uint64_t sim_heartbeat_seen = 0;
     alignas( 64 ) inline uint32_t sim_dead_frames = 0;
+    alignas( 64 ) inline bool sim_hb_expected = false;
     alignas( 64 ) inline uint64_t sim_thread_id = 0;
 
     // 050 - batimento do thread de física
@@ -564,11 +567,13 @@ namespace br_carretas
         ++sim_heartbeat;
     }
 
-    // 051 - vigia se o sim continua rodando
+    // 051 - vigia se o sim continua rodando. o batimento so e chamado por
+    // carreta engatada: sem engate (ou sem o gancho) o silencio e legitimo
     inline void watch_sim_heartbeat()
     {
         const uint64_t hb = sim_heartbeat;
         sim_dead_frames = ( hb == sim_heartbeat_seen ) ? sim_dead_frames + 1 : 0;
+        if ( !sim_hb_expected ) sim_dead_frames = 0;
         sim_heartbeat_seen = hb;
     }
 

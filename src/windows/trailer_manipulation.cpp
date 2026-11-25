@@ -60,6 +60,8 @@ namespace br_carretas
     {
         std::atomic< void* > owner{ nullptr };
         std::atomic< void* > child{ nullptr };
+        uint32_t losses = 0;
+        bool stopped = false;
     };
     synthetic_slave_edge synthetic_edges[ max_trailers ];
 
@@ -251,7 +253,27 @@ namespace br_carretas
         for ( auto& v : record_retry ) v = 0;
         for ( auto& v : record_quiet ) v = 0;
         for ( auto& v : record_mgr_logged ) v = false;
-        anchor_delay[ 0 ] = 0;
+        for ( auto& v : anchor_delay ) v = 0;
+        for ( auto& v : anchor_settle ) v = 0;
+        for ( auto& v : anchor_age ) v = 0;
+        for ( auto& v : anchor_fixes ) v = 0;
+        for ( auto& v : anchor_prev_slave ) v = nullptr;
+        for ( auto& v : anchor_prev_slave_j ) v = false;
+        for ( auto& v : watch_frames ) v = 0;
+        for ( auto& v : watch_pin_valid ) v = false;
+        for ( auto& v : carry_park ) v = 0;
+        for ( auto& v : rejoined_frames ) v = 0;
+        for ( auto& v : tp_snap_ok ) v = false;
+        for ( auto& g : ghost_watch ) g = {};
+        for ( auto& a : trailer_actors ) a = {};
+        tp_n = 0;
+        tp_active = false;
+        tp_cooldown = 0;
+        tp_block_watch = 0;
+        in_actor_tp = false;
+        actor_tp_ms = 0;
+        tp_fault_trailer = nullptr;
+        tp_fault_ms = 0;
         truck_towed = nullptr;
         attach_target = nullptr;
         trailer_count = 0;
@@ -547,6 +569,8 @@ namespace br_carretas
             return true;
         };
 
+        uint64_t pt[ 13 ] = {};
+        pt[ 0 ] = __rdtsc();
         // despejo unico de memoria dos veiculos (leitura pura, arquivo proprio)
         if ( canon[ 0 ] != nullptr && settings::g_settings.debug_logs ) memdump_world();
 
@@ -588,13 +612,15 @@ namespace br_carretas
         const bool wake = active > 0 || ++pulse >= 30;
         if ( wake ) pulse = 0;
 
+        pt[ 1 ] = __rdtsc();
         load_game_update();
-
+        pt[ 2 ] = __rdtsc();
         if ( lane_prune_frames > 0 && settings::g_settings.cargo_restore )
         {
             --lane_prune_frames;
-            prune_lane_containers();
         }
+        if ( settings::g_settings.cargo_restore ) lane_sweep_containers();
+        pt[ 3 ] = __rdtsc();
 
         bool any_loose = false;
         for ( const void* d : detached_trailers ) if ( d != nullptr ) { any_loose = true; break; }
@@ -622,16 +648,8 @@ namespace br_carretas
             else if ( ++guard_check >= 60 )
             {
                 guard_check = 0;
-                if ( lane_dead_pending() > 0 )
+                if ( !lane_any_dead() )
                 {
-                    prune_lane_containers();
-                }
-                else
-                {
-                    // o censo nunca chega a el=0 com trafego (o proprio guarda
-                    // re-armava a janela de prune com el>40 = espiral perpetua
-                    // de sanitizacao em cada insert) - sem mortos pendentes, a
-                    // guarda nao tem trabalho: desliga
                     lane_guard_on.store( false, std::memory_order_release );
                     CCore::g_instance->info( "lane guard: desligado" );
                 }
@@ -654,8 +672,7 @@ namespace br_carretas
         const bool convoy_due = convoy_refresh_requested.exchange( false, std::memory_order_acq_rel ) ||
             now_ms - convoy_tick >= 100;
         if ( convoy_due ) convoy_tick = now_ms;
-        uint64_t pt[ 10 ] = {};
-        pt[ 0 ] = __rdtsc();
+        pt[ 4 ] = __rdtsc();
         if ( wake && convoy_due )
         {
             if ( coupling_on && this->connect_valid_ )
@@ -691,15 +708,23 @@ namespace br_carretas
                 }
             }
         }
-        pt[ 1 ] = __rdtsc();
+        pt[ 5 ] = __rdtsc();
         if ( coupling_on && this->connect_valid_ && convoy_due ) update_convoy_state();
-        pt[ 2 ] = __rdtsc();
+        pt[ 6 ] = __rdtsc();
         if ( coupling_on && this->connect_valid_ && convoy_due ) light_watch_tick();
-        pt[ 3 ] = __rdtsc();
+        pt[ 7 ] = __rdtsc();
         if ( wake ) gc_detached_marks();
+        sim_hb_expected = crashes_when_disconnected_hook != nullptr &&
+            crashes_when_disconnected_hook->get_status() == CHook::HOOKED;
+        if ( sim_hb_expected )
+        {
+            sim_hb_expected = false;
+            for ( uint32_t i = 0; i < max_trailers && canon[ i ] != nullptr; ++i )
+                if ( joint( canon[ i ] ) != nullptr ) { sim_hb_expected = true; break; }
+        }
         watch_sim_heartbeat();
         if ( sim_dead_frames == 30 ) dump_chain_walks_on_stall();
-        pt[ 4 ] = __rdtsc();
+        pt[ 8 ] = __rdtsc();
 
         auto* game_actor = CCore::g_instance->get_game_actor();
 
@@ -708,10 +733,10 @@ namespace br_carretas
             lift_axles_update( game_actor );
             suspension_update();
         }
-        pt[ 5 ] = __rdtsc();
+        pt[ 9 ] = __rdtsc();
 
         if ( wake && coupling_on && this->connect_valid_ ) coupling_parked_update();
-        pt[ 6 ] = __rdtsc();
+        pt[ 10 ] = __rdtsc();
         update_hotkeys();
         if ( !cargo_freeze() )
         {
@@ -719,11 +744,10 @@ namespace br_carretas
             update_air( ImGui::GetIO().DeltaTime );
             brake_boost_update();
         }
-        pt[ 7 ] = __rdtsc();
-        pt[ 8 ] = __rdtsc();
-        pt[ 9 ] = __rdtsc();
+        pt[ 11 ] = __rdtsc();
+        pt[ 12 ] = __rdtsc();
 
-        static uint64_t acc[ 9 ] = {};
+        static uint64_t acc[ 12 ] = {};
         static uint64_t tsc0 = 0;
         static LARGE_INTEGER qpc0{};
         static uint32_t win_frames = 0;
@@ -753,7 +777,7 @@ namespace br_carretas
             QueryPerformanceCounter( &qpc0 );
             tsc0 = __rdtsc();
         }
-        for ( uint32_t s = 0; s < 9; ++s ) acc[ s ] += pt[ s + 1 ] - pt[ s ];
+        for ( uint32_t s = 0; s < 12; ++s ) acc[ s ] += pt[ s + 1 ] - pt[ s ];
         if ( ++win_frames >= 300 )
         {
             LARGE_INTEGER qpc1, freq;
@@ -769,10 +793,10 @@ namespace br_carretas
             {
                 const double tsc_hz = double( tsc1 - tsc0 ) / window_s;
                 const double plugin_ms = double( total ) / tsc_hz * 1000.0 / win_frames;
-                static const char* names[ 9 ] =
-                    { "chain", "convoy", "lights", "marks", "axles", "loadstate", "steer", "air", "brake" };
+                static const char* names[ 12 ] =
+                    { "pre", "load", "sweep", "guard", "chain", "convoy", "lights", "marks", "axles", "loadstate", "steer", "tail" };
                 uint32_t top = 0;
-                for ( uint32_t s = 1; s < 9; ++s ) if ( acc[ s ] > acc[ top ] ) top = s;
+                for ( uint32_t s = 1; s < 12; ++s ) if ( acc[ s ] > acc[ top ] ) top = s;
                 const double top_ms = double( acc[ top ] ) / tsc_hz * 1000.0 / win_frames;
                 static uint64_t last_saves = 0, last_suspw = 0;
                 const uint64_t d_saves = settings::save_calls - last_saves;
@@ -872,6 +896,19 @@ namespace br_carretas
                     hk_names[ ho[ 3 ] ], hcl( 3 ), hms( 3 ),
                     hk_names[ ho[ 4 ] ], hcl( 4 ), hms( 4 ),
                     hk_names[ ho[ 5 ] ], hcl( 5 ), hms( 5 ) );
+                {
+                    static uint64_t lpc = 0, lpg = 0, lpi = 0;
+                    const uint64_t dc = pp_count - lpc;
+                    if ( dc > 0 )
+                    {
+                        const double gap_ms = double( pp_gap_tsc - lpg ) / tsc_hz * 1000.0 / dc;
+                        const double in_ms = double( pp_in_tsc - lpi ) / tsc_hz * 1000.0 / dc;
+                        CCore::g_instance->info(
+                            "presente: {:.0f}/s prod={:.1f}ms entreg={:.1f}ms",
+                            dc / window_s, gap_ms - in_ms, in_ms );
+                    }
+                    lpc = pp_count; lpg = pp_gap_tsc; lpi = pp_in_tsc;
+                }
                 last_ins = lane_insert_calls; last_combo = combo_len_calls;
                 last_jw = joint_walk_calls; last_park = park_calls; last_ntf = notify_calls;
                 last_ws = wheel_solver_calls;
@@ -1895,6 +1932,41 @@ namespace br_carretas
         }
     }
 
+    // 308 - vigia dos claims: elo nosso que o jogo cortou volta uma vez
+    // (3 cortes seguidos = conflito: registra no log e para de reescrever)
+    void vigia_claims()
+    {
+        if ( native_chain_call_active.load( std::memory_order_acquire ) ||
+             canon_age < 90 || !canon_all_trailer_objs() || cargo_freeze() ) return;
+        for ( auto& edge : synthetic_edges )
+        {
+            void* owner = edge.owner.load( std::memory_order_acquire );
+            void* child = edge.child.load( std::memory_order_acquire );
+            if ( owner == nullptr || child == nullptr )
+            {
+                edge.losses = 0;
+                edge.stopped = false;
+                continue;
+            }
+            if ( edge.losses >= 3 )
+            {
+                if ( !edge.stopped )
+                {
+                    edge.stopped = true;
+                    CCore::g_instance->warning(
+                        "vigia claims: jogo corta {:p}->{:p} 3x seguidas - parando de reescrever", owner, child );
+                }
+                continue;
+            }
+            void* cur = readable_ptr( static_cast< uint8_t* >( owner ) + prism::offsets::trailer_slave )
+                ? prism::offsets::field< void* >( owner, prism::offsets::trailer_slave ) : nullptr;
+            if ( cur == child ) { edge.losses = 0; continue; }
+            ++edge.losses;
+            if ( slave_link_write( owner, child ) )
+                CCore::g_instance->info( "vigia claims: elo {:p}->{:p} sumiu - reescrito", owner, child );
+        }
+    }
+
     // 101 - reescreve os links slave das peças estacionadas
     void rebuild_parked_claim_links()
     {
@@ -1902,6 +1974,7 @@ namespace br_carretas
         // evento mudou o estado: o jogo pode aceitar claim antes rejeitado
         for ( auto& r : pin_retry ) r = 0;
         pin_retry_fallback = 0;
+        for ( auto& e : synthetic_edges ) { e.losses = 0; e.stopped = false; }
         conn_observe();
         conn_commit();
         sever_phys_claims();
@@ -2185,27 +2258,6 @@ namespace br_carretas
             bool any_parked = false;
             for ( uint32_t i = 0; i < ln; ++i ) any_parked |= parkedish[ i ];
 
-            // slot do ator velho apos desengate: a tecla T re-engataria a carreta
-            // que acabou de soltar. So limpar com a maquina de acoplamento ociosa
-            if ( !native_chain_call_active.load( std::memory_order_acquire ) )
-            {
-                if ( auto* game_actor = CCore::g_instance->get_game_actor() )
-                {
-                    void* truck = readable_ptr( game_actor )
-                        ? prism::offsets::field< void* >( game_actor, prism::offsets::game_actor_truck ) : nullptr;
-                    void* slot = readable_ptr( game_actor )
-                        ? prism::offsets::field< void* >( game_actor, prism::offsets::game_actor_trailer ) : nullptr;
-                    const bool machine_idle = truck == nullptr || !readable_ptr( truck ) ||
-                        prism::offsets::field< uint32_t >( truck, prism::offsets::truck_coupling_state ) == 0;
-                    if ( slot != nullptr && readable_ptr( slot ) && machine_idle &&
-                         joint( slot ) == nullptr &&
-                         ( is_detached( slot ) || is_plugin_detached( slot ) ) )
-                    {
-                        prism::offsets::field< void* >( game_actor, prism::offsets::game_actor_trailer ) = nullptr;
-                    }
-                }
-            }
-
             if ( any_parked && canon_age >= 15 && canon_all_trailer_objs() &&
                  !native_chain_call_active.load( std::memory_order_acquire ) )
             {
@@ -2290,6 +2342,7 @@ namespace br_carretas
 
                 if ( !nativo )
                 {
+                    vigia_claims();
                     // regra provada no log (23:58:19): o jogo ACEITA a carreta
                     // com record como RAIZ da corrente de claims (T0->T1->T2
                     // sobrevive em todo estado) e REJEITA claim de entrada nela
@@ -2384,7 +2437,7 @@ namespace br_carretas
                         {
                             void* q = canon[ j ];
                             if ( q == nullptr || q == tail || !readable_ptr( q ) ||
-                                 !is_trailer_obj( q ) ) continue;
+                                 !is_trailer_obj( q ) || is_plugin_detached( q ) ) continue;
                             if ( readable_ptr( static_cast< uint8_t* >( q ) + prism::offsets::trailer_slave ) &&
                                  prism::offsets::field< void* >( q, prism::offsets::trailer_slave ) == tail )
                             {
@@ -2411,7 +2464,7 @@ namespace br_carretas
                             if ( pass == 1 && !has_rec ) continue;
                             bool seen = false;
                             for ( uint32_t k = 0; k < vn; ++k ) seen |= vis[ k ] == t;
-                            if ( seen || !is_trailer_obj( t ) || joint( t ) != nullptr )
+                            if ( seen || !is_trailer_obj( t ) || joint( t ) != nullptr || is_plugin_detached( t ) )
                             {
                                 continue;
                             }
@@ -2479,6 +2532,7 @@ namespace br_carretas
                             slave_link_write( tail, t );
                             set_claim_edge( tail, t );
                             conn_mark_parked( tail, t );
+                            CCore::g_instance->info( "visibility pin: gravado tail={:p} -> {:p}", tail, t );
                             tail = t;
                             if ( vn < max_trailers ) vis[ vn++ ] = t;
                             progressed = true;
@@ -2745,6 +2799,7 @@ namespace br_carretas
             fn_index_add( fn_addr_of( &conn_commit ), 278, "conn_commit" );
             fn_index_add( fn_addr_of( &conn_mark_parked ), 279, "conn_mark_parked" );
             fn_index_add( fn_addr_of( &conn_reset ), 280, "conn_reset" );
+            fn_index_add( fn_addr_of( &vigia_claims ), 308, "vigia_claims" );
             fn_index_add( fn_addr_of( &trigger_native_sleep ), 105, "trigger_native_sleep" );
             fn_index_add( fn_addr_of( &update_sleep_release ), 106, "update_sleep_release" );
             return true;

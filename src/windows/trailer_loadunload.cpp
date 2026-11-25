@@ -92,9 +92,10 @@ namespace br_carretas
                             if ( watch_pin_valid[ mi ] )
                             {
                                 watch_pin[ mi ][ 0 ] = parked_xform[ mi ].pos.x;
-                                watch_pin[ mi ][ 1 ] = p4[ 1 ];
+                                watch_pin[ mi ][ 1 ] = parked_xform[ mi ].pos.y;
                                 watch_pin[ mi ][ 2 ] = parked_xform[ mi ].pos.z;
                                 watch_pin[ mi ][ 3 ] = p4[ 3 ];
+                                phys_pin( m, watch_pin[ mi ] );
                             }
                             else
                                 CCore::g_instance->warning(
@@ -132,6 +133,11 @@ namespace br_carretas
         }
     }
 
+    static bool lu_was_in_cargo = false;
+    static void* lu_canon[ max_trailers ] = {};
+    static void* lu_inner[ max_trailers ] = {};
+    static float lu_inner_pos[ max_trailers ][ 4 ] = {};
+
     // 118 - por frame: vigia o respawn de carga e enfileira o restore
     void coupling_parked_update()
     {
@@ -141,25 +147,21 @@ namespace br_carretas
 
         // inicio da janela de carga: o carry armado - as posicoes salvas das
         // destacadas atravessam a destruicao do respawn
-        static bool was_in_cargo = false;
-        if ( in_cargo_window() && !was_in_cargo ) carry_arm_tick = GetTickCount64();
-        was_in_cargo = in_cargo_window();
+        if ( in_cargo_window() && !lu_was_in_cargo ) carry_arm_tick = GetTickCount64();
+        lu_was_in_cargo = in_cargo_window();
 
         // a carreta foi destruida e reconstruida: os objetos do canon mudaram -
         // a restauracao dispara NESSE instante, dentro da janela escura,
         // sem contador de frames - a tela ainda cobre o movimento
-        static void* last_canon[ max_trailers ] = {};
         bool respawned = false;
         for ( uint32_t i = 0; i < max_trailers; ++i )
         {
-            if ( canon[ i ] != last_canon[ i ] && last_canon[ i ] != nullptr ) respawned = true;
-            last_canon[ i ] = canon[ i ];
+            if ( canon[ i ] != lu_canon[ i ] && lu_canon[ i ] != nullptr ) respawned = true;
+            lu_canon[ i ] = canon[ i ];
         }
         if ( respawned ) restore_parked();
 
         const uint64_t now_ms = GetTickCount64();
-        static void* last_inner[ max_trailers ] = {};
-        static float last_inner_pos[ max_trailers ][ 4 ] = {};
         void* live_inner[ max_trailers ] = {};
         for ( uint32_t i = 0; i < max_trailers && canon[ i ] != nullptr; ++i )
         {
@@ -169,40 +171,40 @@ namespace br_carretas
             if ( phys_probe( t, lp, lv, &li ) && li != nullptr )
             {
                 live_inner[ i ] = li;
-                if ( last_inner[ i ] != li )
+                if ( lu_inner[ i ] != li )
                 {
-                    if ( last_inner[ i ] != nullptr )
+                    if ( lu_inner[ i ] != nullptr )
                     {
                         for ( auto& g : ghost_watch )
                         {
                             if ( g.inner != nullptr ) continue;
-                            g.inner = last_inner[ i ];
+                            g.inner = lu_inner[ i ];
                             g.ms = now_ms;
                             g.slot = static_cast< int >( i );
-                            for ( int k = 0; k < 4; ++k ) g.pos4[ k ] = last_inner_pos[ i ][ k ];
+                            for ( int k = 0; k < 4; ++k ) g.pos4[ k ] = lu_inner_pos[ i ][ k ];
                             break;
                         }
                     }
-                    last_inner[ i ] = li;
-                    for ( int k = 0; k < 4; ++k ) last_inner_pos[ i ][ k ] = lp[ k ];
+                    lu_inner[ i ] = li;
+                    for ( int k = 0; k < 4; ++k ) lu_inner_pos[ i ][ k ] = lp[ k ];
                 }
                 else
                 {
-                    for ( int k = 0; k < 4; ++k ) last_inner_pos[ i ][ k ] = lp[ k ];
+                    for ( int k = 0; k < 4; ++k ) lu_inner_pos[ i ][ k ] = lp[ k ];
                 }
             }
-            else if ( last_inner[ i ] != nullptr && !is_trailer_obj( t ) )
+            else if ( lu_inner[ i ] != nullptr && !is_trailer_obj( t ) )
             {
                 for ( auto& g : ghost_watch )
                 {
                     if ( g.inner != nullptr ) continue;
-                    g.inner = last_inner[ i ];
+                    g.inner = lu_inner[ i ];
                     g.ms = now_ms;
                     g.slot = static_cast< int >( i );
-                    for ( int k = 0; k < 4; ++k ) g.pos4[ k ] = last_inner_pos[ i ][ k ];
+                    for ( int k = 0; k < 4; ++k ) g.pos4[ k ] = lu_inner_pos[ i ][ k ];
                     break;
                 }
-                last_inner[ i ] = nullptr;
+                lu_inner[ i ] = nullptr;
             }
         }
         for ( auto& g : ghost_watch )
@@ -303,7 +305,7 @@ namespace br_carretas
                         if ( watch_pin_valid[ i ] )
                         {
                             watch_pin[ i ][ 0 ] = parked_xform[ i ].pos.x;
-                            watch_pin[ i ][ 1 ] = p4[ 1 ];
+                            watch_pin[ i ][ 1 ] = parked_xform[ i ].pos.y;
                             watch_pin[ i ][ 2 ] = parked_xform[ i ].pos.z;
                             watch_pin[ i ][ 3 ] = p4[ 3 ];
                         }
@@ -415,7 +417,18 @@ namespace br_carretas
                 }
             }
         }
-    }    namespace
+    }
+
+    // 306 - zera o rastreio interno de load/unload - os objetos velhos morreram no reload
+    void loadunload_reset()
+    {
+        lu_was_in_cargo = false;
+        for ( auto& p : lu_canon ) p = nullptr;
+        for ( auto& p : lu_inner ) p = nullptr;
+        for ( auto& p4 : lu_inner_pos ) { for ( auto& k : p4 ) k = 0.f; }
+    }
+
+    namespace
     {
         const bool fn_idx_reg = []()
         {
@@ -423,6 +436,7 @@ namespace br_carretas
             fn_index_add( fn_addr_of( &restore_parked ), 116, "restore_parked" );
             fn_index_add( fn_addr_of( &carry_set_brace ), 117, "carry_set_brace" );
             fn_index_add( fn_addr_of( &coupling_parked_update ), 118, "coupling_parked_update" );
+            fn_index_add( fn_addr_of( &loadunload_reset ), 306, "loadunload_reset" );
             return true;
         }();
     }

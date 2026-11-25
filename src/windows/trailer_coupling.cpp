@@ -214,6 +214,7 @@ namespace br_carretas
     // 173 - executa o desatrelamento na thread de fisica (manual, sem despachante)
     void disconnect_now( void* trailer, void* parent, const bool parent_is_truck )
     {
+        CCore::g_instance->info( "fn173 aguardando claim_write_mutex trailer={:p}", trailer );
         std::lock_guard< std::recursive_mutex > claim_lk( claim_write_mutex );
         CCore::g_instance->info( "fn173 disconnect_now trailer={:p} parent={:p} truck={} junta={:p}",
                                  trailer, parent, parent_is_truck ? 1 : 0, joint( trailer ) );
@@ -1347,6 +1348,7 @@ namespace br_carretas
                 }
             }
         }
+        rebuild_parked_claim_links();
     }
 
     struct severed_edge_t { void* parent; void* child; };
@@ -2467,12 +2469,10 @@ namespace br_carretas
             }
             prism::offsets::field< void* >( t, prism::offsets::trailer_slave ) = nullptr;
             prism::offsets::field< void* >( t, prism::offsets::trailer_parent ) = nullptr;
-            int killed = 0, nent = 0;
+            int nent = 0;
             __try
             {
                 parked_record_unlist( t );
-                killed = lane_kill_owner( t );
-                lane_prune_frames = 1;
                 void* lbeg = *reinterpret_cast< void** >( static_cast< uint8_t* >( t ) + 0xE98 );
                 nent = static_cast< int >( *reinterpret_cast< uint64_t* >( static_cast< uint8_t* >( t ) + 0xEA0 ) );
                 if ( nent > 0 && nent <= 0x1000 && readable_ptr( lbeg ) && set_lines_fn != nullptr )
@@ -2480,27 +2480,10 @@ namespace br_carretas
             }
             __except ( EXCEPTION_EXECUTE_HANDLER ) {}
             CCore::g_instance->info(
-                "orphan: carreta solta {:p} abandonada pelo rebuild - desmanchando, {} obstáculo(s) mortos, {} cabos",
-                t, killed, nent );
+                "orphan: carreta solta {:p} abandonada pelo rebuild - desmanchando, {} cabos",
+                t, nent );
             __try { hk_trailer_dtor( t, 0 ); }
             __except ( EXCEPTION_EXECUTE_HANDLER ) {}
-        }
-        // varredura por dono so na janela de poda (armada no evento) - rodar
-        // todo ciclo varre containers x elementos x 96 campos a toa (FALHAS 8b)
-        if ( lane_prune_frames > 0 )
-        {
-            for ( uint32_t i = 0; i < max_trailers && canon[ i ] != nullptr; ++i )
-            {
-                void* t = canon[ i ];
-                if ( t == nullptr || !readable_ptr( t ) || joint( t ) == nullptr ) continue;
-                const int k = lane_kill_owner( t );
-                if ( k > 0 )
-                {
-                    lane_prune_frames = 1;
-                    CCore::g_instance->info(
-                        "orphan: {} obstáculo(s) de pista mortos na engatada c{}", k, i );
-                }
-            }
         }
     }
 

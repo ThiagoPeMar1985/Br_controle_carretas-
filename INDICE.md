@@ -6,7 +6,7 @@ crashar ou falhar, o número diz exatamente qual função é, sem ambiguidade.
 | Arquivo | Faixa |
 |---------|-------|
 | src/windows/trailer_shared.hpp | 001–064, 236–271 |
-| src/windows/trailer_manipulation.cpp | 065–107, 277–280 |
+| src/windows/trailer_manipulation.cpp | 065–107, 277–280, 308 |
 | src/windows/trailer_steering.cpp | 108–114 |
 | src/windows/trailer_loadunload.cpp | 115–118 |
 | src/windows/trailer_loadstate.cpp | 119–143, 235, 274–276 |
@@ -255,7 +255,7 @@ de bytes; se não bater no exe, aquele recurso desliga sozinho:
 | 179 | `hk_phys_link` | hook: link físico (recusa ciclo) |
 | 180 | `sanitize_slave_walk` | saneia a cadeia slave antes do teardown nativo |
 | 181 | `sanitize_phys_walk` | saneia a cadeia física (corta arestas mortas) |
-| 182 | `hk_trailer_disconnect` | hook: desengate vfunc 99 (saneia antes do teardown) |
+| 182 | `hk_trailer_disconnect` | hook: desengate vfunc 99 (saneia antes do teardown; no fim re-escreve os claims - cobre o desengate assíncrono da tecla T) |
 | 183 | `sever_parked_claims` | corta os links-claim estacionados antes da chamada nativa |
 | 184 | `sever_phys_claims` | corta arestas físicas que tocam peça sem junta |
 | 185 | `restore_parked_claims` | religa os claims cortados após a chamada nativa |
@@ -279,6 +279,7 @@ de bytes; se não bater no exe, aquele recurso desliga sozinho:
 | 278 | `conn_commit` | trailer_manipulation.cpp | reescreve a corrente inteira a partir da tabela de conexões |
 | 279 | `conn_mark_parked` | trailer_manipulation.cpp | marca na tabela um claim escrito fora do commit |
 | 280 | `conn_reset` | trailer_manipulation.cpp | zera a tabela de conexões (reset de estado) |
+| 308 | `vigia_claims` | trailer_manipulation.cpp | vigia dos claims por frame: elo nosso que o jogo cortou volta uma vez; 3 cortes seguidos = registra conflito e para de reescrever |
 
 ## src/windows/trailer_camera.cpp
 
